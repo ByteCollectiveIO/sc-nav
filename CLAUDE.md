@@ -59,7 +59,7 @@ banner — don't scroll.
 `<style>` lines 7–3617 · body 3619–~6546 · `<script>` 6548–29655.
 
 Body views (each a `#…-view` container, hash-routed):
-launcher, main (navigator), settings (category rail, one section at a time: `#/settings` = Profile, `#/settings/<watcher|my-ops|account>` for everyone, `#/settings/<general|members|branding|discord|announcements|apps|data>` admin-only — `discord` = webhook CHANNELS only; `announcements` = message templates + org image + linked-image previews (split 2026-10-06 critique: templates were buried ~1,300 px down) — `SETTINGS_SECTIONS`/`applySettingsSection`; data loads on ENTRY to Settings, not per section; a non-admin or unknown slug falls back to Profile), setup, intel, leaderboard, stats,
+launcher, main (navigator), settings (category rail, one section at a time: `#/settings` = Profile, `#/settings/<watcher|my-ops|calendar|account>` for everyone, `#/settings/<general|members|branding|discord|announcements|apps|data>` admin-only — `discord` = webhook CHANNELS only; `announcements` = message templates + org image + linked-image previews (split 2026-10-06 critique: templates were buried ~1,300 px down) — `SETTINGS_SECTIONS`/`applySettingsSection`; data loads on ENTRY to Settings, not per section; a non-admin or unknown slug falls back to Profile), setup, intel, leaderboard, stats,
 cargo-leaderboard, cargo-stats, route (cargo planner), events, goals, inventory,
 blueprints (RM's third tab, #29), market, online (who's online, #19),
 ops (Ops — run a mission + its record, `#/ops`, `#/ops/<id>`), lfg (group finder / LFG board, #19), pirates (danger board / pirate warnings, #24),
@@ -88,7 +88,7 @@ don't. Design reasoning: the linked `docs/*.md`.
 - **Trade (#21):** `/api/trade/terminals|prices|trades|plan`, run `/api/trade/run` (+`/replan`, `/topup`), `/api/trade/history`, `/api/trade/stats`, `/api/trade/favorites`, `/api/trade/stock`, `/api/trade/containers`, `/api/trade/transactions` (watcher). Stock/demand reports, org price overlay, stop kinds (#34), legality (#42), sort by return (#44), margin floor (#43), container sizing + box policy + kiosk menus (#46), txn capture + shop identity (#41), top-up + mixed loads — docs/trade-route-planner.md, trade-topup.md, trade-transaction-capture.md.
 - **Danger board (#24):** `/api/warnings` (+`/{id}/confirm`, DELETE); hazard volumes + detours (`hazard_volumes`, `travel_cost(avoid=)`) — docs/pirate-warnings.md, snare-detour-routing.md.
 - **Prospector (#31/#35–#38):** `/api/halo/targets|bands|plan|locate`, `/api/halo/survey` (+`/export`, `/zones`, `/zones/active`, `/zones/{id}` + `/restore` + `/sightings`), `/api/custom_pois/{id}/refile`, `/api/admin/survey/clear`. Belt registry, system ladder, Keeger arcs, named zones + undo, survey lanes, health, belt ore parity, FIELD tab, pocket radar — docs/halo-finder*.md, belt-survey.md, survey-*.md.
-- **Events + Ops:** `/api/events*` (signup, groups, assignments, manifest, attendees, complete, start, save-template, notify-test), `/api/event-templates*`, `/api/ops*` (phase, roster, join, attendance, deputies, rules, contracts, ledger, transfers, loot, rolls, members, leaderboard), `/api/me/ops`, `/api/admin/ops/guests*` — docs/event-planner.md, fleet-roster-squad-organizer.md, event-operations.md.
+- **Events + Ops:** `/api/events*` (signup, groups, assignments, manifest, attendees, complete, start, save-template, notify-test, `{id}/ics`), calendar feed `/cal/<token>.ics` + `/api/me/calendar` (admin opt-in `calendar_feed_enabled`; `server/calendar_ics.py` serializer — docs/event-calendar.md), `/api/event-templates*`, `/api/ops*` (phase, roster, join, attendance, deputies, rules, contracts, ledger, transfers, loot, rolls, members, leaderboard), `/api/me/ops`, `/api/admin/ops/guests*` — docs/event-planner.md, fleet-roster-squad-organizer.md, event-operations.md.
 - **Resource manager:** `/api/catalog`, `/api/inventory*` (+`/{id}/split`, `/pickup` → cargo-planner seed, #48), `/api/route/plan_sell` (sell mode), `/api/route/runs/{id}/inventory` (post-run ledger update), `/api/goals*` (contribute, announce, delivered; kinds materials|unlock|survey); blueprints `/api/blueprints*` (`/readiness`, `/stat-names` registered before `/{bp_key}`), `/api/me/blueprints` — docs/org-inventory-goals.md, inventory-quality.md, blueprint-*.md.
 - **Marketplace:** `/api/market*` (modes sale|auction|barter|commission|wtb; offers, confirm, renew, `item_history`, trends, crafters) — docs/marketplace.md, blueprint-craft-commissions.md.
 - **Org analytics:** `/api/leaderboard`, `/api/stats`, `/api/intel/directory`, `/api/intel/surveying`.
@@ -170,7 +170,7 @@ user_ships · runs · trade_runs · trade_favorites · stock_reports ·
 trade_transactions · commodity_guids · shop_pois + shop_ids (#41; shopName is a PREFAB name, shopId identifies the terminal) · price_reports (#41/#39 §6.1) ·
 container_reports (#46) ·
 pirate_warnings · events ·
-event_signups · event_groups · event_assignments · group_templates ·
+event_signups · event_groups · event_assignments · group_templates · calendar_feeds ·
 event_templates + event_template_history · operations · op_roster · op_log · op_contracts + op_contract_ticks · op_ledger ·
 op_transfers · op_loot + op_loot_intents + op_rolls + op_rotations · lfg ·
 catalog_items · inventory · goals · inventory_allocations · listings ·
@@ -188,7 +188,10 @@ listing_offers.
     `/openapi.json`, `/docs`, `/redoc` and anything dropped in `server/static/`.
     The one pattern-matched exemption is `_SHELL_ASSET_RE` (the lifted-out shell
     CSS/JS, same bytes the public shell used to carry inline) — an exact shape,
-    never a bare `/assets/` prefix.
+    never a bare `/assets/` prefix. Same for `_CALENDAR_FEED_RE`
+    (`/cal/<43-char token>.ics`, GET): a member's subscribed calendar, whose URL
+    is the credential; the route 404s unless the org setting is on and the
+    token resolves to an unrevoked member.
     Interactive API docs are off (`FastAPI(docs_url=None, ...)`).
   - **Watcher tokens are scoped** to `_WATCHER_PATHS` (`/api/position`,
     `/api/handle`, `/api/trade/transactions`) — keep in sync with the watcher.

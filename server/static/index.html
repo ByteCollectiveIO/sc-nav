@@ -2131,6 +2131,7 @@
   .ev-meta-grid.secondary { font-size: 12px; margin: 4px 0 8px; }
   .ev-m { color: var(--dim); }
   .ev-m b { color: var(--text); font-weight: 600; }
+  .ev-cal a { color: var(--accent); }
   .ev-mi { font-style: normal; color: var(--dim); margin-right: 6px; display: inline-block;
     width: 1em; text-align: center; }
   .ev-m-tz { color: var(--dim); font-size: 11px; }
@@ -4276,6 +4277,7 @@
       <a href="#/settings" data-sec="profile">Profile</a>
       <a href="#/settings/watcher" data-sec="watcher">Watcher</a>
       <a href="#/settings/my-ops" data-sec="my-ops">My ops</a>
+      <a href="#/settings/calendar" data-sec="calendar">Calendar</a>
       <a href="#/settings/account" data-sec="account">Account</a>
       <div class="set-nav-admin" id="set-nav-admin" hidden>
         <div class="set-nav-h">Org admin</div>
@@ -4405,6 +4407,20 @@
         <div class="panel" id="my-ops-panel">
           <h2>MY OPS <span class="muted">(only you see this)</span></h2>
           <div id="my-ops-body"><div class="muted" style="font-size:12px;">Loading…</div></div>
+        </div>
+      </section>
+      <section class="set-sec" data-sec="calendar" aria-label="Calendar settings" hidden>
+        <div class="settings-grp-h">Calendar</div>
+        <div class="panel" id="cal-panel">
+          <h2>CALENDAR SUBSCRIPTION <span class="muted">(org events in Google, Apple or Outlook)</span></h2>
+          <div id="cal-body"><div class="muted" style="font-size:12px;">Loading…</div></div>
+          <div id="cal-new" hidden style="font-size:13px;"></div>
+          <div class="muted" id="cal-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
+          <div class="muted" id="cal-note" hidden style="font-size:12px; margin-top:10px;">
+            Google Calendar re-checks subscribed calendars on its own schedule, often only every
+            12–24 hours, so a last-minute change can show up late there. Discord pings stay the
+            place for those. Apple Calendar and Outlook check about hourly.
+          </div>
         </div>
       </section>
       <section class="set-sec" data-sec="account" aria-label="Account settings" hidden>
@@ -4864,6 +4880,22 @@
             run quick ops and make templates. Only creating a new event is limited to admins.
           </div>
           <div class="muted" id="events-admin-only-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+        </div>
+        <div class="panel admin-grp" id="cal-feed-panel">
+          <h2>CALENDAR SUBSCRIPTIONS</h2>
+          <label style="display:flex; gap:8px; align-items:center;">
+            <input id="cal-feed-enabled" type="checkbox"> Let members subscribe to events from Google, Apple or Outlook calendar
+          </label>
+          <div class="muted" style="font-size:12px; margin-top:4px;">
+            Each member who sets it up gets a private link that works <b>without signing in</b>.
+            Calendar apps can't sign in, so the link itself is the key: anyone a member shares it
+            with can see the event titles, times and rally points in it. Nothing else is exposed.
+            Revoking a member's access deletes their link. Turning this off deletes every member's
+            link; if you turn it back on, members make new ones.
+            Adding a single event from its page works either way.
+          </div>
+          <div class="muted" id="cal-feed-count" style="font-size:12px; margin-top:4px;"></div>
+          <div class="muted" id="cal-feed-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
         </div>
         <div class="panel admin-grp" id="op-rules-panel">
           <h2>OPS PAYOUT DEFAULTS</h2>
@@ -14286,6 +14318,30 @@ async function renderEventDetail(id) {
   renderDetailBody(e);
 }
 
+// "Add to calendar" — a one-time copy into the member's own calendar (a later
+// reschedule doesn't follow it; Settings → Calendar is the live feed). Google
+// and Outlook.com take a prefilled-event URL; everything else gets the .ics
+// from the server, the same serializer the feed uses. Keep the description in
+// step with calendar_ics.description: the basics only.
+function eventCalLinks(e) {
+  const start = new Date(e.start_at);
+  if (isNaN(start)) return "";
+  const end = new Date(start.getTime() + (e.duration_min || 60) * 60000);
+  const z = d => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const where = e.location || e.event_location || "";
+  const details = [e.location && `Rally: ${e.location}`, e.event_location && `Event: ${e.event_location}`,
+    `${location.origin}/#/events/${e.id}`].filter(Boolean).join("\n");
+  const google = "https://calendar.google.com/calendar/render?" + new URLSearchParams({
+    action: "TEMPLATE", text: e.title, dates: `${z(start)}/${z(end)}`, details, location: where });
+  const outlook = "https://outlook.live.com/calendar/0/deeplink/compose?" + new URLSearchParams({
+    path: "/calendar/action/compose", rru: "addevent", subject: e.title,
+    startdt: start.toISOString(), enddt: end.toISOString(), body: details, location: where });
+  return `<span class="ev-cal">${evGlyph("▦")}Add to calendar: ` +
+    `<a href="${esc(google)}" target="_blank" rel="noopener">Google</a> · ` +
+    `<a href="${esc(outlook)}" target="_blank" rel="noopener">Outlook.com</a> · ` +
+    `<a href="/api/events/${e.id}/ics" download>Apple / other (.ics)</a></span>`;
+}
+
 async function renderDetailBody(e) {
   const tax = await loadEventsTaxonomy();
   const f = e.fill, cap = e.max_players == null ? "∞" : e.max_players;
@@ -14307,6 +14363,7 @@ async function renderDetailBody(e) {
     linkedArt ? evGlyph("▤") + `Discord image <b>linked</b>` : "",
     e.duration_min ? evGlyph("⧗") + `${e.duration_min} min` : "",
     `by <b>${esc(e.organizer_name)}</b>`,
+    cancelled || e.phase === "ended" ? "" : eventCalLinks(e),
   ].filter(Boolean);
   const meta = `<div class="ev-meta-grid">${primary.map(x => `<span class="ev-m">${x}</span>`).join("")}</div>` +
     `<div class="ev-meta-grid secondary">${secondary.map(x => `<span class="ev-m">${x}</span>`).join("")}</div>`;
@@ -26929,6 +26986,7 @@ function applyView() {
       refreshIdentity();
       renderProfilePanel();
       loadMyOps();
+      loadMyCalendar();
       if (currentMe.is_admin) loadSettings();
     }
   } else if (route) {
@@ -26961,7 +27019,7 @@ window.addEventListener("hashchange", applyView);
 // every member, "admin" ones only for org admins (a non-admin, or a stale or
 // mistyped slug, lands on Profile with the URL corrected).
 const SETTINGS_SECTIONS = {
-  profile: "me", watcher: "me", "my-ops": "me", account: "me",
+  profile: "me", watcher: "me", "my-ops": "me", calendar: "me", account: "me",
   general: "admin", members: "admin", branding: "admin", discord: "admin", announcements: "admin",
   apps: "admin", data: "admin",
 };
@@ -27787,6 +27845,10 @@ async function loadSettings() {
       $("listing-stale").value = s.listing_stale_days;
     if (s.event_builtin_templates != null) $("event-builtin-tpl").checked = !!s.event_builtin_templates;
     if (s.events_admin_only != null) $("events-admin-only").checked = !!s.events_admin_only;
+    if (s.calendar_feed_enabled != null) {
+      $("cal-feed-enabled").checked = !!s.calendar_feed_enabled;
+      renderCalFeedCount(s.calendar_feed_count || 0);
+    }
     if (s.op_default_rules && !$("op-default-rules-box").contains(document.activeElement)) {
       opDefaultRules = s.op_default_rules;
       $("op-default-rules-box").innerHTML = rulesEditorHtml("op-def", s.op_default_rules);
@@ -29363,6 +29425,33 @@ $("events-admin-only").onchange = async () => {
     st.textContent = on ? "Only admins can create events." : "Any member can create events.";
   } catch { st.textContent = "Couldn't save."; $("events-admin-only").checked = !on; }
 };
+$("cal-feed-enabled").onchange = async () => {
+  const st = $("cal-feed-status"), box = $("cal-feed-enabled"), on = box.checked;
+  // Off deletes every member's link, so it gets a confirm; on is a deliberate
+  // publish of private-by-URL feeds, said plainly in the panel copy above.
+  if (!on && !(await confirmDialog(
+      "Every member's calendar link stops working and is deleted. Their subscribed calendars stop updating.",
+      { title: "Turn off calendar subscriptions?", confirmLabel: "Turn off", danger: true }))) {
+    box.checked = true;
+    return;
+  }
+  st.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/settings", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ calendar_feed_enabled: on }) });
+    if (!r.ok) throw 0;
+    const s = await r.json();
+    if (currentMe) currentMe.calendar_feed_enabled = on;
+    renderCalFeedCount(s.calendar_feed_count || 0);
+    st.textContent = on ? "Members can now make calendar links." : "Calendar subscriptions are off; all links deleted.";
+    loadMyCalendar();
+  } catch { st.textContent = "Couldn't save."; box.checked = !on; }
+};
+function renderCalFeedCount(n) {
+  $("cal-feed-count").textContent = !$("cal-feed-enabled").checked ? ""
+    : n === 1 ? "1 member has a calendar link." : `${n} members have calendar links.`;
+}
 $("listing-stale-save").onclick = async () => {
   const st = $("listing-stale-status");
   const days = parseInt($("listing-stale").value, 10);
@@ -30163,6 +30252,126 @@ $("token-gen").onclick = async () => {
   } catch { st.textContent = "couldn't generate — try again"; }
 };
 $("token-retry").onclick = loadTokens;
+
+// ---------- calendar subscription (Settings → Calendar) ----------
+// The member's own /cal/<token>.ics feed. Only its hash is stored, so the URL
+// is shown once, right after it's made, with the subscribe buttons beside it.
+// Scope (mine | all) is the member's choice and changes without a new link.
+let calState = null;   // last GET /api/me/calendar
+let calScope = "mine";  // picked before a link exists
+
+async function loadMyCalendar() {
+  const body = $("cal-body");
+  try {
+    const r = await fetch("/api/me/calendar");
+    if (!r.ok) throw 0;
+    calState = await r.json();
+  } catch {
+    body.innerHTML = `<div class="muted" style="font-size:12px;">Couldn't load your calendar link. ` +
+      `<button id="cal-retry">Retry</button></div>`;
+    $("cal-retry").onclick = loadMyCalendar;
+    return;
+  }
+  if (!calState.enabled) $("cal-new").hidden = true;
+  renderMyCalendar();
+}
+
+function renderMyCalendar() {
+  const body = $("cal-body"), d = calState, feed = d.feed;
+  if (!d.enabled) {
+    $("cal-note").hidden = true;
+    body.innerHTML = `<div class="muted" style="font-size:12px;">Your org's admins haven't turned on ` +
+      `calendar subscriptions. You can still add a single event to your calendar from its page.</div>`;
+    return;
+  }
+  const scope = feed ? feed.scope : calScope;
+  const segBtn = (v, label) =>
+    `<button type="button" data-scope="${v}" class="${scope === v ? "on" : ""}" aria-pressed="${scope === v}">${label}</button>`;
+  const when = iso => iso ? esc(iso.slice(0, 16).replace("T", " ")) : "never";
+  body.innerHTML =
+    `<div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; font-size:13px;">Show ` +
+    `<span class="seg" id="cal-scope" role="group" aria-label="Which events your calendar shows">` +
+    segBtn("mine", "Events I'm in") + segBtn("all", "All org events") + `</span></div>` +
+    `<div class="muted" style="font-size:12px; margin-top:4px;">"Events I'm in" means the ones you ` +
+    `organize or signed up for (going or maybe). Ad-hoc ops aren't scheduled, so they never appear.</div>` +
+    (feed
+      ? `<div style="font-size:13px; margin-top:10px;">Your link is on. Made ${when(feed.created)} · ` +
+        `last checked by a calendar: ${when(feed.last_used)}</div>` +
+        `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">` +
+        `<button id="cal-renew">Make a new link</button>` +
+        `<button id="cal-off" class="danger-btn">Turn off my link</button></div>`
+      : `<div style="margin-top:10px;"><button id="cal-make">Create my calendar link</button></div>`);
+  $("cal-note").hidden = false;
+  for (const b of body.querySelectorAll("#cal-scope button"))
+    b.onclick = () => setCalScope(b.dataset.scope);
+  if ($("cal-make")) $("cal-make").onclick = makeCalLink;
+  if ($("cal-renew")) $("cal-renew").onclick = async () => {
+    if (!(await confirmDialog(
+        "Your current link stops working. Calendars subscribed to it stop updating until you subscribe to the new one.",
+        { title: "Make a new calendar link?", confirmLabel: "Make new link", danger: true }))) return;
+    makeCalLink();
+  };
+  if ($("cal-off")) $("cal-off").onclick = async () => {
+    if (!(await confirmDialog(
+        "Calendars subscribed to this link stop updating. You can make a new one any time.",
+        { title: "Turn off your calendar link?", confirmLabel: "Turn off", danger: true }))) return;
+    const st = $("cal-status");
+    try {
+      const r = await fetch("/api/me/calendar", { method: "DELETE" });
+      if (!r.ok) throw 0;
+      $("cal-new").hidden = true;
+      st.textContent = "Link turned off. You can remove the calendar from your calendar app.";
+      loadMyCalendar();
+    } catch { st.textContent = "Couldn't turn it off — try again."; }
+  };
+}
+
+async function setCalScope(scope) {
+  const st = $("cal-status");
+  if (!calState.feed) { calScope = scope; renderMyCalendar(); return; }
+  st.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/me/calendar", { method: "PUT",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope }) });
+    if (!r.ok) throw 0;
+    calState.feed = (await r.json()).feed;
+    renderMyCalendar();
+    st.textContent = "Saved. Your calendar picks it up on its next refresh.";
+  } catch { st.textContent = "Couldn't save — try again."; }
+}
+
+async function makeCalLink() {
+  const st = $("cal-status");
+  st.textContent = "Creating…";
+  let d;
+  try {
+    const r = await fetch("/api/me/calendar", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: calState.feed ? calState.feed.scope : calScope }) });
+    d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || "");
+  } catch (e) { st.textContent = e.message || "Couldn't create a link — try again."; return; }
+  st.textContent = "";
+  calState.feed = d.feed;
+  renderMyCalendar();
+  const webcal = d.url.replace(/^https?:/, "webcal:");
+  const google = "https://calendar.google.com/calendar/r?cid=" + encodeURIComponent(webcal);
+  show("cal-new",
+    `<div style="margin-top:12px;"><b style="color: var(--warn);">Copy your calendar link now: ` +
+    `it won't be shown again.</b> Treat it like a password; anyone with it can see the events in it.</div>` +
+    `<code style="word-break:break-all; display:block; margin:6px 0;">${esc(d.url)}</code>` +
+    `<div style="display:flex; gap:8px; flex-wrap:wrap;">` +
+    `<button id="cal-apple">Add to Apple Calendar</button>` +
+    `<button id="cal-google">Add to Google Calendar</button>` +
+    `<button id="cal-copy">Copy link</button></div>` +
+    `<div class="muted" style="font-size:12px; margin-top:6px;">Outlook: Add calendar → ` +
+    `Subscribe from web → paste the link.</div>`);
+  $("cal-apple").onclick = () => { location.href = webcal; };
+  $("cal-google").onclick = () => window.open(google, "_blank", "noopener");
+  $("cal-copy").onclick = () => copyText(d.url).then(
+    () => { $("cal-status").textContent = "Link copied."; },
+    () => { $("cal-status").textContent = "Couldn't copy — select the link and copy it by hand."; });
+}
 
 // ---------- setup guide: download a pre-configured watcher ----------
 // POST (not a plain link) so the server can mint a token and bake it into the

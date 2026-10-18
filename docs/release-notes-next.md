@@ -44,6 +44,20 @@ Suggested bump: **minor** (new user-facing features, watcher unchanged).
   every contribution by the place it's staged, who holds what, what's left to
   deliver, and each place's travel time to the drop-off.
 
+**Event calendar (Google, Apple, Outlook)**
+- **Add to calendar:** every upcoming event page links to Google Calendar,
+  Outlook.com, and an `.ics` download for Apple Calendar and anything else. It's a
+  one-time copy, so a later reschedule doesn't follow it.
+- **Calendar subscription (admin opt-in):** when an admin turns on Settings →
+  Apps → CALENDAR SUBSCRIPTIONS, each member can make a private calendar link in
+  Settings → Calendar. Their calendar app then keeps events up to date, including
+  time changes and cancellations. Each member picks "events I'm in" or "all org
+  events". Only the basics go out: title, time, rally point, event location, and
+  a link back. Ad-hoc ops never appear.
+- Google Calendar refreshes subscriptions on its own schedule (often 12–24 h);
+  Apple Calendar and Outlook check about hourly. Discord pings stay the place for
+  last-minute changes.
+
 **Fixes**
 - Holdings logged under a station's older name (e.g. "Wide Forest Station
   (ARC-L1)") now resolve to the renamed POI ("ARC-L1 Wide Forest Station")
@@ -62,6 +76,13 @@ Suggested bump: **minor** (new user-facing features, watcher unchanged).
 - Sell mode is only as good as the loaded prices (UEX + org reports); the panel
   shows each price's age.
 - Goals without a drop-off post to Discord exactly as before.
+- **Calendar subscriptions are OFF by default.** A member's link works without
+  signing in (calendar apps can't sign in), so turning it on is your call. Google
+  fetches the feed from its own servers: the `/cal/` path has to be reachable from
+  the internet (an access gate in front of the app needs an exception for it).
+  Set `SC_NAV_PUBLIC_URL` so links use your public address. Turning the setting
+  off deletes every member's link. New table `calendar_feeds` is created automatically.
 
 Design + as-built detail: [inventory-pickup-runs.md](inventory-pickup-runs.md),
+[event-calendar.md](event-calendar.md),
 [implementation-notes.md](implementation-notes.md) › Resource manager / Cargo planner.

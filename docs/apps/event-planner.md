@@ -210,6 +210,21 @@ rebuild it every week. Open it from `Templates` on the board (`#/events/template
 - The calendar shows on both tabs and includes quick ops; a day holding a
   closed mission record is ringed with a `✓` instead of a dot.
 
+### Put events in your own calendar
+
+- **Add to calendar** on an upcoming event's page: `Google`, `Outlook.com`, or
+  `Apple / other (.ics)`. It's a one-time copy; if the event moves later, your
+  calendar keeps the old time.
+- **Settings → Calendar** gives you a calendar subscription that stays up to date,
+  including time changes and cancellations. It's there only if an org admin has turned on
+  **Calendar subscriptions** (Settings → Apps). Choose **Events I'm in** (ones
+  you organize or signed up for) or **All org events**, create your link, then
+  `Add to Apple Calendar`, `Add to Google Calendar`, or copy it into Outlook.
+  The link is shown once; treat it like a password. Ad-hoc ops aren't listed.
+- Google Calendar re-checks subscriptions on its own schedule, often only every
+  12–24 hours. Apple Calendar and Outlook check about hourly. Discord pings are
+  still the place for last-minute changes.
+
 ## Features
 
 | Area | What you get |
@@ -222,6 +237,7 @@ rebuild it every week. Open it from `Templates` on the board (`#/events/template
 | Capacity & waitlist | `Max players` is enforced: a full event waitlists first-come, auto-promotes when a spot opens, and pings the promoted member. |
 | Discord | A full-card announcement with an optional linked image that updates itself as signups change; reschedule and waitlist pings; a "starting soon" reminder that reaches every signup even past Discord's 50-mention cap. |
 | Fleet roster | Squads/squadrons/crews/sections/wings with ship-aware seats, a "your assignment" callout, saved group templates, and a manifest you can post to Discord. |
+| Your calendar | **Add to calendar** on each event (Google, Outlook.com, `.ics`), plus an admin-enabled personal subscription link that keeps your calendar app in step. |
 | Ops hand-off | **Run mission** opens the event's op with the signups, contracts and rules already in place. |
 | Ownership | Any member can create an event and sign up; only the organizer or an admin can edit, cancel, complete, run the mission, or manage attendees and the fleet roster. |
 

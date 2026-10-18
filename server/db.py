@@ -122,6 +122,16 @@ CREATE TABLE IF NOT EXISTS watcher_tokens (
     created TEXT, last_used TEXT
 );
 
+-- A member's subscribed-calendar feed (/cal/<token>.ics). One per member: the
+-- URL itself is the credential (calendar apps can't sign in), so only its hash
+-- is stored and "new link" replaces the row. scope = mine | all.
+CREATE TABLE IF NOT EXISTS calendar_feeds (
+    discord_id TEXT PRIMARY KEY,
+    hash TEXT UNIQUE NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'mine',
+    created TEXT, last_used TEXT
+);
+
 -- Per-member cargo-planner ship prefs: the usable-SCU a member has learned for
 -- each ship (stated catalog SCU minus what they can't physically stuff). Keyed
 -- on the Discord member id; one row per (member, ship).
@@ -1842,6 +1852,80 @@ def delete_token(token_id: str) -> bool:
     with _lock, _conn:
         cur = _conn.execute("DELETE FROM watcher_tokens WHERE id=?", (token_id,))
     return cur.rowcount > 0
+
+
+# --- calendar feeds (per member) -------------------------------------------
+
+
+def get_calendar_feed(discord_id: str) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM calendar_feeds WHERE discord_id=?",
+                            (str(discord_id),)).fetchone()
+    return dict(row) if row else None
+
+
+def calendar_feed_by_hash(h: str) -> dict | None:
+    with _lock:
+        row = _conn.execute("SELECT * FROM calendar_feeds WHERE hash=?", (h,)).fetchone()
+    return dict(row) if row else None
+
+
+def set_calendar_feed(discord_id: str, h: str, scope: str, created: str) -> None:
+    """Create or REPLACE a member's feed — a new link kills the old one."""
+    with _lock, _conn:
+        _conn.execute(
+            "INSERT INTO calendar_feeds (discord_id, hash, scope, created, last_used) "
+            "VALUES (?,?,?,?,NULL) ON CONFLICT(discord_id) DO UPDATE SET "
+            "hash=excluded.hash, scope=excluded.scope, created=excluded.created, "
+            "last_used=NULL", (str(discord_id), h, scope, created))
+
+
+def set_calendar_feed_scope(discord_id: str, scope: str) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute("UPDATE calendar_feeds SET scope=? WHERE discord_id=?",
+                            (scope, str(discord_id)))
+    return cur.rowcount > 0
+
+
+def touch_calendar_feed(discord_id: str, ts: str) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE calendar_feeds SET last_used=? WHERE discord_id=?",
+                      (ts, str(discord_id)))
+
+
+def delete_calendar_feed(discord_id: str) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute("DELETE FROM calendar_feeds WHERE discord_id=?",
+                            (str(discord_id),))
+    return cur.rowcount > 0
+
+
+def delete_all_calendar_feeds() -> int:
+    with _lock, _conn:
+        return _conn.execute("DELETE FROM calendar_feeds").rowcount
+
+
+def count_calendar_feeds() -> int:
+    with _lock:
+        return _conn.execute("SELECT COUNT(*) FROM calendar_feeds").fetchone()[0]
+
+
+def calendar_events(discord_id: str | None, since_iso: str, limit: int = 500) -> list[dict]:
+    """Events for a calendar feed: everything starting at/after `since_iso`
+    (any status — a cancelled one rides along as STATUS:CANCELLED), soonest
+    first. `discord_id` narrows to the member's own: ones they organize or
+    have a live (going/maybe) signup on; None = every org event. Quick ops
+    live in `operations`, not here, so ad-hoc runs never reach a calendar."""
+    if discord_id is None:
+        sql, args = "SELECT * FROM events WHERE start_at >= ?", [since_iso]
+    else:
+        sql = ("SELECT * FROM events WHERE start_at >= ? AND (organizer_id=? OR id IN "
+               "(SELECT event_id FROM event_signups WHERE discord_id=? "
+               "AND status IN ('going','maybe')))")
+        args = [since_iso, str(discord_id), str(discord_id)]
+    with _lock:
+        rows = _conn.execute(sql + " ORDER BY start_at ASC LIMIT ?", (*args, limit)).fetchall()
+    return [_event_row_to_dict(r) for r in rows]
 
 
 # --- cargo-planner ship prefs (per member) ---------------------------------
@@ -4412,6 +4496,8 @@ def delete_member(discord_id: str, player_ids: set[int]) -> dict:
                 f"WHERE owner_id IN ({marks})", ids).rowcount
         counts["tokens"] = _conn.execute(
             "DELETE FROM watcher_tokens WHERE discord_id=?", (did,)).rowcount
+        counts["calendar_feeds"] = _conn.execute(
+            "DELETE FROM calendar_feeds WHERE discord_id=?", (did,)).rowcount
         counts["ships"] = _conn.execute(
             "DELETE FROM user_ships WHERE discord_id=?", (did,)).rowcount
         counts["runs"] = _conn.execute(
