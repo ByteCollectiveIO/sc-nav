@@ -476,8 +476,16 @@ class BuildPayloadTests(unittest.TestCase):
         p = sc_nav_watcher.build_payload(
             {"x": 1.5, "y": -2.0, "z": 3.0}, "Nomad_77", "pub_use1b_1_1")
         self.assertEqual(set(p), {"x", "y", "z", "client_time", "source",
-                                  "handle", "shard", "game_build"})
+                                  "handle", "shard", "game_build", "heartbeat"})
         self.assertEqual((p["x"], p["y"], p["z"]), (1.5, -2.0, 3.0))
+        self.assertIs(p["heartbeat"], False)
+
+    def test_heartbeat_resend_is_flagged(self):
+        # The server keeps a flagged re-send's original fix time (a re-stamp
+        # spun parked players westward under the planet's rotation) and never
+        # fulfills an armed capture with it.
+        p = sc_nav_watcher.build_payload({"x": 1.0, "y": 2.0, "z": 3.0}, heartbeat=True)
+        self.assertIs(p["heartbeat"], True)
 
     def test_clipboard_text_is_never_transmitted(self):
         # Regression: the payload used to carry a `raw` field with 512 chars of
@@ -489,7 +497,8 @@ class BuildPayloadTests(unittest.TestCase):
         # build_payload takes no clipboard argument at all, so there is nothing
         # for a future edit to forward by accident.
         params = inspect.signature(sc_nav_watcher.build_payload).parameters
-        self.assertEqual(list(params), ["coords", "handle", "shard", "game_build"])
+        self.assertEqual(list(params), ["coords", "handle", "shard", "game_build",
+                                        "heartbeat"])
 
 
 class HeartbeatDueTests(unittest.TestCase):

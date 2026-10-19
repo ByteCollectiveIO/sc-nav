@@ -2152,6 +2152,10 @@ class PositionIn(BaseModel):
     # captures so pre-patch evidence can be told from post-patch (#37.1 §12.1).
     # Optional: older watchers don't send it and keep working.
     game_build: str | None = Field(default=None, max_length=_BUILD_MAX)
+    # The watcher's timed re-send of its LAST fix (no new /showlocation). It
+    # keeps the member live but is not an observation: it must never fulfill
+    # an armed capture. Older watchers don't send it (see post_position).
+    heartbeat: bool = False
 
 
 class DestinationIn(BaseModel):
@@ -3891,9 +3895,19 @@ async def post_position(body: PositionIn, user: dict = Depends(require_user)):
         sess = hub.get(user)
         now = time.time()
         new_pos = (body.x, body.y, body.z)
-        if sess.pos is not None and new_pos != sess.pos:
-            sess.prev_pos, sess.prev_t = sess.pos, sess.t
-        sess.pos, sess.t = new_pos, now
+        # sess.t is the time the coordinates were OBSERVED, and it is the
+        # rotation epoch every system-frame -> body-frame conversion uses. A
+        # heartbeat re-sends the same system-frame numbers, so re-stamping it
+        # with `now` spun a parked player westward under the planet's rotation
+        # (one step per 60 s heartbeat; 2026-10-18 field report). Repeated
+        # coordinates keep the original stamp — that also covers older watchers
+        # that don't flag their heartbeats. A genuine fix on a rotating body
+        # never repeats exactly (the body turns under you), and in space the
+        # stamp doesn't move the result.
+        if sess.pos is None or new_pos != sess.pos:
+            if sess.pos is not None:
+                sess.prev_pos, sess.prev_t = sess.pos, sess.t
+            sess.pos, sess.t = new_pos, now
         if body.shard:
             sess.shard = body.shard.strip() or None
         # Sticky like the shard: a fix without it (an older watcher, or the
@@ -3905,14 +3919,16 @@ async def post_position(body: PositionIn, user: dict = Depends(require_user)):
         handle_status = _bind_handle(sess, body.handle) if body.handle else None
 
         captured = False
-        if sess.capture_pending is not None:
+        if sess.capture_pending is not None and not body.heartbeat:
             pending = sess.capture_pending
             sess.capture_pending = None
             owner = sess.owner or {}
+            # The fix's own stamp, not `now`: an older watcher's unflagged
+            # heartbeat still lands here, and its coordinates belong to sess.t.
             if pending["kind"] == "observation":
-                _capture_observation(sess, new_pos, now, pending, owner)
+                _capture_observation(sess, sess.pos, sess.t, pending, owner)
             else:
-                _capture_poi(sess, new_pos, now, pending, owner)
+                _capture_poi(sess, sess.pos, sess.t, pending, owner)
             captured = True
 
         sess.recompute()

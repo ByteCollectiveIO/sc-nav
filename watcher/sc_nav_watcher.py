@@ -744,7 +744,7 @@ def log(message):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}", flush=True)
 
 
-def build_payload(coords, handle=None, shard=None, game_build=None):
+def build_payload(coords, handle=None, shard=None, game_build=None, heartbeat=False):
     # The parsed coordinates are the whole point — the surrounding clipboard text
     # is never sent. A `raw` field used to ride along here and the server has
     # never read it, so it was pure privacy surface: whatever else shared the
@@ -762,6 +762,9 @@ def build_payload(coords, handle=None, shard=None, game_build=None):
         # Game build from the Game.log header, stamped server-side on captures
         # so evidence from before a patch can be told apart from after it.
         "game_build": game_build,
+        # A timed re-send of the last fix, not a new /showlocation: the server
+        # keeps the fix's original timestamp and won't fulfill a capture with it.
+        "heartbeat": heartbeat,
     }
 
 
@@ -1070,7 +1073,8 @@ def run(args, sink=None, stop=None):
             reason = heartbeat_due(time.monotonic(), last_send_t, args.heartbeat,
                                    shard, last_sent_shard)
             if reason:
-                sender.send(build_payload(last_coords, handle, shard, game_build))
+                sender.send(build_payload(last_coords, handle, shard, game_build,
+                                          heartbeat=True))
                 sent_this_loop = True
                 if reason == "shard":
                     log(f"heartbeat: shard changed -> {shard}")
