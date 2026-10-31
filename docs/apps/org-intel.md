@@ -46,9 +46,12 @@ the org's page about one place or one other org: any member can edit them
 allied, unknown) and its aliases, and underneath, the page gathers the
 reports, procedures, live warnings and events that mention it by itself; an
 org's *Seen at* counts the reports that name it as the unit. In the navigator,
-your destination shows **◆ Dossier** or **◆ Start dossier**. Questions are
-still being built
-(see [intelligence.md](../intelligence.md)). Open
+your destination shows **◆ Dossier** or **◆ Start dossier**. **RFI** is where
+you ask the org a question (optionally about a place, so it shows on that
+place's dossier). Anyone answers; the asker marks the answer that did it, and an
+accepted answer can be **promoted** into a procedure or onto the place's dossier,
+crediting both people. Every entry also takes **comments**, with one level of
+reply (see [intelligence.md](../intelligence.md)). Open
 `#/intel/overview` and you get org-wide totals for mapping coverage, cargo hauling,
 trade-route profit, belt surveying, marketplace volume, per-contributor
 leaderboards and an ops-attendance board, plus (if you're an admin) a member

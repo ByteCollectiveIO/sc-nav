@@ -5279,7 +5279,8 @@ _INTEL_ENTRY_COLS = ("kind", "title", "slug", "summary", "body_md", "body_html",
                      "maintainers", "system", "patch", "patch_confirmed", "activity",
                      "header", "created_at", "updated_at", "published_at", "revised_at",
                      "submitted_at", "doctrine_at", "doctrine_by",
-                     "grade_rel", "grade_cred", "valid_until", "subject_kind", "subject_ref")
+                     "grade_rel", "grade_cred", "valid_until", "subject_kind", "subject_ref",
+                     "accepted_comment_id")
 
 
 def _intel_read(fn):
@@ -5517,12 +5518,49 @@ def intel_review_queue(restricted_ok: bool) -> list[dict]:
 
 
 def intel_add_comment(entry_id: int, author_id: str, author_name: str | None, body: str,
-                      kind: str, created_at: str, body_html: str | None = None) -> int:
+                      kind: str, created_at: str, body_html: str | None = None,
+                      parent_id: int | None = None) -> int:
     with _lock, _conn:
         cur = _conn.execute(
-            "INSERT INTO intel_comments (entry_id, author_id, author_name, body_md, body_html, kind, created_at) "
-            "VALUES (?,?,?,?,?,?,?)", (entry_id, author_id, author_name, body, body_html, kind, created_at))
+            "INSERT INTO intel_comments (entry_id, parent_id, author_id, author_name, body_md, body_html, "
+            "kind, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (entry_id, parent_id, author_id, author_name, body, body_html, kind, created_at))
     return cur.lastrowid
+
+
+# ---- discussion (slice 5): comments under every entry, RFI answers ----
+INTEL_THREAD_KINDS = ("comment", "answer")
+
+
+@_intel_read
+def intel_thread(entry_id: int) -> list[dict]:
+    """Every comment and answer on an entry, oldest first, deleted ones
+    included (a deleted comment with replies keeps its place)."""
+    return [dict(r) for r in _conn.execute(
+        "SELECT * FROM intel_comments WHERE entry_id=? AND kind IN (?,?) ORDER BY created_at, id",
+        (entry_id,) + INTEL_THREAD_KINDS)]
+
+
+@_intel_read
+def intel_get_comment(comment_id: int) -> dict | None:
+    r = _conn.execute("SELECT * FROM intel_comments WHERE id=?", (comment_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def intel_edit_comment(comment_id: int, body: str, body_html: str, at: str) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE intel_comments SET body_md=?, body_html=?, edited_at=? "
+                      "WHERE id=? AND deleted_at IS NULL", (body, body_html, at, comment_id))
+
+
+def intel_delete_comment(comment_id: int, at: str) -> None:
+    """Soft delete: the text goes, the row stays so replies keep their place.
+    A deleted answer stops being the accepted one."""
+    with _lock, _conn:
+        _conn.execute("UPDATE intel_comments SET deleted_at=?, body_md=NULL, body_html=NULL WHERE id=?",
+                      (at, comment_id))
+        _conn.execute("UPDATE intel_entries SET accepted_comment_id=NULL WHERE accepted_comment_id=?",
+                      (comment_id,))
 
 
 # ---- reports (slice 3): updates, corroborate / dispute, backlinks ----
@@ -5735,7 +5773,7 @@ def intel_list(*, kinds=None, status="published", author_id=None, activity=None,
         "e.author_name, e.owner_id, e.maintainers, e.system, e.patch, e.patch_confirmed, "
         "e.activity, e.created_at, e.updated_at, e.published_at, e.revised_at, "
         "e.submitted_at, e.doctrine_at, e.header, e.grade_rel, e.grade_cred, e.valid_until, "
-        "e.subject_kind, e.subject_ref, "
+        "e.subject_kind, e.subject_ref, e.accepted_comment_id, "
         "(SELECT MAX(rev) FROM intel_revisions r WHERE r.entry_id=e.id AND r.status='live') AS rev "
         f"FROM intel_entries e WHERE {' AND '.join(where)}{_intel_vis_sql(restricted_ok)} "
         f"ORDER BY {order_sql} LIMIT ?", args + [limit]).fetchall()

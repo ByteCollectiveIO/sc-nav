@@ -992,6 +992,49 @@
     .ix-dx-seen { grid-template-columns: minmax(0, 1fr) 60px 26px; }
     .ix-dos-grid { grid-template-columns: minmax(0, 1fr); }
   }
+  /* ---- Intelligence slice 5: discussion (comments, RFI answers) ---- */
+  .ix-tag.ok { color: var(--good); border-color: var(--good); display: inline-flex; align-items: center; gap: 3px; }
+  .ix-tag.ok .ix-ico { width: 11px; height: 11px; }
+  .ix-thread { padding: 4px 22px 20px; border-top: 1px solid var(--border); }
+  .ix-thread h2 { font-size: 12px; color: var(--dim); letter-spacing: 1px; margin: 16px 0 4px; }
+  .ix-thread-none { font-size: 12px; margin: 6px 0 0; max-width: 72ch; }
+  .ix-cmt { padding: 11px 0; border-top: 1px solid var(--border-soft); min-width: 0; }
+  .ix-thread > .ix-cmt:first-of-type { border-top: none; }
+  .ix-cmt.accepted { border: 1px solid var(--good); border-radius: 6px; padding: 11px 14px; margin: 6px 0;
+    background: color-mix(in srgb, var(--good) 7%, transparent); }
+  .ix-cmt.accepted + .ix-cmt { border-top: none; }
+  .ix-cmt-h { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .ix-cmt-h b { font-size: 12px; font-weight: 600; color: var(--text); }
+  .ix-prose.ix-cmt-body { padding: 4px 0 0; font-size: 13px; line-height: 1.6; max-width: 72ch; }
+  .ix-prose.ix-cmt-body > :last-child { margin-bottom: 0; }
+  .ix-cmt-gone { margin: 4px 0 0; font-size: 12px; font-style: italic; color: var(--dim); }
+  .ix-cmt-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin-top: 6px; }
+  .ix-link { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 4px 0; min-height: 28px;
+    font: inherit; font-size: 12px; color: var(--dim); cursor: pointer; }
+  .ix-link:hover { color: var(--accent); }
+  .ix-link:focus-visible { outline: none; color: var(--accent); box-shadow: 0 0 0 2px var(--focus-ring); border-radius: 3px; }
+  .ix-link.on { color: var(--good); }
+  .ix-link .ix-ico { width: 13px; height: 13px; }
+  .ix-promote { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; color: var(--dim); }
+  .ix-promote .ix-ico { width: 13px; height: 13px; }
+  .ix-promote a { color: var(--accent); }
+  .ix-cmt.reply { margin-left: 22px; padding: 9px 0 9px 14px; border-top: none; border-left: 2px solid var(--border); }
+  .ix-cmt.reply + .ix-cmt.reply { margin-top: 2px; }
+  .ix-cmt-slot:empty { display: none; }
+  .ix-cmt-form { display: grid; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+  .ix-cmt-form.inline { margin: 8px 0 0 22px; padding-top: 0; border-top: none; }
+  .ix-cmt-body + .ix-cmt-form.inline, div > .ix-cmt-form.inline { margin-left: 0; }
+  .ix-cmt-form textarea.ti { width: 100%; resize: vertical; min-height: 72px; }
+  .ix-cmt-form .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .ix-cmt-form .row .sp { flex: 1; }
+  .ix-talk { display: inline-flex; align-items: center; gap: 3px; font-variant-numeric: tabular-nums; }
+  .ix-talk > span { display: inline-flex; align-items: center; gap: 3px; }
+  .ix-talk .ix-ico { width: 12px; height: 12px; }
+  @media (max-width: 600px) {
+    .ix-thread { padding-left: 14px; padding-right: 14px; }
+    .ix-cmt.reply { margin-left: 8px; padding-left: 10px; }
+    .ix-cmt-form.inline { margin-left: 8px; }
+  }
   .intel-hero { display: flex; flex-direction: column; gap: 4px; padding: 20px 22px; margin-bottom: 12px;
     background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
     text-decoration: none; transition: border-color .12s; }
@@ -5649,6 +5692,7 @@
       <symbol id="ix-i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></symbol>
       <symbol id="ix-i-op" viewBox="0 0 24 24"><path d="M12 3l8.5 9-8.5 9-8.5-9z"/><path d="M12 8.5l3.3 3.5-3.3 3.5-3.3-3.5z"/></symbol>
       <symbol id="ix-i-zone" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" stroke-dasharray="3 2.4"/><circle cx="12" cy="12" r="1.6"/></symbol>
+      <symbol id="ix-i-comment" viewBox="0 0 24 24"><path d="M4 5.5h16v10H10l-4.5 3.5v-3.5H4z"/></symbol>
       <symbol id="ix-i-hostile" viewBox="0 0 24 24"><path d="M12 4l9 15.5H3z"/></symbol>
       <symbol id="ix-i-allied" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M8 12.5l2.8 2.8L16.5 9"/></symbol>
       <symbol id="ix-i-neutral" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1.5"/></symbol>
@@ -27455,12 +27499,14 @@ const INTEL_KNOW_VIEWS = ["entry", "history", "edit", "new", "search", "reviewin
 let intelRoute = {};   // the parsed params of the current deeper route
 function intelParseRoute(sub) {
   if (sub == null) return null;
-  let m = /^e\/(\d+)(?:-[^/]*)?(?:\/(history|edit|review|sec-[a-z0-9-]+))?$/.exec(sub);
+  let m = /^e\/(\d+)(?:-[^/?]*)?(?:\/(history|edit|review|sec-[a-z0-9-]+))?(?:\?from=(\d+)\.(\d+))?$/.exec(sub);
   if (m) {
-    intelRoute = { id: +m[1], anchor: m[2] && m[2].startsWith("sec-") ? m[2] : null };
+    // ?from=<rfi>.<answer>: Promote → adds an accepted answer to this entry.
+    intelRoute = { id: +m[1], anchor: m[2] && m[2].startsWith("sec-") ? m[2] : null,
+      from: m[3] && m[2] === "edit" ? { q: +m[3], a: +m[4] } : null };
     return m[2] === "history" || m[2] === "edit" ? m[2] : m[2] === "review" ? "reviewing" : "entry";
   }
-  m = /^new\/(procedure|tactic|report|dossier)(?:\?(.*))?$/.exec(sub);
+  m = /^new\/(procedure|tactic|report|dossier|rfi)(?:\?(.*))?$/.exec(sub);
   if (m) {
     // ?w=<warning> (Write up →) · ?loc=<poi|zone:id> / ?unit=<org dossier id>
     // (a report from a dossier) · ?subject=<poi|zone:id> / ?org=1 (a new dossier)
@@ -27468,7 +27514,10 @@ function intelParseRoute(sub) {
     const ref = (k) => /^(poi|zone):\d+$/.test(q.get(k) || "") ? q.get(k) : null;
     intelRoute = { kind: m[1], warning: /^\d+$/.test(q.get("w") || "") ? +q.get("w") : null,
       loc: ref("loc"), subject: ref("subject"), unit: /^\d+$/.test(q.get("unit") || "") ? +q.get("unit") : null,
-      org: q.get("org") === "1" };
+      org: q.get("org") === "1",
+      // ?about=<entry id> (Ask about an org) · ?from=<rfi>.<answer> (Promote →)
+      about: /^\d+$/.test(q.get("about") || "") ? +q.get("about") : null,
+      from: /^\d+\.\d+$/.test(q.get("from") || "") ? { q: +q.get("from").split(".")[0], a: +q.get("from").split(".")[1] } : null };
     return "new";
   }
   if (sub === "search") { intelRoute = {}; return "search"; }
@@ -28217,7 +28266,8 @@ function renderIntel(section) {
   const tab = INTEL_KNOW_SECS.includes(section) ? section : section === "search" ? null
     : section === "reviewing" && intelAccess().reviewer ? "review"
     : section === "new" && intelRoute.kind === "report" ? "feed"
-    : section === "new" && intelRoute.kind === "dossier" ? "dossiers" : "library";
+    : section === "new" && intelRoute.kind === "dossier" ? "dossiers"
+    : section === "new" && intelRoute.kind === "rfi" ? "rfi" : "library";
   // Reviewers see a Review tab while the gate is on (#50 slice 2).
   const ia = intelAccess();
   $("intel-tab-review").hidden = !(ia.reviewer && ia.review_kinds.length) && section !== "review";
@@ -28237,7 +28287,7 @@ function renderIntel(section) {
   $("intel-new").hidden = !know;
   // The Feed's natural "new" is a report; everywhere else it's a procedure.
   $("intel-new").href = tab === "feed" ? "#/intel/new/report" : tab === "dossiers" ? "#/intel/new/dossier"
-    : "#/intel/new/procedure";
+    : tab === "rfi" ? "#/intel/new/rfi" : "#/intel/new/procedure";
   document.querySelectorAll("#intel-tabs a").forEach(a => {
     const on = a.dataset.sec === tab;
     a.classList.toggle("on", on);
@@ -28288,8 +28338,6 @@ function renderIntel(section) {
 // keep their slice-0 empty states. The server renders + sanitizes every body
 // (intel_md.py); this module only hydrates the markers it emits.
 const INTEL_KNOW_EMPTY = {
-  rfi: ["RFI", "No questions yet.",
-    "Requests for information: ask the org something, and the accepted answer stays where the next person can find it."],
 };
 const INTEL_KIND = { procedure: "Procedure", tactic: "Tactic", report: "Report", dossier: "Dossier",
   debrief: "Debrief", rfi: "RFI" };
@@ -28304,6 +28352,7 @@ const INTEL_TEMPLATE = {
   report: "## What happened\nWhat you saw, in the order it happened.\n\n## What to do\n- \n",
   dossier: "## Overview\nWhat this place is, and what crews should know before they go.\n\n## Approach\n- \n\n" +
     "## Who uses it\n\n## Nearest help\n",
+  rfi: "What you already know, and what would help.\n",
   org: "## Who they are\nWhat kind of outfit this is, and where they operate.\n\n## How they operate\n- \n\n" +
     "## What works against them\n",
 };
@@ -28377,7 +28426,8 @@ function intelRow(e, opts = {}) {
     e.activity ? `<span class="ix-tag">${esc(e.activity)}</span>` : "",
     e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "",
     ...(e.tags || []).slice(0, 4).map(t => `<span class="ix-tag free">#${esc(t)}</span>`),
-    e.status === "published" && !r ? intelPatchChip(e.patch) : ""].filter(Boolean).join("");
+    e.status === "published" && !r && e.kind !== "rfi" ? intelPatchChip(e.patch) : "",
+    e.counts && intelTalkChip(e.counts) ? `<span class="ix-talk">${intelTalkChip(e.counts)}</span>` : ""].filter(Boolean).join("");
   const teaser = opts.snippet ? `<div class="ix-teaser">${opts.snippet}</div>`   // server-escaped, <mark> only
     : e.summary ? `<div class="ix-teaser">${esc(e.summary)}</div>` : "";
   const href = e.status === "draft" ? `${intelHref(e)}/edit` : intelHref(e);
@@ -28409,7 +28459,7 @@ function renderIntelKnow(section) {
       `<p class="note">Arrives in a later Intelligence update.</p></div>`;
     return;
   }
-  ({ feed: intelFeed, library: intelLibrary, dossiers: intelDossiers, search: intelSearchView, entry: intelEntryView,
+  ({ feed: intelFeed, library: intelLibrary, dossiers: intelDossiers, rfi: intelRfiList, search: intelSearchView, entry: intelEntryView,
      history: intelHistory, edit: intelEditor, new: intelEditor,
      review: intelReviewQueue, reviewing: intelReviewView })[section](box);
 }
@@ -28420,14 +28470,24 @@ function renderIntelKnow(section) {
 // you looked" is a server-side mark per member (set once per visit).
 let intelFeedFilter = { kind: "", system: "", activity: "", expired: false };
 let intelFeedSeen;   // undefined = not loaded this visit; null = never looked
+// Discussion count on a row: answers on an RFI, comments on everything else.
+function intelTalkChip(c) {
+  const n = (c.answer || 0) + (c.comment || 0);
+  if (!n) return "";
+  const t = [c.answer ? `${c.answer} answer${c.answer === 1 ? "" : "s"}` : "", c.comment ? `${c.comment} comment${c.comment === 1 ? "" : "s"}` : ""].filter(Boolean).join(", ");
+  return `<span title="${t}">${intelIco("comment")}${n}</span>`;
+}
 function intelFeedRow(e, seen) {
   const at = e.revised_at || e.published_at;
   const unread = !!(seen && at && at > seen);
   const r = e.report, c = e.counts || {};
   const revised = e.kind !== "report" && e.revised_at && e.published_at && e.revised_at !== e.published_at;
   const who = e.kind === "report" ? e.author_name : (e.owner && e.owner.name) || e.author_name;
+  const q = e.rfi;
   const meta = [
     r && r.location ? `<span class="ix-loc">${intelIco("pin")}${esc(r.location)}</span>` : "",
+    q ? (q.answered ? `<span class="ix-tag ok">Answered</span>` : `<span class="ix-tag draft">Open</span>`) : "",
+    q && q.location ? `<span class="ix-loc">${intelIco((q.location_ref || "").startsWith("zone:") ? "zone" : "pin")}${esc(q.location)}</span>` : "",
     intelMarkTags(e),
     e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "",
     e.activity ? `<span class="ix-tag">${esc(e.activity)}</span>` : "",
@@ -28437,7 +28497,8 @@ function intelFeedRow(e, seen) {
   const side = (r ? intelGradeChip(r.grade) : "") +
     (c.corroborate ? `<span title="${c.corroborate} corroborated">${intelIco("corrob")}${c.corroborate}</span>` : "") +
     (c.dispute ? `<span class="bad" title="${c.dispute} disputed">${intelIco("dispute")}${c.dispute}</span>` : "") +
-    (c.addendum ? `<span title="${c.addendum} update${c.addendum === 1 ? "" : "s"}">${intelIco("addend")}${c.addendum}</span>` : "");
+    (c.addendum ? `<span title="${c.addendum} update${c.addendum === 1 ? "" : "s"}">${intelIco("addend")}${c.addendum}</span>` : "") +
+    intelTalkChip(c);
   const time = at ? new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "";
   return `<a class="ix-row ix-feed-row${unread ? " unread" : ""}${r && r.expired ? " expired" : ""}" href="${intelHref(e)}">` +
     `<span class="ix-kind"><span class="ix-dot" aria-hidden="true"></span>${intelIco(e.kind)}${esc(INTEL_KIND[e.kind] || e.kind)}</span>` +
@@ -28463,10 +28524,10 @@ async function intelFeed(box) {
   const opt = (list, cur, none) => `<option value="">${none}</option>` +
     list.map(x => `<option value="${esc(x)}"${x === cur ? " selected" : ""}>${esc(x)}</option>`).join("");
   box.innerHTML = `<div class="ix-grid" id="ix-feed-grid"><div class="panel"><div class="ix-panel-h"><h2>FEED</h2>` +
-    `<span class="muted">Reports, and procedures, tactics and dossiers when they're published or revised</span></div>` +
+    `<span class="muted">Reports and questions, plus procedures, tactics and dossiers when they're published or revised</span></div>` +
     `<div class="ix-filters" role="group" aria-label="Filter the feed">` +
     chip("", "All") + chip("report", "Reports", "report") + chip("procedure", "Procedures", "procedure") + chip("tactic", "Tactics", "tactic") +
-    chip("dossier", "Dossiers", "dossier") + `<span class="sp"></span>` +
+    chip("dossier", "Dossiers", "dossier") + chip("rfi", "Questions", "rfi") + `<span class="sp"></span>` +
     `<select class="ti" id="ix-f-sys" aria-label="System">${opt(INTEL_SYSTEM_OPTS, f.system, "Every system")}</select>` +
     `<select class="ti" id="ix-f-act" aria-label="Activity">${opt(tags, f.activity, "Every activity")}</select>` +
     `<label class="ix-chip ix-check"><input type="checkbox" id="ix-f-exp"${f.expired ? " checked" : ""}> Show expired</label></div>` +
@@ -28653,6 +28714,10 @@ function intelDxRow(x, opts = {}) {
     small.push(r.valid_until ? `<span class="${r.expired ? "" : "ix-ttl"}">${esc(intelTtl(r.valid_until))}</span>` : `<span>no expiry</span>`);
     if (c.corroborate) small.push(`<span>${c.corroborate} corroborated</span>`);
     if (c.dispute) small.push(`<span class="bad">${c.dispute} disputed</span>`);
+  } else if (x.rfi) {
+    small.push(x.rfi.answered ? `<span class="ix-tag ok">Answered</span>` : `<span class="ix-tag draft">Open</span>`);
+    small.push(`<span>asked by ${esc(x.author_name || "?")}</span>`);
+    small.push(`<span>${c.answer ? `${c.answer} answer${c.answer === 1 ? "" : "s"}` : "no answers yet"}</span>`);
   } else {
     if (x.doctrine) small.push(`<span class="ix-tag doctrine">Doctrine</span>`);
     const kw = x.kind === "dossier" ? `${(x.dossier || {}).subject_kind === "org" ? "org" : "place"} dossier`
@@ -28680,6 +28745,7 @@ function intelDossierView(box, e) {
          : isZone ? "an org survey zone" : "from the navigator catalog"].join(" · ");
   const repHref = isOrg ? `#/intel/new/report?unit=${e.id}`
     : d.subject_ref ? `#/intel/new/report?loc=${encodeURIComponent(d.subject_ref)}` : "#/intel/new/report";
+  const askHref = isOrg || !d.subject_ref ? `#/intel/new/rfi?about=${e.id}` : `#/intel/new/rfi?loc=${encodeURIComponent(d.subject_ref)}`;
   const warns = ro.warnings || [];
   const w0 = warns[0];
   const live = w0 ? `<div class="ix-dx-live" role="status">${intelIco("alert")}<span><b>ACTIVE ON THE DANGER BOARD</b> · ` +
@@ -28690,6 +28756,7 @@ function intelDossierView(box, e) {
   const actions = `<div class="ix-actions">` +
     `<a class="ix-primary" href="${intelHref(e)}/edit">${intelIco("edit")}Edit</a>` +
     `<a class="ix-btn" href="${repHref}">${intelIco("report")}${isOrg ? "Report a sighting" : "Report from here"}</a>` +
+    `<a class="ix-btn" href="${askHref}">${intelIco("rfi")}Ask about it</a>` +
     `<a class="ix-btn" href="${intelHref(e)}/history">${intelIco("history")}History</a>` +
     `<button type="button" class="ix-btn" id="ix-copy">${intelIco("link")}Copy link</button><span class="sp"></span>` +
     (e.can_manage ? `<button type="button" class="ix-btn" id="ix-archive">Archive</button>` : "") + `</div>`;
@@ -28713,6 +28780,12 @@ function intelDossierView(box, e) {
       seen.length ? seen.map(x => `<div class="ix-dx-seen"><span class="t">${x.ref ? `<span class="intel-ref" data-ref-kind="${esc(x.ref.split(":")[0])}" data-ref-id="${esc(x.ref.split(":")[1])}"></span>` : esc(x.label)}` +
         `<small>last ${esc(intelWhen(x.last))}</small></span><span class="bar"><i style="width:${Math.round(100 * x.n / max)}%"></i></span><span class="n">${x.n}</span></div>`).join("")
         : `<p class="ix-dx-none">No sightings yet. A report counts when its UNIT line links this dossier.</p>`);
+  }
+  const qs = ro.questions || [];
+  if (qs.length) {
+    const open = qs.filter(x => !(x.rfi || {}).answered).length;
+    roll += sec("QUESTIONS", [open ? `${open} open` : "", qs.length - open ? `${qs.length - open} answered` : ""].filter(Boolean).join(" · "),
+      qs.map(x => intelDxRow(x)).join(""), `<a href="${askHref}">Ask one</a>`);
   }
   roll += sec("REPORTS", repCount, repRows);
   if (lib.length) roll += sec(isOrg ? "TACTICS AND PROCEDURES" : "PROCEDURES AND TACTICS", `${lib.length} reference ${isOrg ? "them" : "it"}`, lib.map(x => intelDxRow(x)).join(""));
@@ -28769,7 +28842,7 @@ function intelDossierView(box, e) {
     `<h1 class="ix-title">${esc(e.title)}</h1>` + (sub ? `<p class="ix-dx-sub">${sub}</p>` : "") +
     (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") + `${actions}</div>${live}` +
     `<div class="ix-prose" id="ix-prose">${e.body_html || `<p class="muted">Nobody has written anything here yet. <a href="${intelHref(e)}/edit">Add what you know</a>.</p>`}</div>` +
-    `${edited}</article>${rollPanel}</div><aside class="ix-rail">${rail}</aside></div>`;
+    `${edited}</article>${rollPanel}${e.thread ? `<div class="panel ix-article">${intelThreadHtml(e)}</div>` : ""}</div><aside class="ix-rail">${rail}</aside></div>`;
   intelHydrate($("ix-prose"), e);
   const rp = box.querySelector(".ix-dx-roll"); if (rp) intelHydrate(rp, null);
   intelSetTab("dossiers");
@@ -28787,6 +28860,191 @@ function intelDossierView(box, e) {
     if (!ok) return;
     try { await intelApi(`/api/intel/entries/${e.id}`, { method: "DELETE" }); location.hash = "#/intel/dossiers"; }
     catch (err) { fail(err); }
+  };
+  intelBindThread(box, e, () => intelEntryView(box));
+}
+
+// ---- DISCUSSION (#50 slice 5): comments under every entry, RFI answers ----
+// Flat, one level of reply. Markdown, rendered + sanitized by the server.
+// Every write returns the entry, and the page re-renders from it.
+function intelThreadHtml(e, opts = {}) {
+  const isRfi = e.kind === "rfi";
+  const items = e.thread || [];
+  const top = items.filter(c => !c.parent_id);
+  if (isRfi) top.sort((a, b) => (b.id === e.accepted_id) - (a.id === e.accepted_id));
+  const replies = (id) => items.filter(c => c.parent_id === id);
+  const one = (c, isReply) => {
+    const acc = isRfi && c.id === e.accepted_id;
+    const acts = c.deleted ? "" : [
+      isRfi && !isReply && e.can_accept ? `<button type="button" class="ix-link${acc ? " on" : ""}" data-accept="${acc ? "" : c.id}" aria-pressed="${acc}">` +
+        `${intelIco("check", "ix-ico sm")}${acc ? "Accepted · undo" : "Accept this answer"}</button>` : "",
+      acc && opts.promote ? opts.promote(c) : "",
+      !isReply ? `<button type="button" class="ix-link" data-reply="${c.id}">${intelIco("comment", "ix-ico sm")}Reply</button>` : "",
+      c.mine ? `<button type="button" class="ix-link" data-edit="${c.id}">Edit</button>` : "",
+      c.can_delete ? `<button type="button" class="ix-link" data-del="${c.id}">Delete</button>` : ""].filter(Boolean).join("");
+    return `<article class="ix-cmt${isReply ? " reply" : ""}${c.kind === "answer" ? " answer" : ""}${acc ? " accepted" : ""}" id="ix-c-${c.id}">` +
+      `<div class="ix-cmt-h"><b>${esc(c.by)}</b><span>${esc(intelWhen(c.at))}</span>` +
+      (c.edited_at && !c.deleted ? `<span title="Edited ${esc(new Date(c.edited_at).toLocaleString())}">edited</span>` : "") +
+      (acc ? `<span class="ix-tag ok">${intelIco("check", "ix-ico sm")}Accepted answer</span>` : "") + `</div>` +
+      (c.deleted ? `<p class="ix-cmt-gone">${c.kind === "answer" ? "Answer" : "Comment"} deleted.</p>`
+        : `<div class="ix-prose ix-cmt-body" data-body="${c.id}">${c.html}</div>`) +
+      (acts ? `<div class="ix-cmt-acts">${acts}</div>` : "") +
+      (isReply ? "" : replies(c.id).map(r => one(r, true)).join("") + `<div class="ix-cmt-slot" data-slot="${c.id}"></div>`) +
+      `</article>`;
+  };
+  const n = top.filter(c => !c.deleted).length;
+  const noun = isRfi ? "ANSWERS" : "COMMENTS";
+  const empty = isRfi ? "No answers yet. If you know, say what you know; the person who asked can mark the one that answered it."
+    : "No comments yet. Questions, corrections, what worked for you: discussion of this entry goes here.";
+  return `<section class="ix-thread" id="ix-thread" aria-label="${isRfi ? "Answers" : "Comments"}">` +
+    `<h2>${noun}${n ? ` · ${n}` : ""}</h2>` +
+    (top.length ? top.map(c => one(c, false)).join("") : `<p class="muted ix-thread-none">${empty}</p>`) +
+    (e.can_comment ? `<form class="ix-cmt-form" id="ix-cmt-form"><label class="ix-lbl"><span>${isRfi ? "YOUR ANSWER" : "ADD A COMMENT"}</span>` +
+      `<textarea class="ti" id="ix-cmt-body" rows="3" maxlength="4000" placeholder="${isRfi ? "What you know. Markdown works: **bold**, lists, links." : "Markdown works: **bold**, lists, links."}"></textarea></label>` +
+      `<div class="row"><small class="muted">Everyone who can read this entry sees it.</small><span class="sp"></span>` +
+      `<button type="submit" class="ix-primary" id="ix-cmt-go">${isRfi ? "Post answer" : "Post comment"}</button></div>` +
+      `<p class="ix-save-err" id="ix-cmt-err" role="alert" hidden></p></form>` : "") + `</section>`;
+}
+function intelBindThread(box, e, rerender) {
+  const th = box.querySelector("#ix-thread"); if (!th) return;
+  th.querySelectorAll(".ix-cmt-body").forEach(b => intelHydrate(b, null));
+  const fail = (err) => intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000);
+  const call = async (url, opts, focusId) => {
+    const v = await intelApi(url, opts);
+    await rerender(v);
+    if (focusId) { const t = document.getElementById(focusId); if (t) t.scrollIntoView({ block: "nearest" }); }
+    return v;
+  };
+  const form = $("ix-cmt-form");
+  if (form) form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const body = $("ix-cmt-body").value;
+    if (body.trim().length < 2) { $("ix-cmt-body").focus(); return; }
+    $("ix-cmt-go").disabled = true;
+    try { await call(`/api/intel/entries/${e.id}/comments`, { method: "POST", body: { body } }, "ix-thread"); }
+    catch (err) { $("ix-cmt-go").disabled = false; const x = $("ix-cmt-err"); x.textContent = err.message; x.hidden = false; }
+  };
+  const inlineForm = (slot, value, label, onSave) => {
+    slot.innerHTML = `<form class="ix-cmt-form inline"><textarea class="ti" rows="3" maxlength="4000">${esc(value)}</textarea>` +
+      `<div class="row"><span class="sp"></span><button type="button" class="ix-btn" data-x>Cancel</button>` +
+      `<button type="submit" class="ix-primary">${label}</button></div><p class="ix-save-err" role="alert" hidden></p></form>`;
+    const f = slot.querySelector("form"), ta = f.querySelector("textarea");
+    ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+    f.querySelector("[data-x]").onclick = () => { slot.innerHTML = ""; };
+    f.onsubmit = async (ev) => {
+      ev.preventDefault();
+      if (ta.value.trim().length < 2) return;
+      f.querySelector("[type=submit]").disabled = true;
+      try { await onSave(ta.value); }
+      catch (err) { f.querySelector("[type=submit]").disabled = false; const x = f.querySelector(".ix-save-err"); x.textContent = err.message; x.hidden = false; }
+    };
+  };
+  th.querySelectorAll("[data-reply]").forEach(b => b.onclick = () => {
+    const slot = th.querySelector(`[data-slot="${b.dataset.reply}"]`);
+    inlineForm(slot, "", "Reply", (body) => call(`/api/intel/entries/${e.id}/comments`, { method: "POST", body: { body, parent_id: +b.dataset.reply } }, `ix-c-${b.dataset.reply}`));
+  });
+  th.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => {
+    const c = e.thread.find(x => x.id === +b.dataset.edit);
+    const bodyEl = th.querySelector(`[data-body="${c.id}"]`);
+    const slot = document.createElement("div"); bodyEl.replaceWith(slot);
+    inlineForm(slot, c.md, "Save", (body) => call(`/api/intel/comments/${c.id}`, { method: "PUT", body: { body } }, `ix-c-${c.id}`));
+    slot.querySelector("[data-x]").onclick = () => slot.replaceWith(bodyEl);
+  });
+  th.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    const c = e.thread.find(x => x.id === +b.dataset.del);
+    const ok = await confirmDialog(c.mine ? "Your text is removed. Replies to it stay." : `${c.by}'s text is removed. Replies to it stay.`,
+      { title: `Delete this ${c.kind === "answer" ? "answer" : "comment"}?`, confirmLabel: "Delete", danger: true });
+    if (!ok) return;
+    try { await call(`/api/intel/comments/${c.id}`, { method: "DELETE" }, "ix-thread"); } catch (err) { fail(err); }
+  });
+  th.querySelectorAll("[data-accept]").forEach(b => b.onclick = async () => {
+    try { await call(`/api/intel/entries/${e.id}/accept`, { method: "POST", body: { comment_id: b.dataset.accept ? +b.dataset.accept : null } }, "ix-thread"); }
+    catch (err) { fail(err); }
+  });
+}
+
+// ---- RFI (#50 slice 5): questions, open ones first ----
+function intelRfiRow(e) {
+  const r = e.rfi || {}, c = e.counts || {};
+  const meta = [intelMarkTags(e),
+    r.answered ? `<span class="ix-tag ok">${intelIco("check", "ix-ico sm")}Answered</span>` : `<span class="ix-tag draft">Open</span>`,
+    r.location ? `<span class="ix-loc">${intelIco((r.location_ref || "").startsWith("zone:") ? "zone" : "pin")}${esc(r.location)}</span>` : "",
+    e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "",
+    `<span>asked by <b>${esc(e.author_name || "?")}</b></span>`].filter(Boolean).join("");
+  return `<a class="ix-row" href="${intelHref(e)}"><span class="ix-kind">${intelIco("rfi")}${c.answer ? `${c.answer} answer${c.answer === 1 ? "" : "s"}` : "No answers"}</span>` +
+    `<span class="ix-body"><span class="ix-t">${esc(e.title)}</span>` + (e.summary ? `<div class="ix-teaser">${esc(e.summary)}</div>` : "") +
+    `<span class="ix-meta">${meta}</span></span><span class="ix-when">${esc(intelWhen(e.published_at))}</span></a>`;
+}
+async function intelRfiList(box) {
+  box.innerHTML = `<div class="panel"><div class="ix-panel-h"><h2>RFI</h2><span class="muted">Questions for the org. Open ones first, then answered</span></div>` +
+    `<div class="ix-list" id="ix-rfi">${intelStatus("Loading…")}</div></div>`;
+  try {
+    const d = await intelApi("/api/intel/entries?section=rfi");
+    const el = $("ix-rfi"); if (!el) return;
+    if (!d.entries.length) {
+      el.innerHTML = `<div class="intel-know-empty" style="padding:14px 8px"><p class="lead">No questions yet.</p>` +
+        `<p class="muted">Ask the org something: a cave layout, a gate's behaviour on this patch, who's been seen where. ` +
+        `Whoever knows answers, you mark the answer that did it, and it stays where the next person searches.</p>` +
+        `<p style="margin-top:12px"><a class="ix-primary" href="#/intel/new/rfi">${intelIco("rfi")}Ask a question</a></p></div>`;
+      return;
+    }
+    const open = d.entries.filter(e => !(e.rfi || {}).answered), done = d.entries.filter(e => (e.rfi || {}).answered);
+    el.innerHTML = [[open, "OPEN"], [done, "ANSWERED"]].filter(([g]) => g.length)
+      .map(([g, h]) => `<div class="ix-group-h"><span>${h}</span><span>${g.length}</span></div>` + g.map(intelRfiRow).join("")).join("");
+  } catch (err) { const el = $("ix-rfi"); if (el) el.innerHTML = intelStatus(err.message, true); }
+}
+async function intelRfiView(box, e) {
+  const r = e.rfi || {}, h = e.header || {};
+  const answered = !!e.accepted_id;
+  // Promote → an accepted answer becomes a procedure, or goes on the place's dossier.
+  let dossier = null;
+  if (answered && h.location_ref) {
+    const [k, i] = h.location_ref.split(":");
+    try { dossier = (await intelApi(`/api/intel/places/${k}/${i}`)).dossier; } catch {}
+    if (intelCurSec !== "entry" || intelRoute.id !== e.id) return;
+  }
+  const promote = (c) => `<span class="ix-promote">${intelIco("plus", "ix-ico sm")}Promote to ` +
+    `<a href="#/intel/new/procedure?from=${e.id}.${c.id}">a procedure</a>` +
+    (dossier ? ` · <a href="${intelHref(dossier)}/edit?from=${e.id}.${c.id}">the ${esc(dossier.title)} dossier</a>`
+      : h.location_ref ? ` · <a href="#/intel/new/dossier?subject=${encodeURIComponent(h.location_ref)}&from=${e.id}.${c.id}">a new dossier</a>` : "") + `</span>`;
+  const actions = `<div class="ix-actions">` +
+    (e.can_edit ? `<a class="ix-btn" href="${intelHref(e)}/edit">${intelIco("edit")}Edit question</a>` : "") +
+    `<a class="ix-primary" href="#ix-cmt-form" id="ix-answer-go">${intelIco("comment")}Answer</a>` +
+    `<button type="button" class="ix-btn" id="ix-copy">${intelIco("link")}Copy link</button><span class="sp"></span>` +
+    (e.can_manage ? `<button type="button" class="ix-btn" id="ix-archive">Archive</button>` : "") + `</div>`;
+  const linked = (e.linked_from || []).length ? `<div class="panel"><div class="ix-panel-h"><h2>LINKED FROM</h2><span class="muted">${e.linked_from.length}</span></div>` +
+    `<ul class="ix-rl">${e.linked_from.map(b => `<li>${intelIco(b.kind)}<span><a href="${intelHref(b)}">${esc(b.title)}</a>` +
+    `<small>${esc((INTEL_KIND[b.kind] || b.kind).toLowerCase())}</small></span></li>`).join("")}</ul></div>` : "";
+  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/rfi">RFI</a><span>/</span><span>${answered ? "Answered" : "Open"}</span></nav>` +
+    `<div class="ix-grid"><article class="panel ix-article"><div class="ix-head">` +
+    `<div class="ix-kindline">${intelIco("rfi")}Question${intelMarkTags(e)}` +
+    (answered ? `<span class="ix-tag ok">${intelIco("check", "ix-ico sm")}Answered</span>` : `<span class="ix-tag draft">Open</span>`) +
+    (e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "") + `</div>` +
+    `<h1 class="ix-title">${esc(e.title)}</h1>` + (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") +
+    `<div class="ix-by"><span>asked by <b>${esc(e.author_name || "?")}</b></span><span>${esc(intelWhen(e.published_at))}</span>` +
+    (h.location_ref ? `<span class="intel-ref" data-ref-kind="${esc(h.location_ref.split(":")[0])}" data-ref-id="${esc(h.location_ref.split(":")[1])}"></span>` : "") +
+    `</div>${actions}</div>` +
+    (e.body_md && e.body_md.trim() ? `<div class="ix-prose" id="ix-prose">${e.body_html}</div>` : `<div id="ix-prose"></div>`) +
+    intelThreadHtml(e, { promote }) + `</article>` +
+    `<aside class="ix-rail"><div class="panel" id="ix-loc-p" hidden></div>${linked}` +
+    `<div class="panel"><h2>HOW IT WORKS</h2><p class="muted" style="font-size:12px;line-height:1.5;margin:0">` +
+    `Anyone can answer. ${esc(e.author_name || "The asker")} (or an admin) marks the answer that answered it. ` +
+    `An accepted answer can be promoted into a procedure${h.location_ref ? " or onto the place's dossier" : ""}, crediting both of you.` +
+    `${h.location_ref ? " While it's open, the question shows on that place's dossier." : ""}</p></div></aside></div>`;
+  intelHydrate(box.querySelector(".ix-head"), null);
+  intelHydrate($("ix-prose"), e);
+  intelSetTab("rfi");
+  intelReportRail(e);
+  window.scrollTo(0, 0);
+  intelBindThread(box, e, () => intelEntryView(box));
+  $("ix-answer-go").onclick = (ev) => { ev.preventDefault(); const t = $("ix-cmt-body"); if (t) { t.scrollIntoView({ block: "center" }); t.focus(); } };
+  $("ix-copy").onclick = () => intelCopy(location.origin + location.pathname + intelHref(e), "Link copied");
+  if ($("ix-archive")) $("ix-archive").onclick = async () => {
+    const ok = await confirmDialog(`“${e.title}” leaves the RFI list and search. Its answers are kept and an admin can still see it.`,
+      { title: "Archive this question?", confirmLabel: "Archive", danger: true });
+    if (!ok) return;
+    try { await intelApi(`/api/intel/entries/${e.id}`, { method: "DELETE" }); location.hash = "#/intel/rfi"; }
+    catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
   };
 }
 
@@ -28951,6 +29209,7 @@ async function intelEntryView(box) {
   if (intelCurSec !== "entry" || intelRoute.id !== id) return;
   if (e.status === "draft") { history.replaceState(null, "", `${intelHref(e)}/edit`); applyView(); return; }
   if (e.kind === "dossier" && e.status === "published") { intelDossierView(box, e); return; }
+  if (e.kind === "rfi" && e.status === "published") { intelRfiView(box, e); return; }
   const isReport = e.kind === "report";
   const p = e.patch;
   const inReview = e.status === "in_review";
@@ -29035,7 +29294,7 @@ async function intelEntryView(box) {
     `<h1 class="ix-title">${esc(e.title)}</h1>` +
     (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") +
     `<div class="ix-by">${by}</div>${actions}</div>${salute}` +
-    `<div class="ix-prose" id="ix-prose">${e.body_html || `<p class="muted">This entry has no body yet.</p>`}</div>${updates}</article>` +
+    `<div class="ix-prose" id="ix-prose">${e.body_html || `<p class="muted">This entry has no body yet.</p>`}</div>${updates}${e.thread ? intelThreadHtml(e) : ""}</article>` +
     `<aside class="ix-rail">${repRail}<div class="panel" id="ix-toc-p" hidden><h2>ON THIS PAGE</h2><ul class="ix-toc" id="ix-toc"></ul></div>${linked}` +
     `<div class="panel"><h2>DETAILS</h2><dl class="ix-dl">` +
     `<dt>KIND</dt><dd>${esc(INTEL_KIND[e.kind])}</dd>` +
@@ -29117,6 +29376,7 @@ async function intelEntryView(box) {
       catch (err) { $("ix-upd-go").disabled = false; const x = $("ix-upd-err"); x.textContent = err.message; x.hidden = false; }
     };
   }
+  intelBindThread(box, e, () => intelEntryView(box));
 }
 function intelSetTab(tab) {
   document.querySelectorAll("#intel-tabs a").forEach(a => {
@@ -29404,10 +29664,43 @@ function intelEdValues() {
       aliases: org ? $("ix-d-alias").value.split(",").map(x => x.trim()).filter(Boolean).slice(0, 8) : [],
       sid: org ? $("ix-d-sid").value : "" };
   }
+  if (intelEd && intelEd.kind === "rfi") v.header = { location_ref: intelEd.rfiLoc ? intelEd.rfiLoc.key : null };
   return v;
 }
+// An RFI's optional place (#50 slice 5): a question about it shows on that
+// place's dossier while it's open.
+function intelEdMountRfi(v) {
+  const ed = intelEd, h = (v && v.header) || {};
+  ed.rfiLoc = h.location_ref ? { key: h.location_ref, label: h.location_label || h.location_ref } : null;
+  const wrap = $("ix-rfi");
+  wrap.innerHTML = `<div class="ix-rep-h"><span>WHERE</span><small>Optional. A question about a place shows on its dossier while it's open.</small></div>` +
+    `<div class="ix-lbl"><span>LOCATION · a place or survey zone</span><div id="ix-q-locchip"></div>` +
+    `<div class="ix-pick" id="ix-q-pick"><input class="ti" id="ix-q-locq" autocomplete="off" placeholder="Find a place or survey zone…" aria-label="Find a place">` +
+    `<ul id="ix-q-locres" hidden></ul></div></div>`;
+  const chip = () => {
+    $("ix-q-locchip").innerHTML = ed.rfiLoc ? `<span class="ix-person">${intelIco(ed.rfiLoc.key.startsWith("zone:") ? "zone" : "pin", "ix-ico sm")}${esc(ed.rfiLoc.label)}` +
+      `<button type="button" id="ix-q-locx" aria-label="Clear the location">×</button></span>` : "";
+    $("ix-q-pick").hidden = !!ed.rfiLoc;
+    if ($("ix-q-locx")) $("ix-q-locx").onclick = () => { ed.rfiLoc = null; chip(); intelEdChanged(); $("ix-q-locq").focus(); };
+  };
+  chip();
+  intelRefPicker($("ix-q-locq"), $("ix-q-locres"), ["poi", "zone"], (it) => { ed.rfiLoc = { key: it.key, label: it.label }; chip(); intelEdChanged(); });
+}
+// Promote → (#50 slice 5): the RFI and the accepted answer a ?from=Q.A link
+// names, with both people credited. The [[entry:Q]] chip is the provenance:
+// the RFI's LINKED FROM lists whatever it was promoted into.
+async function intelPromoteSource(from) {
+  if (!from) return null;
+  try {
+    const q = await intelApi(`/api/intel/entries/${from.q}`);
+    const a = (q.thread || []).find(c => c.id === from.a && !c.deleted);
+    if (q.kind !== "rfi" || !a) return null;
+    return { q, a, credit: `asked by ${q.author_name || "a member"}, answered by ${a.by}` };
+  } catch { return null; }
+}
 const INTEL_TITLE_PH = { procedure: "e.g. Hull-C escort formation", tactic: "e.g. Countering a gate camp at Pyro Gateway",
-  report: "e.g. Gate camp on the Pyro side of the jump point", dossier: "e.g. Pyro Gateway, or Red Wake Syndicate" };
+  report: "e.g. Gate camp on the Pyro side of the jump point", dossier: "e.g. Pyro Gateway, or Red Wake Syndicate",
+  rfi: "e.g. Anyone mapped the caves at Aberdeen?" };
 // ISO → the value a datetime-local input wants (local time, minutes).
 function intelLocalInput(iso) {
   const d = iso ? new Date(iso) : null;
@@ -29626,6 +29919,7 @@ async function intelEditor(box) {
   if (intelCurSec !== (isNew ? "new" : "edit") || (!isNew && intelRoute.id !== id)) return;
   if (e && e.kind === "report") intelSetTab("feed");
   if (e && e.kind === "dossier") intelSetTab("dossiers");
+  if (e && e.kind === "rfi") intelSetTab("rfi");
   // "Write up →" from a danger-board warning: a report pre-filled with where,
   // what and when, citing the warning.
   let pre = null;
@@ -29651,6 +29945,17 @@ async function intelEditor(box) {
   }
   // A report from a dossier (?loc= / ?unit=), or a dossier started from a
   // place (?subject=, the navigator's "Start dossier") or as an org (?org=1).
+  const promo = intelRoute.from ? await intelPromoteSource(intelRoute.from) : null;
+  if (intelCurSec !== (isNew ? "new" : "edit")) return;
+  if (isNew && !pre && kind === "rfi" && (intelRoute.loc || intelRoute.about)) {
+    let refs = {};
+    if (intelRoute.loc) { try { refs = (await intelApi(`/api/intel/refs?keys=${intelRoute.loc}`)).refs; } catch {} }
+    if (intelCurSec !== "new") return;
+    const r = intelRoute.loc && refs[intelRoute.loc];
+    pre = { title: "", summary: "", activity: null, system: null, tags: [],
+      body: (intelRoute.about ? `About [[entry:${intelRoute.about}]]. ` : "") + INTEL_TEMPLATE.rfi,
+      header: r && r.state === "ok" ? { location_ref: intelRoute.loc, location_label: r.label } : {} };
+  }
   if (isNew && !pre && (intelRoute.loc || intelRoute.unit || intelRoute.subject || intelRoute.org)) {
     const keys = [intelRoute.loc, intelRoute.subject, intelRoute.unit ? `entry:${intelRoute.unit}` : null].filter(Boolean);
     let refs = {};
@@ -29670,6 +29975,14 @@ async function intelEditor(box) {
         dossier: { subject_kind: org ? "org" : "place", subject_ref: lab ? intelRoute.subject : null, subject_label: lab } };
     }
   }
+  // Promote → into a new procedure / tactic (the answer is the body), or a
+  // new place dossier (the answer is its first section).
+  if (isNew && promo && (kind === "procedure" || kind === "tactic")) {
+    pre = { title: promo.q.title.slice(0, 140), summary: "", activity: promo.q.activity || null, system: promo.q.system || null, tags: [],
+      body: `> **Q:** ${promo.q.title}\n\n${promo.a.md}\n\n*Promoted from [[entry:${promo.q.id}]]: ${promo.credit}.*\n` };
+  } else if (isNew && promo && kind === "dossier" && pre) {
+    pre.body = `${pre.body.replace(/\s*$/, "")}\n\n## ${promo.q.title}\n\n${promo.a.md}\n\n*From [[entry:${promo.q.id}]]: ${promo.credit}.*\n`;
+  }
   intelEd = { key: isNew ? `n${kind}` : `e${id}`, id, kind: e ? e.kind : kind, status: e ? e.status : "draft",
     rev: e ? e.rev : 0, entry: e, major: false, timer: null, saving: false, dirty: false,
     templated: isNew && (!pre || pre.body === intelTemplateFor(kind, pre.dossier && pre.dossier.subject_kind)),
@@ -29682,12 +29995,19 @@ async function intelEditor(box) {
       header: e.header, grade_rel: e.grade_rel, grade_cred: e.grade_cred, valid_until: e.valid_until, dossier: e.dossier }
     : pre || { title: "", summary: "", body: INTEL_TEMPLATE[kind], activity: null, system: null, tags: [],
       header: kind === "report" ? { time: new Date().toISOString() } : null, dossier: { subject_kind: "place" } };
+  // Promote → onto an existing entry (a dossier): appended as a new section,
+  // a major revision, with the note pre-filled.
+  if (!isNew && promo) {
+    v.body = `${(v.body || "").replace(/\s*$/, "")}\n\n## ${promo.q.title}\n\n${promo.a.md}\n\n*From [[entry:${promo.q.id}]]: ${promo.credit}.*\n`;
+    intelEd.major = true;
+  }
   const opt = (list, cur, none) => `<option value="">${none}</option>` +
     list.map(x => `<option value="${esc(x)}"${x === cur ? " selected" : ""}>${esc(x)}</option>`).join("");
   const tb = (md, label, inner, kbd) => `<button type="button" class="ix-tb" data-md="${md}" title="${label}${kbd ? ` (${kbd})` : ""}" aria-label="${label}">${inner}</button>`;
   const crumbTail = e ? `<a href="${published ? intelHref(e) : "#/intel/library"}">${esc(e.title)}</a><span>/</span><span>${e.kind === "report" && published ? "Correct" : "Edit"}</span>`
-    : `<span id="ix-crumb-t">New ${esc(INTEL_KIND[kind].toLowerCase())}</span>`;
+    : `<span id="ix-crumb-t">${kind === "rfi" ? "New question" : `New ${esc(INTEL_KIND[kind].toLowerCase())}`}</span>`;
   const home = (k) => k === "report" ? `<a href="#/intel/feed" id="ix-crumb-home">Feed</a>`
+    : k === "rfi" ? `<a href="#/intel/rfi" id="ix-crumb-home">RFI</a>`
     : k === "dossier" ? `<a href="#/intel/dossiers" id="ix-crumb-home">Dossiers</a>` : `<a href="#/intel/library" id="ix-crumb-home">Library</a>`;
   box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb">${home(intelEd.kind)}<span>/</span>${crumbTail}</nav>` +
     `<div class="ix-ed-grid"><div class="panel ix-ed">` +
@@ -29699,7 +30019,7 @@ async function intelEditor(box) {
       `major revision is waiting for review. You're editing the live text${e.pending.mine ? "; submitting again replaces your earlier one" : ""}.</span></div>` : "") +
     `<div class="ix-ed-head">` +
     (isNew ? `<div class="seg" id="ix-ed-kind" role="group" aria-label="Kind">` +
-      ["procedure", "tactic", "report", "dossier"].map(k => `<button type="button" data-k="${k}" class="${k === kind ? "on" : ""}" aria-pressed="${k === kind}">${INTEL_KIND[k].toUpperCase()}</button>`).join("") + `</div>` : "") +
+      ["procedure", "tactic", "report", "dossier", "rfi"].map(k => `<button type="button" data-k="${k}" class="${k === kind ? "on" : ""}" aria-pressed="${k === kind}">${k === "rfi" ? "QUESTION" : INTEL_KIND[k].toUpperCase()}</button>`).join("") + `</div>` : "") +
     `<input class="ti ix-ed-title" id="ix-ed-title" maxlength="140" autocomplete="off" aria-label="Title" ` +
     `placeholder="${INTEL_TITLE_PH[intelEd.kind]}" value="${esc(v.title)}">` +
     `<label class="ix-lbl"><span>SUMMARY <i id="ix-sum-n"></i></span>` +
@@ -29709,7 +30029,8 @@ async function intelEditor(box) {
     `<label class="ix-lbl"><span>SYSTEM</span><select class="ti" id="ix-ed-sys">${opt(INTEL_SYSTEM_OPTS, v.system, "Any system")}</select></label>` +
     `<label class="ix-lbl"><span>TAGS</span><input class="ti" id="ix-ed-tags" autocomplete="off" placeholder="escort, hull-c" value="${esc(v.tags.join(", "))}"></label>` +
     `</div><div class="ix-rep" id="ix-rep"${intelEd.kind === "report" ? "" : " hidden"}></div>` +
-    `<div class="ix-rep ix-dos" id="ix-dos"${intelEd.kind === "dossier" ? "" : " hidden"}></div></div>` +
+    `<div class="ix-rep ix-dos" id="ix-dos"${intelEd.kind === "dossier" ? "" : " hidden"}></div>` +
+    `<div class="ix-rep ix-rfi" id="ix-rfi"${intelEd.kind === "rfi" ? "" : " hidden"}></div></div>` +
     `<div class="ix-tools" role="toolbar" aria-label="Formatting">` +
     tb("h", "Heading", "<b>H</b>") + tb("b", "Bold", "<b>B</b>", "Ctrl+B") + tb("i", "Italic", "<i>I</i>", "Ctrl+I") +
     tb("u", "Underline", "<u>U</u>") + tb("s", "Strikethrough", "<s>S</s>") + `<span class="sep"></span>` +
@@ -29739,6 +30060,7 @@ async function intelEditor(box) {
   ta.value = v.body || "";
   intelEdMountReport(v);
   intelEdMountDossier(v);
+  intelEdMountRfi(intelEd.kind === "rfi" ? v : null);
   $("ix-dos").addEventListener("input", (ev) => { if (ev.target.id !== "ix-d-q") intelEdChanged(); });
   $("ix-dos").addEventListener("change", (ev) => { if (ev.target.tagName === "SELECT") intelEdChanged(); });
   $("ix-ed-title").addEventListener("input", () => {
@@ -29750,6 +30072,11 @@ async function intelEditor(box) {
   $("ix-rep").addEventListener("change", (ev) => { if (ev.target.tagName === "SELECT" && ev.target.id !== "ix-r-valid") intelEdChanged(); });
   intelEdCounts();
   intelEdRenderSave();
+  if (promo) {
+    if (!isNew && $("ix-note")) { $("ix-note").value = `Added the answer to “${promo.q.title}”`.slice(0, 300); $("ix-note").dispatchEvent(new Event("input")); }
+    intelEd.templated = false;
+    intelEdChanged();
+  }
   if (e && e.can_manage && published && e.kind !== "dossier") intelEdRenderPeople();   // dossiers are open edit
   // Restore an unsaved local copy (a published entry's edit, or a new entry
   // that never got a title, so never reached the server).
@@ -29765,6 +30092,7 @@ async function intelEditor(box) {
       $("ix-ed-act").value = bk.activity || ""; $("ix-ed-sys").value = bk.system || ""; $("ix-ed-tags").value = (bk.tags || []).join(", ");
       if (intelEd.kind === "report" && bk.header) intelEdMountReport(bk);
       if (intelEd.kind === "dossier" && bk.dossier) intelEdMountDossier(bk);
+      if (intelEd.kind === "rfi") intelEdMountRfi(bk);
       $("ix-restore").hidden = true; intelEd.templated = false; intelEdChanged();
     };
     $("ix-restore-x").onclick = () => { try { localStorage.removeItem(intelEdBackupKey()); } catch {} $("ix-restore").hidden = true; };
@@ -29778,11 +30106,12 @@ async function intelEditor(box) {
     $("ix-ed-title").placeholder = INTEL_TITLE_PH[intelEd.kind];
     $("ix-rep").hidden = intelEd.kind !== "report";
     $("ix-dos").hidden = intelEd.kind !== "dossier";
+    $("ix-rfi").hidden = intelEd.kind !== "rfi";
     if (intelEd.kind === "dossier") intelEdMountDossier({ dossier: intelEd.dos ? { subject_kind: intelEd.dos.kind } : null });
     $("ix-crumb-home").outerHTML = home(intelEd.kind);
     intelEdRenderSave(true);
     history.replaceState(null, "", `#/intel/new/${intelEd.kind}`);
-    $("ix-crumb-t").textContent = `New ${INTEL_KIND[intelEd.kind].toLowerCase()}`;
+    $("ix-crumb-t").textContent = intelEd.kind === "rfi" ? "New question" : `New ${INTEL_KIND[intelEd.kind].toLowerCase()}`;
     intelRoute = { kind: intelEd.kind };
     intelEdCounts();
   });
@@ -29993,8 +30322,9 @@ function intelEdRenderSave(keepNote) {
       (gated ? `Only you can see a draft. ${INTEL_KIND[ed.kind]}s are reviewed before they're published: a reviewer approves it, or sends it back with a note.`
         : isReport ? `Only you can see a draft. A report is a record of what you saw: once it's published you can correct it for 15 minutes, then you add updates.`
         : ed.kind === "dossier" ? `Only you can see a draft. Once it's published any member can edit it, and every change is kept.`
+        : ed.kind === "rfi" ? `Only you can see a draft. Posting puts the question in RFI and the Feed. Anyone can answer; you mark the answer that did it.`
         : `Only you can see a draft. Publishing puts it in the Library, the Feed and search, stamped with the game patch.`) + `</p>` +
-      `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-publish">${gated ? "Submit for review" : isReport ? "Publish report" : "Publish"}</button>` +
+      `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-publish">${gated ? "Submit for review" : isReport ? "Publish report" : ed.kind === "rfi" ? "Post question" : "Publish"}</button>` +
       (ed.id ? `<button type="button" class="ix-btn" id="ix-del">Delete draft</button>` : "") + `</div>` +
       `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
     bindMarking();
@@ -30018,6 +30348,18 @@ function intelEdRenderSave(keepNote) {
       `After that the report only takes updates, so the first thing people read stays the record.</p>` +
       `<label class="ix-fld"><span>WHAT YOU FIXED · optional</span><input class="ti" id="ix-note" maxlength="300" autocomplete="off" placeholder="e.g. Wrong ship count" value="${esc(noteVal)}"></label>` +
       `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-save">Save correction</button>` +
+      `<a class="ix-btn" href="${intelHref(ed.entry)}">Cancel</a></div>` +
+      `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
+    bindMarking();
+    $("ix-save").onclick = () => intelEdSave({ note: $("ix-note").value, base_rev: ed.rev });
+    return;
+  }
+  if (ed.kind === "rfi") {
+    // A posted question: the asker (or an admin) can reword it. Always minor.
+    p.innerHTML = `<h2>EDIT THE QUESTION</h2>` + marking +
+      `<p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 12px">Reword it or add what you've learned. The answers stay where they are.</p>` +
+      `<label class="ix-fld"><span>WHAT CHANGED · optional</span><input class="ti" id="ix-note" maxlength="300" autocomplete="off" placeholder="e.g. It's the north cave" value="${esc(noteVal)}"></label>` +
+      `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-save">Save</button>` +
       `<a class="ix-btn" href="${intelHref(ed.entry)}">Cancel</a></div>` +
       `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
     bindMarking();

@@ -2032,6 +2032,9 @@ _RATE_LIMITS = {
     # Calendar feed fetches, per feed owner. Apple's fastest refresh is every
     # 5 min (12/h) per device; a few devices sit well under this.
     "calendar": (120, 3600.0),
+    # Intelligence comments + RFI answers (#50 slice 5): a lively thread is a
+    # few a minute; a paste loop is not.
+    "comment": (30, 60.0),
     # Intelligence Markdown preview (Write → Preview). A click per preview; a
     # 100 KB body renders in milliseconds, so this only stops a loop.
     "render": (60, 60.0),
@@ -17296,7 +17299,8 @@ async def intel_render(body: IntelRenderIn, user: dict = Depends(require_session
 
 
 INTEL_LIBRARY_KINDS = ("procedure", "tactic")
-INTEL_WRITABLE_KINDS = ("procedure", "tactic", "report", "dossier")   # RFIs, debriefs: later slices
+INTEL_WRITABLE_KINDS = ("procedure", "tactic", "report", "dossier", "rfi")   # debriefs start from an op (slice 7)
+INTEL_COMMENT_MAX = 4000
 # Org dossiers carry a stance. Each has a glyph as well as a colour in the UI.
 INTEL_STANCES = ("hostile", "neutral", "allied", "unknown")
 INTEL_SYSTEMS = ("Stanton", "Nyx", "Pyro")
@@ -17561,6 +17565,8 @@ def _intel_can_edit(e: dict, user: dict) -> bool:
     if e["kind"] == "dossier":
         # Open edit, wiki-style: shared knowledge, every change kept + revertable.
         return True
+    if e["kind"] == "rfi":   # a question is its asker's (and an admin's) to word
+        return e["author_id"] == uid or bool(user.get("is_admin"))
     return (bool(user.get("is_admin")) or e.get("owner_id") == uid
             or uid in (e.get("maintainers") or []))
 
@@ -17602,6 +17608,12 @@ def _intel_report_brief(e: dict) -> dict:
             "location_ref": h.get("location_ref"), "time": h.get("time"),
             "grade": _intel_grade(e), "valid_until": vu,
             "expired": bool(vu and vu <= _now_iso())}
+
+
+def _intel_rfi_brief(e: dict) -> dict:
+    h = _intel_header(e)
+    return {"location": h.get("location_label"), "location_ref": h.get("location_ref"),
+            "answered": bool(e.get("accepted_comment_id"))}
 
 
 def _intel_dossier_head(e: dict) -> dict:
@@ -17713,6 +17725,7 @@ def _intel_summary(e: dict, current: str | None) -> dict:
         "submitted_at": e.get("submitted_at"),
         **({"report": _intel_report_brief(e)} if e["kind"] == "report" else {}),
         **({"dossier": _intel_dossier_brief(e)} if e["kind"] == "dossier" else {}),
+        **({"rfi": _intel_rfi_brief(e)} if e["kind"] == "rfi" else {}),
     }
 
 
@@ -17772,12 +17785,126 @@ def _intel_entry_view(e: dict, user: dict) -> dict:
         out["stances"] = {**counts, "mine": mine}
     if e["kind"] == "dossier":
         out.update(_intel_dossier_view(e, user))
+    if e["kind"] == "rfi":
+        out["header"] = _intel_header(e)
+        out["accepted_id"] = e.get("accepted_comment_id")
+        out["can_accept"] = e["status"] == "published" and (e["author_id"] == uid or bool(user.get("is_admin")))
+    if e["status"] == "published":
+        out["thread"] = _intel_thread_view(e, user)
+        out["can_comment"] = True
     if e["status"] == "published":
         out["linked_from"] = [
             {"id": b["id"], "kind": b["kind"], "title": b["title"], "slug": b["slug"]}
             for b in db.intel_backlinks("entry", [e["id"]], intel_cleared(user), limit=20)
             if b["id"] != e["id"]]
     return out
+
+
+# ---- discussion (#50 slice 5): comments everywhere, answers on RFIs ----
+def _intel_thread_view(e: dict, user: dict) -> list[dict]:
+    """Comments (and an RFI's answers), oldest first, one level of reply. A
+    deleted comment keeps its place only while replies hang off it."""
+    uid, admin = str(user["id"]), bool(user.get("is_admin"))
+    rows = db.intel_thread(e["id"])
+    live_parents = {r["parent_id"] for r in rows if r["parent_id"] and not r["deleted_at"]}
+    out = []
+    for r in rows:
+        if r["deleted_at"] and r["id"] not in live_parents:
+            continue
+        mine = r["author_id"] == uid
+        out.append({"id": r["id"], "parent_id": r["parent_id"], "kind": r["kind"],
+                    "by": r.get("author_name") or "?", "at": r["created_at"], "edited_at": r.get("edited_at"),
+                    "deleted": bool(r["deleted_at"]), "html": r.get("body_html") or "",
+                    "md": r.get("body_md") or "", "mine": mine,
+                    "can_delete": not r["deleted_at"] and (mine or admin)})
+    return out
+
+
+class IntelCommentIn(BaseModel):
+    body: str = Field(min_length=1, max_length=INTEL_COMMENT_MAX)
+    parent_id: int | None = None
+
+
+class IntelCommentEditIn(BaseModel):
+    body: str = Field(min_length=1, max_length=INTEL_COMMENT_MAX)
+
+
+class IntelAcceptIn(BaseModel):
+    comment_id: int | None = None       # None = un-accept
+
+
+def _intel_comment_text(body: str) -> tuple[str, str]:
+    text = body.strip()
+    if len(text) < 2:
+        raise HTTPException(status_code=422, detail="Write something first.")
+    return text, intel_md.render(text, IMAGE_PREVIEW_HOSTS)["html"]
+
+
+@app.post("/api/intel/entries/{entry_id}/comments")
+def intel_comment(entry_id: int, body: IntelCommentIn, user: dict = Depends(require_session)):
+    """Comment on a published entry, or reply to a comment (one level). On an
+    RFI a top-level post is an ANSWER; replies are comments on it."""
+    e = _intel_require(entry_id, user)
+    if e["status"] != "published":
+        raise HTTPException(status_code=409, detail="Only a published entry takes comments.")
+    rate_limit("comment", str(user["id"]))
+    kind = "answer" if e["kind"] == "rfi" and body.parent_id is None else "comment"
+    if body.parent_id is not None:
+        par = db.intel_get_comment(body.parent_id)
+        if not par or par["entry_id"] != entry_id or par["kind"] not in db.INTEL_THREAD_KINDS \
+                or par["deleted_at"]:
+            raise HTTPException(status_code=404, detail="That comment is gone.")
+        if par["parent_id"]:
+            raise HTTPException(status_code=422, detail="Reply to the comment at the top of the thread.")
+    text, html_ = _intel_comment_text(body.body)
+    uid = str(user["id"])
+    db.intel_add_comment(entry_id, uid, _resolve_member_name(uid, None), text, kind, _now_iso(),
+                         body_html=html_, parent_id=body.parent_id)
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
+
+
+def _intel_own_comment(comment_id: int, user: dict) -> tuple[dict, dict]:
+    c = db.intel_get_comment(comment_id)
+    if not c or c["kind"] not in db.INTEL_THREAD_KINDS or c["deleted_at"]:
+        raise HTTPException(status_code=404, detail="Comment not found.")
+    return c, _intel_require(c["entry_id"], user)
+
+
+@app.put("/api/intel/comments/{comment_id}")
+def intel_comment_edit(comment_id: int, body: IntelCommentEditIn, user: dict = Depends(require_session)):
+    """Edit your own comment (marked edited). Nobody edits someone else's."""
+    c, e = _intel_own_comment(comment_id, user)
+    if c["author_id"] != str(user["id"]):
+        raise HTTPException(status_code=403, detail="You can only edit your own comments.")
+    text, html_ = _intel_comment_text(body.body)
+    db.intel_edit_comment(comment_id, text, html_, _now_iso())
+    return _intel_entry_view(db.intel_get_entry(e["id"]), user)
+
+
+@app.delete("/api/intel/comments/{comment_id}")
+def intel_comment_delete(comment_id: int, user: dict = Depends(require_session)):
+    """Delete your own comment; admins can delete any (moderation)."""
+    c, e = _intel_own_comment(comment_id, user)
+    if c["author_id"] != str(user["id"]) and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="You can only delete your own comments.")
+    db.intel_delete_comment(comment_id, _now_iso())
+    return _intel_entry_view(db.intel_get_entry(e["id"]), user)
+
+
+@app.post("/api/intel/entries/{entry_id}/accept")
+def intel_accept(entry_id: int, body: IntelAcceptIn, user: dict = Depends(require_session)):
+    """The asker (or an admin) marks the answer that answered it, or clears it."""
+    e = _intel_require(entry_id, user)
+    if e["kind"] != "rfi" or e["status"] != "published":
+        raise HTTPException(status_code=409, detail="Only a published question takes an accepted answer.")
+    if e["author_id"] != str(user["id"]) and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Only the person who asked (or an admin) accepts an answer.")
+    if body.comment_id is not None:
+        c = db.intel_get_comment(body.comment_id)
+        if not c or c["entry_id"] != entry_id or c["kind"] != "answer" or c["deleted_at"]:
+            raise HTTPException(status_code=404, detail="That answer is gone.")
+    db.intel_set_fields(entry_id, {"accepted_comment_id": body.comment_id, "updated_at": _now_iso()})
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
 
 
 # ---- dossiers (#50 slice 4) ----
@@ -17788,12 +17915,19 @@ def _intel_rollup_rows(ids: list[int], user: dict, current: str | None) -> list[
     """Entry summaries (newest first) for a rollup, with report counts."""
     rows = [_intel_summary(x, current) for x in
             db.intel_list(ids=ids, order="recent", restricted_ok=intel_cleared(user))]
-    counts = db.intel_comment_counts(x["id"] for x in rows if x["kind"] == "report")
+    counts = db.intel_comment_counts(x["id"] for x in rows)
     for x in rows:
         if x["id"] in counts:
             c = counts[x["id"]]
-            x["counts"] = {k: c.get(k, 0) for k in ("corroborate", "dispute", "addendum")}
+            x["counts"] = {k: c.get(k, 0) for k in ("corroborate", "dispute", "addendum", "comment", "answer")}
     return rows
+
+
+def _ts(iso: str | None) -> float:
+    try:
+        return datetime.fromisoformat(iso).timestamp() if iso else 0.0
+    except ValueError:
+        return 0.0
 
 
 def _intel_report_split(rows: list[dict]) -> dict:
@@ -17802,7 +17936,10 @@ def _intel_report_split(rows: list[dict]) -> dict:
     return {"reports": reps[:_INTEL_ROLLUP_REPORTS], "reports_total": len(reps),
             "reports_week": sum(1 for x in reps if (x.get("published_at") or "") >= week),
             "library": [x for x in rows if x["kind"] in INTEL_LIBRARY_KINDS],
-            "other": [x for x in rows if x["kind"] not in INTEL_LIBRARY_KINDS + ("report",)]}
+            # open questions first: the dossier is where someone can answer them
+            "questions": sorted((x for x in rows if x["kind"] == "rfi"),
+                                key=lambda x: (x["rfi"]["answered"], -_ts(x.get("published_at")))),
+            "other": [x for x in rows if x["kind"] not in INTEL_LIBRARY_KINDS + ("report", "rfi")]}
 
 
 def _intel_place_warnings(poi) -> list[dict]:
@@ -18042,6 +18179,13 @@ def _intel_fields(body: IntelEntryFields, kind: str,
         fields.update(header=header, grade_rel=body.grade_rel,
                       grade_cred=body.grade_cred if body.grade_rel else None,
                       valid_until=body.valid_until)
+    elif kind == "rfi":
+        # A question can be about a place: it then shows on that place's dossier.
+        ref = body.header.location_ref if body.header else None
+        sk_si = ref.split(":") if ref else None
+        header = json.dumps({"location_ref": ref,
+                             "location_label": _intel_ref_label(*sk_si) if sk_si else None})
+        fields["header"] = header
     elif kind == "dossier":
         d = (body.dossier or IntelDossierHeader()).model_dump()
         if d["subject_kind"] == "org":
@@ -18112,6 +18256,10 @@ def intel_entries(section: str = "library", kind: str = "", activity: str = "",
             if _intel_patch_state(e, current)["stale"]][:5]
     elif section == "dossiers":
         rows = db.intel_list(kinds=["dossier"], order="title", **kw)
+    elif section == "rfi":
+        # Open questions first (newest), then answered ones.
+        rows = db.intel_list(kinds=["rfi"], order="recent", **kw)
+        rows.sort(key=lambda x: bool(x.get("accepted_comment_id")))
     elif section == "drafts":
         # Your own drafts and submissions; restricted ones too (they're yours).
         rows = db.intel_list(kinds=kinds, status=("draft", "in_review"), author_id=user["id"],
@@ -18120,11 +18268,11 @@ def intel_entries(section: str = "library", kind: str = "", activity: str = "",
         raise HTTPException(status_code=400, detail="Unknown section.")
     current = _intel_patch_now()
     out = [_intel_summary(e, current) for e in rows]
-    counts = db.intel_comment_counts(e["id"] for e in out if e["kind"] == "report")
+    counts = db.intel_comment_counts(e["id"] for e in out)
     for e in out:
         if e["id"] in counts:
             c = counts[e["id"]]
-            e["counts"] = {k: c.get(k, 0) for k in ("corroborate", "dispute", "addendum")}
+            e["counts"] = {k: c.get(k, 0) for k in ("corroborate", "dispute", "addendum", "comment", "answer")}
     return {"entries": out, "game_patch": current, "search": db.INTEL_SEARCH,
             "image_hosts": list(IMAGE_PREVIEW_HOSTS), **extra}   # image_hosts: the editor's host check
 
@@ -18194,8 +18342,8 @@ def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_se
         raise HTTPException(status_code=403, detail="Only the owner, maintainers or an admin can edit this.")
     if not body.title.strip():
         raise HTTPException(status_code=422, detail="The title can't be empty.")
-    if e["kind"] == "report" and e["status"] == "published":
-        body.major = False              # a report's typo window: minor fixes, never a re-publish
+    if e["kind"] in ("report", "rfi") and e["status"] == "published":
+        body.major = False              # a report's typo window / a question's rewording: never a re-publish
     prev_dossier = _intel_dossier_head(e) if e["kind"] == "dossier" else None
     if prev_dossier and e["status"] == "published":
         # A dossier stays about what it was published about (an org can be renamed).
