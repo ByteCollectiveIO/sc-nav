@@ -10,7 +10,9 @@ chips + backlinks, danger board **Write up →**), built 2026-10-31; slice 4, do
 Discord publishing (channels, 📣 panel, pings, templates, forum threads, RESTRICTED
 placeholders, the 24 h RFI nudge), built 2026-10-31; slice 7, debriefs + required
 reading (op **Write debrief →** with a read-only OP RECORD, event required reading,
-read receipts that only a major revision resets), built 2026-10-31 (as-built detail in
+read receipts that only a major revision resets), built 2026-10-31; slice 8 part 1, images +
+portability (one-click image loading, Import Markdown (.zip) storing its images,
+Export Markdown (.zip)), built 2026-10-31 (as-built detail in
 [implementation-notes.md](implementation-notes.md#intelligence-50)). Settled
 calls are marked **(user)**. Everything else is a recommendation open to change.
 
@@ -649,7 +651,10 @@ A conservative fixed cap would restrict the second kind for no reason.
   images load inline with no click and no consent bar, because they're not a
   third-party request.
 - **Deleted with their last reference.** `intel_file_refs` counts
-  references. Deleting or editing away the last one deletes the file in the
+  references. *As built:* a save only ever ADDS refs (a file stays while any
+  revision of the entry used it, so History and revert never show a hole);
+  refs go when the entry is deleted, and the hourly sweep then removes the
+  file (after a one-hour grace, so it never races an import). Deleting or editing away the last one deletes the file in the
   same transaction, and an orphan sweep also runs on the periodic
   maintenance loop, not only at startup. A startup-only sweep is exactly
   what let the old banner uploads grow without bound.

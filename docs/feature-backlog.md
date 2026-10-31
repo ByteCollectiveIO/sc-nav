@@ -80,7 +80,11 @@ placeholders, one 24 h nudge for unanswered questions) built 2026-10-31. Slice 7
 debriefs + required reading (op **Write debrief →** with a read-only op-record
 snapshot and the AAR template, DEBRIEFS on the op page, an `intel_debrief`
 channel, event REQUIRED READING with a ✓ on the roster, reads reset only by a
-major revision) built 2026-10-31; next is slice 8, images + portability.
+major revision) built 2026-10-31. Slice 8 is split in two: **8a** (images +
+portability: one-click image loading per entry, Import Markdown (.zip) with
+stored images under an admin quota + 1 GB disk floor, chunked upload, WebP
+re-encode via Pillow, Export Markdown (.zip)) built 2026-10-31; **8b**
+(collections, watch, flag queue) is next.
 
 ### 49. Goal custody: hand delivered materials to a holder 📐 DESIGN (2026-10-21)
 User report: deleting a holding after delivering it to an org goal withdraws

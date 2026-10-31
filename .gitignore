@@ -88,3 +88,6 @@ Game*.log
 # vendored impeccable design-review subagents (installed alongside its skills)
 .claude/agents/
 .github/agents/
+# Intelligence stored images + import/export temp (#50 slice 8): runtime data.
+poi/intel_files/
+poi/intel_import_tmp/

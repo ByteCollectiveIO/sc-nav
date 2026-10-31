@@ -45,6 +45,7 @@ import calendar_ics
 import catalog
 import db
 import event_taxonomy
+import intel_files
 import intel_md
 import nav_core
 import notify
@@ -57,6 +58,11 @@ STATIC_DIR = Path(__file__).parent / "static"
 # dir, which is baked into the image and lost on rebuild). Served by a route,
 # not the StaticFiles mount. PNG/JPG/WebP only — no SVG (script-injection risk).
 BRANDING_DIR = DATA_DIR / "branding"
+# Intelligence images an admin import stored (#50 slice 8), named by the hash
+# of their bytes; uploads being reassembled live next to them (same volume,
+# so the disk floor covers both). Never under the public /images/ prefix.
+INTEL_FILES_DIR = DATA_DIR / "intel_files"
+INTEL_IMPORT_DIR = DATA_DIR / "intel_import_tmp"
 _LOGO_TYPES = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 _LOGO_MAX_BYTES = 2 * 1024 * 1024
 # Images attached to Discord announcements (docs/discord-notification-customization.md
@@ -2038,6 +2044,9 @@ _RATE_LIMITS = {
     # Intelligence Markdown preview (Write → Preview). A click per preview; a
     # 100 KB body renders in milliseconds, so this only stops a loop.
     "render": (60, 60.0),
+    # Intelligence export (#50 slice 8): a whole-knowledge-base zip. A few a
+    # day is real use; a loop is the org's data being scraped.
+    "export": (10, 3600.0),
 }
 
 
@@ -3595,6 +3604,13 @@ async def market_sweep_loop():
             await _intel_rfi_nudges()
         except Exception as exc:
             print(f"[sc-nav] intel nudge error: {exc}")
+        global _intel_sweep_at
+        if time.monotonic() - _intel_sweep_at > 3600:
+            _intel_sweep_at = time.monotonic()
+            try:     # hourly: stored images nothing uses any more (#50 slice 8)
+                await asyncio.to_thread(intel_files_sweep)
+            except Exception as exc:
+                print(f"[sc-nav] intel file sweep error: {exc}")
         try:
             if not notify.is_configured("marketplace"):
                 continue
@@ -17449,7 +17465,7 @@ async def intel_render(body: IntelRenderIn, user: dict = Depends(require_session
     the in-app preview toggle says — the toggle gates LOADING them, which the
     reader does per entry, not what the stored HTML may contain."""
     rate_limit("render", user["id"])
-    r = await asyncio.to_thread(intel_md.render, body.body, IMAGE_PREVIEW_HOSTS)
+    r = await asyncio.to_thread(intel_md.render, body.body, IMAGE_PREVIEW_HOSTS, True)
     return {"html": r["html"], "refs": [{"kind": k, "id": i} for k, i in r["refs"]],
             "images": r["images"]}
 
@@ -17917,6 +17933,9 @@ def _intel_entry_view(e: dict, user: dict) -> dict:
         # Would this member's publish / major revision go to review?
         "review_gate": _intel_gated(e, user),
         "discord": _intel_discord_view(e) if e["status"] == "published" else None,
+        # Hosts a reader may load linked images from with one click (slice 8):
+        # empty while the admin's in-app preview toggle (and so CSP) is off.
+        "image_load": image_preview_hosts(),
     })
     uid = str(user["id"])
     pend = db.intel_pending(e["id"]) if e["status"] == "published" else None
@@ -17981,6 +18000,422 @@ def intel_mark_read(entry_id: int, user: dict = Depends(require_session)):
     db.intel_ack_read(str(user["id"]), entry_id, e["rev"], _now_iso())
     return {"reading": _entry_reading_view(db.intel_get_entry(entry_id), user)}
 
+
+
+# ---- stored images, import, export (#50 slice 8, docs/intelligence.md "Images") ----
+# The editor stays link-only. The ONE way an image lands on the data volume is
+# an admin's Import Markdown (.zip): re-encoded to WebP, deduplicated by hash,
+# counted against the org admin's quota, and never past the disk floor (SQLite
+# shares the volume; a full disk stops the whole app). A file lives while any
+# entry references it (refs only add on edit, so History never shows a hole)
+# and is swept once nothing does.
+INTEL_QUOTA_KEY = "intel_image_quota_mb"
+INTEL_QUOTA_DEFAULT_MB = 250
+INTEL_DISK_FLOOR = 1024 ** 3                  # always leave 1 GB free on the data volume
+INTEL_CHUNK_MAX = 50 * 1024 * 1024            # under the tunnel's 100 MB request cap
+INTEL_IMPORT_MAX = 8 * 1024 ** 3              # one upload, whatever the quota says
+INTEL_IMPORT_UNPACKED_MAX = 4 * 1024 ** 3     # read one member at a time, but bound the work
+_INTEL_ORPHAN_GRACE = timedelta(hours=1)      # a fresh import's files aren't swept mid-import
+_INTEL_IMPORT_STALE = timedelta(hours=24)     # an abandoned upload's temp file goes
+_INTEL_IMPORT_KINDS = ("procedure", "tactic")  # records (reports, dossiers, debriefs, questions) export, don't import
+_intel_sweep_at = 0.0
+
+
+def intel_quota_bytes() -> int | None:
+    """The admin's quota in bytes, or None for "no limit"."""
+    raw = db.get_setting(INTEL_QUOTA_KEY, "")
+    try:
+        mb = int(raw) if raw != "" else INTEL_QUOTA_DEFAULT_MB
+    except ValueError:
+        mb = INTEL_QUOTA_DEFAULT_MB
+    return None if mb < 0 else mb * 1024 * 1024
+
+
+def _intel_disk_free() -> int:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return shutil.disk_usage(DATA_DIR).free
+
+
+def intel_storage_view() -> dict:
+    used, quota = db.intel_files_used(), intel_quota_bytes()
+    return {"used": used, "files": db.intel_files_count(), "quota": quota,
+            "quota_mb": None if quota is None else quota // (1024 * 1024),
+            "free": _intel_disk_free(), "floor": INTEL_DISK_FLOOR,
+            "over_quota": quota is not None and used > quota,
+            "presets_mb": [100, 250, 1024, 5120, 20480], "default_mb": INTEL_QUOTA_DEFAULT_MB}
+
+
+def _intel_file_path(f: dict) -> Path:
+    ext = "gif" if f["mime"] == "image/gif" else "webp"
+    return INTEL_FILES_DIR / f"{f['sha256']}.{ext}"
+
+
+def _intel_file_visible(file_id: int, user: dict) -> bool:
+    """A stored image is visible to whoever can read at least one entry that
+    shows it (a draft's to its author, a RESTRICTED one's to the cleared)."""
+    return any(_intel_visible(db.intel_get_entry(eid), user) for eid in db.intel_file_entry_ids(file_id))
+
+
+def _intel_check_files(refs, user: dict) -> None:
+    """Typing `/api/intel/files/<id>` into an entry must not hand a member an
+    image they can't already see (it would then show to every reader of THIS
+    entry)."""
+    for r in refs:
+        if r[0] == "file" and not _intel_file_visible(int(r[1]), user):
+            raise HTTPException(status_code=422, detail=(
+                "That image belongs to an entry you can't open, or it no longer exists. Remove it, or use an image link."))
+
+
+@app.get("/api/intel/files/{file_id}")
+def intel_file(file_id: int, user: dict = Depends(require_session)):
+    f = db.intel_file_get(file_id)
+    if not f or not _intel_file_visible(file_id, user):
+        raise HTTPException(status_code=404, detail="Image not found.")
+    path = _intel_file_path(f)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found.")
+    # Private: it's behind a session, and access can change (an entry marked
+    # RESTRICTED), so a shared cache must never keep it.
+    return FileResponse(path, media_type=f["mime"], headers={"Cache-Control": "private, max-age=3600"})
+
+
+class IntelStorageIn(BaseModel):
+    quota_mb: int | None = Field(None, ge=0, le=10_000_000)   # None = no limit
+
+
+@app.get("/api/admin/intel/storage")
+def intel_storage(admin: dict = Depends(require_admin)):
+    return {**intel_storage_view(), "imports": [_intel_import_view(i) for i in db.intel_imports_recent()]}
+
+
+@app.put("/api/admin/intel/storage")
+def intel_storage_set(body: IntelStorageIn, admin: dict = Depends(require_admin)):
+    """Lowering the quota below what's stored deletes nothing: new imports are
+    refused until usage is back under it."""
+    db.set_setting(INTEL_QUOTA_KEY, str(-1 if body.quota_mb is None else body.quota_mb))
+    return intel_storage(admin)
+
+
+def _intel_import_view(imp: dict) -> dict:
+    try:
+        report = json.loads(imp.get("report") or "null")
+    except ValueError:
+        report = None
+    return {"id": imp["id"], "status": imp["status"], "created_at": imp.get("created_at"),
+            "files_total": imp.get("files_total"), "files_skipped": imp.get("files_skipped"),
+            "bytes_stored": imp.get("bytes_stored"), "report": report}
+
+
+def _intel_import_tmp(import_id: int) -> Path:
+    return INTEL_IMPORT_DIR / str(int(import_id))
+
+
+def _intel_quota_left() -> int | None:
+    quota = intel_quota_bytes()
+    return None if quota is None else quota - db.intel_files_used()
+
+
+class IntelImportIn(BaseModel):
+    size: int = Field(gt=0, le=INTEL_IMPORT_MAX)
+    name: str = Field("", max_length=200)
+
+
+@app.post("/api/admin/intel/import")
+def intel_import_start(body: IntelImportIn, admin: dict = Depends(require_admin)):
+    """Start a chunked upload (a zip is sent in ≤ 50 MB pieces: one request
+    behind the Cloudflare tunnel tops out at 100 MB)."""
+    left = _intel_quota_left()
+    if left is not None and left <= 0:
+        raise HTTPException(status_code=409, detail=(
+            "Intelligence images are over their quota. Raise it in Settings → Data, or remove entries that use images."))
+    if _intel_disk_free() - body.size < INTEL_DISK_FLOOR:
+        raise HTTPException(status_code=409, detail=(
+            "Not enough free disk on the server for this upload: at least 1 GB must stay free for the database."))
+    iid = db.intel_import_create(admin["id"], _now_iso())
+    tmp = _intel_import_tmp(iid)
+    tmp.mkdir(parents=True, exist_ok=True)
+    (tmp / "upload.zip").touch()
+    db.intel_import_update(iid, {"report": json.dumps({"name": body.name.strip()[:200], "size": body.size})})
+    return {"id": iid, "chunk": INTEL_CHUNK_MAX, "received": 0}
+
+
+def _intel_import_open(import_id: int) -> tuple[dict, Path, dict]:
+    imp = db.intel_import_get(import_id)
+    if not imp:
+        raise HTTPException(status_code=404, detail="Unknown import.")
+    try:
+        meta = json.loads(imp.get("report") or "{}") or {}
+    except ValueError:
+        meta = {}
+    return imp, _intel_import_tmp(import_id) / "upload.zip", meta
+
+
+@app.get("/api/admin/intel/import/{import_id}")
+def intel_import_status(import_id: int, admin: dict = Depends(require_admin)):
+    imp, path, _ = _intel_import_open(import_id)
+    return {**_intel_import_view(imp), "received": path.stat().st_size if path.is_file() else None}
+
+
+@app.put("/api/admin/intel/import/{import_id}/chunk")
+async def intel_import_chunk(import_id: int, request: Request, offset: int = 0,
+                             admin: dict = Depends(require_admin)):
+    """Append one piece. `offset` must be what the server has, so a retried
+    or resumed upload can never write a piece twice or leave a gap."""
+    imp, path, meta = _intel_import_open(import_id)
+    if imp["status"] != "uploading" or not path.is_file():
+        raise HTTPException(status_code=409, detail="This upload isn't accepting pieces.")
+    have = path.stat().st_size
+    if offset != have:
+        raise HTTPException(status_code=409, detail={"message": "Out of step: resume from the server's size.", "received": have})
+    if _intel_disk_free() - INTEL_CHUNK_MAX < INTEL_DISK_FLOOR:
+        raise HTTPException(status_code=409, detail="The server's disk is nearly full; the upload stopped to protect the database.")
+    n = 0
+    with path.open("ab") as fh:
+        async for piece in request.stream():
+            n += len(piece)
+            if n > INTEL_CHUNK_MAX or have + n > int(meta.get("size") or 0):
+                fh.truncate(have)
+                raise HTTPException(status_code=413, detail="That piece is bigger than allowed.")
+            fh.write(piece)
+    return {"received": have + n}
+
+
+class IntelImportFinishIn(BaseModel):
+    publish: bool = True
+
+
+@app.post("/api/admin/intel/import/{import_id}/finish", status_code=202)
+async def intel_import_finish(import_id: int, body: IntelImportFinishIn, admin: dict = Depends(require_admin)):
+    """Unpack + store in the background (re-encoding forty screenshots takes
+    longer than a proxied request may stay open); the client polls status."""
+    imp, path, meta = _intel_import_open(import_id)
+    if imp["status"] != "uploading":
+        raise HTTPException(status_code=409, detail="This import already ran.")
+    if not path.is_file() or path.stat().st_size != int(meta.get("size") or -1):
+        raise HTTPException(status_code=409, detail="The upload isn't complete yet.")
+    db.intel_import_update(import_id, {"status": "processing"})
+    asyncio.get_running_loop().run_in_executor(None, _intel_run_import, import_id, admin, body.publish, meta)
+    return {"id": import_id, "status": "processing"}
+
+
+@app.delete("/api/admin/intel/import/{import_id}")
+def intel_import_abort(import_id: int, admin: dict = Depends(require_admin)):
+    imp, _, _ = _intel_import_open(import_id)
+    if imp["status"] == "uploading":
+        db.intel_import_update(import_id, {"status": "cancelled"})
+    shutil.rmtree(_intel_import_tmp(import_id), ignore_errors=True)
+    return {"ok": True}
+
+
+def _intel_store_image(data: bytes, import_id: int, report: dict) -> int | None:
+    """Re-encode + store one image (or find it already stored). None when it
+    can't be: the reason goes into the report."""
+    out, mime, w, h = intel_files.reencode(data)
+    sha = intel_files.sha256(out)
+    f = {"sha256": sha, "mime": mime}
+    if sha not in report["_known"]:
+        left = _intel_quota_left()
+        if left is not None and len(out) > left:
+            raise intel_files.ImageError("the image quota is full")
+        if _intel_disk_free() - len(out) < INTEL_DISK_FLOOR:
+            raise intel_files.ImageError("the server's disk is nearly full")
+        INTEL_FILES_DIR.mkdir(parents=True, exist_ok=True)
+        path = _intel_file_path(f)
+        tmp = path.with_suffix(".part")
+        tmp.write_bytes(out)
+        os.replace(tmp, path)
+    fid, created = db.intel_file_add(sha, mime, len(out), w, h, import_id, _now_iso())
+    report["_known"].add(sha)
+    if created:
+        report["images_stored"] += 1
+        report["bytes_stored"] += len(out)
+    else:
+        report["images_reused"] += 1
+    return fid
+
+
+def _intel_import_entry(name: str, text: str, scan: dict, cache: dict, import_id: int,
+                        admin: dict, publish: bool, report: dict) -> None:
+    meta, body = intel_files.parse_front_matter(text)
+    kind = str(meta.get("kind") or "procedure").lower()
+    if kind not in _INTEL_IMPORT_KINDS:
+        report["skipped"].append([name, f"a {kind}: only procedures and tactics are imported"])
+        return
+    title = " ".join(str(meta.get("title") or "").split())[:140]
+    if not title:
+        title, body = intel_files.title_from(body, name)
+    mapping = {}
+    for t in intel_files.image_targets(body):
+        key = t if t.startswith("data:") else intel_files.resolve(name, t)
+        if key is None:
+            continue                       # a web link: stays a link
+        if key in cache:
+            if cache[key]:
+                mapping[t] = f"/api/intel/files/{cache[key]}"
+            continue
+        try:
+            if t.startswith("data:"):
+                data = intel_files.data_uri_bytes(t)
+            else:
+                info = scan["images"].get(key)
+                if info is None:
+                    cache[key] = None      # not in the zip: stays as written
+                    continue
+                if info.file_size > intel_files.MAX_IMAGE_IN:
+                    raise intel_files.ImageError("larger than 40 MB")
+                data = scan["zip"].read(info)
+            fid = _intel_store_image(data, import_id, report) if data else None
+        except intel_files.ImageError as exc:
+            report["images_failed"].append([t if not t.startswith("data:") else f"{name}: embedded image", str(exc)])
+            fid = None
+        cache[key] = fid
+        if fid:
+            mapping[t] = f"/api/intel/files/{fid}"
+    body = intel_files.drop_data_uris(intel_files.rewrite_images(body, mapping)).strip() + "\n"
+    if len(body) > intel_md.MAX_BODY_CHARS:
+        report["skipped"].append([name, "longer than an entry may be (100,000 characters)"])
+        return
+    r = intel_md.render(body, IMAGE_PREVIEW_HOSTS, own_files=True)
+    activity = meta.get("activity") if meta.get("activity") in PLAYSTYLE_TAGS else None
+    system = meta.get("system") if meta.get("system") in INTEL_SYSTEMS else None
+    tags = _intel_tags([str(t) for t in (meta.get("tags") or []) if isinstance(t, (str, int))][:20])
+    vis = "restricted" if meta.get("visibility") == "restricted" else "org"
+    uid, now = str(admin["id"]), _now_iso()
+    refs = _intel_link_rows(r["refs"], None, r["files"])
+    fields = {"title": title, "slug": intel_md.section_slug(title), "summary": str(meta.get("summary") or "")[:300],
+              "body_md": body, "body_html": r["html"], "activity": activity, "system": system}
+    eid = db.intel_create_entry({
+        **fields, "kind": kind, "status": "draft", "visibility": vis,
+        "author_id": uid, "author_name": _resolve_member_name(uid, None),
+        "owner_id": uid, "maintainers": [], "created_at": now, "updated_at": now}, tags, refs)
+    if publish:
+        db.intel_save_revision(eid, None, {"status": "published", "published_at": now, "revised_at": now,
+                                           "patch": _intel_patch_now(), "updated_at": now}, tags, refs, {
+            "editor_id": uid, "editor_name": _resolve_member_name(uid, None),
+            "note": f"Imported from {report.get('name') or 'a zip'}"[:300], "major": True, "created_at": now})
+    report["entries"].append({"id": eid, "title": title, "kind": kind, "slug": fields["slug"],
+                              "images": len(r["files"])})
+
+
+def _intel_run_import(import_id: int, admin: dict, publish: bool, meta: dict) -> None:
+    """The import itself (a worker thread). Always ends done or failed, and
+    always removes the temp upload."""
+    tmp = _intel_import_tmp(import_id)
+    report = {"name": meta.get("name") or "", "entries": [], "skipped": [], "images_failed": [],
+              "images_stored": 0, "images_reused": 0, "bytes_stored": 0, "_known": db.intel_file_shas()}
+    status, scan = "done", None
+    try:
+        cap = min(INTEL_IMPORT_UNPACKED_MAX, max(0, _intel_disk_free() - INTEL_DISK_FLOOR) * 8)
+        scan = intel_files.scan_zip(tmp / "upload.zip", max_bytes=cap)
+        report["skipped"] += [list(x) for x in scan["skipped"]]
+        cache: dict = {}
+        for name in sorted(scan["md"]):
+            try:
+                _intel_import_entry(name, scan["md"][name], scan, cache, import_id, admin, publish, report)
+            except Exception as exc:      # noqa: BLE001 — one bad file mustn't sink the rest
+                report["skipped"].append([name, f"couldn't be imported ({type(exc).__name__})"])
+        if not scan["md"]:
+            report["error"] = "No Markdown files in the zip."
+            status = "failed"
+    except (ValueError, zipfile.BadZipFile) as exc:
+        report["error"] = str(exc) if isinstance(exc, ValueError) else "That isn't a zip file."
+        status = "failed"
+    except Exception as exc:              # noqa: BLE001
+        report["error"] = f"The import failed ({type(exc).__name__})."
+        status = "failed"
+        traceback.print_exc()
+    finally:
+        if scan:
+            scan["zip"].close()
+        shutil.rmtree(tmp, ignore_errors=True)
+    report.pop("_known", None)
+    for k in ("skipped", "images_failed"):
+        report[k] = report[k][:200]
+    db.intel_import_update(import_id, {
+        "status": status, "files_total": len(report["entries"]), "files_skipped": len(report["skipped"]),
+        "bytes_stored": report["bytes_stored"], "report": json.dumps(report)})
+
+
+def intel_files_sweep(now: datetime | None = None) -> dict:
+    """Remove stored images nothing references, image files with no row, and
+    abandoned uploads. Runs on the periodic loop (not just at startup: a
+    startup-only sweep is what let the old banner uploads grow)."""
+    now = now or datetime.now(timezone.utc)
+    gone = db.intel_files_take_orphans((now - _INTEL_ORPHAN_GRACE).isoformat())
+    for f in gone:
+        _intel_file_path(f).unlink(missing_ok=True)
+    stray = 0
+    if INTEL_FILES_DIR.is_dir():
+        known = db.intel_file_shas()
+        cutoff = (now - _INTEL_ORPHAN_GRACE).timestamp()
+        for p in INTEL_FILES_DIR.iterdir():
+            if p.stem not in known and p.stat().st_mtime < cutoff:
+                p.unlink(missing_ok=True)
+                stray += 1
+    stale = 0
+    if INTEL_IMPORT_DIR.is_dir():
+        cutoff = (now - _INTEL_IMPORT_STALE).timestamp()
+        for d in INTEL_IMPORT_DIR.iterdir():
+            if d.stat().st_mtime < cutoff:
+                shutil.rmtree(d, ignore_errors=True)
+                stale += 1
+                if d.name.isdigit():
+                    imp = db.intel_import_get(int(d.name))
+                    if imp and imp["status"] in ("uploading", "processing"):
+                        db.intel_import_update(int(d.name), {"status": "cancelled"})
+    return {"orphans": len(gone), "stray": stray, "stale_uploads": stale}
+
+
+@app.get("/api/intel/export")
+async def intel_export(user: dict = Depends(require_session)):
+    """Export → Markdown (.zip): every published entry this member could
+    open (RESTRICTED only in an admin's export) as Markdown with front matter,
+    plus the stored images they use under files/, linked relatively, so an
+    import of this zip round-trips."""
+    rate_limit("export", user["id"])
+    path = await asyncio.to_thread(_intel_build_export, bool(user.get("is_admin")))
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    from starlette.background import BackgroundTask
+    return FileResponse(path, media_type="application/zip", filename=f"intelligence-{stamp}.zip",
+                        headers={"Cache-Control": "no-store"},
+                        background=BackgroundTask(lambda: Path(path).unlink(missing_ok=True)))
+
+
+_EXPORT_DIRS = {"procedure": "procedures", "tactic": "tactics", "report": "reports", "dossier": "dossiers",
+                "debrief": "debriefs", "rfi": "questions"}
+
+
+def _intel_build_export(restricted_ok: bool) -> str:
+    rows = db.intel_export_rows(restricted_ok)
+    files = db.intel_files_for([r["id"] for r in rows])
+    INTEL_IMPORT_DIR.mkdir(parents=True, exist_ok=True)
+    out = INTEL_IMPORT_DIR / f"export-{secrets.token_hex(8)}.zip"
+    packed: set[int] = set()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+        for e in rows:
+            mapping = {}
+            for f in files.get(e["id"], []):
+                ext = "gif" if f["mime"] == "image/gif" else "webp"
+                rel = f"files/{f['id']}.{ext}"
+                mapping[f"/api/intel/files/{f['id']}"] = f"../{rel}"
+                if f["id"] not in packed and _intel_file_path(f).is_file():
+                    zf.write(_intel_file_path(f), rel, compress_type=zipfile.ZIP_STORED)
+                    packed.add(f["id"])
+            body = intel_files.rewrite_images(e.get("body_md") or "", mapping)
+            header = _intel_header(e) if e["kind"] not in ("procedure", "tactic") else None
+            fm = intel_files.dump_front_matter({
+                "title": e["title"], "kind": e["kind"], "summary": e.get("summary"), "activity": e.get("activity"),
+                "system": e.get("system"), "tags": e.get("tags"), "visibility": e.get("visibility"),
+                "patch": e.get("patch"), "grade": (f"{e['grade_rel']}{e.get('grade_cred') or ''}" if e.get("grade_rel") else None),
+                "valid_until": e.get("valid_until"), "header": header or None, "id": e["id"],
+                "published": e.get("published_at"), "revised": e.get("revised_at"), "rev": e.get("rev"),
+                "author": e.get("author_name")})
+            name = f"{_EXPORT_DIRS.get(e['kind'], e['kind'])}/{e['id']}-{e.get('slug') or 'entry'}.md"
+            zf.writestr(name, fm + "\n" + body)
+        zf.writestr("README.txt", "Intelligence export\n\nOne Markdown file per published entry, with its "
+                    "fields as front matter. Stored images are under files/. Settings → Data → Import "
+                    "Markdown (.zip) reads this zip back (procedures and tactics).\n")
+    return str(out)
 
 # ---- discussion (#50 slice 5): comments everywhere, answers on RFIs ----
 def _intel_thread_view(e: dict, user: dict) -> list[dict]:
@@ -18553,7 +18988,7 @@ def _intel_ref_label(kind: str, rid: str) -> str | None:
 def _intel_fields(body: IntelEntryFields, kind: str, image_hosts=IMAGE_PREVIEW_HOSTS,
                   op_header: str | None = None) -> tuple[dict, list, list]:
     title = body.title.strip()
-    r = intel_md.render(body.body, image_hosts)
+    r = intel_md.render(body.body, image_hosts, own_files=True)
     fields = {"title": title, "slug": intel_md.section_slug(title or "untitled"),
               "summary": body.summary.strip(), "body_md": body.body, "body_html": r["html"],
               "activity": body.activity, "system": body.system}
@@ -18596,10 +19031,10 @@ def _intel_fields(body: IntelEntryFields, kind: str, image_hosts=IMAGE_PREVIEW_H
         # author never edits it (the client can't send one).
         header = op_header
         fields["header"] = header
-    return fields, _intel_tags(body.tags), _intel_link_rows(r["refs"], header)
+    return fields, _intel_tags(body.tags), _intel_link_rows(r["refs"], header, r["files"])
 
 
-def _intel_link_rows(body_refs, header: str | None) -> list[tuple]:
+def _intel_link_rows(body_refs, header: str | None, files=()) -> list[tuple]:
     """Every reference an entry makes, with its target's name now: the body's
     [[refs]] plus a report's SALUTE location and source warning. The link rows
     are rewritten whole on each save, so every save path builds them here."""
@@ -18617,6 +19052,8 @@ def _intel_link_rows(body_refs, header: str | None) -> list[tuple]:
         rows.append((sk, si, "subject", h.get("subject_label") or _intel_ref_label(sk, si)))
     if h.get("op_id"):           # a debrief points at its op (the op page lists them)
         rows.append(("op", str(h["op_id"]), "debrief_op", h.get("op_name")))
+    # Stored images (slice 8): db routes these to intel_file_refs, not links.
+    rows += [("file", str(f)) for f in files]
     return rows
 
 
@@ -18717,6 +19154,7 @@ def intel_create(body: IntelCreateIn, user: dict = Depends(require_session)):
             raise HTTPException(status_code=409, detail="Debrief an op once it has ended.")
         op_header = json.dumps(_op_debrief_header(op))
     fields, tags, refs = _intel_fields(body, body.kind, op_header=op_header)
+    _intel_check_files(refs, user)
     _intel_subject_free(_intel_subject(body.kind, fields.get("header"), fields["title"]), None)
     uid, now = str(user["id"]), _now_iso()
     eid = db.intel_create_entry({
@@ -18759,6 +19197,7 @@ def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_se
         body.dossier = (body.dossier or IntelDossierHeader()).model_copy(update={
             "subject_kind": prev_dossier["subject_kind"], "subject_ref": prev_dossier["subject_ref"]})
     fields, tags, refs = _intel_fields(body, e["kind"], op_header=e.get("header"))
+    _intel_check_files(refs, user)
     subject = _intel_subject(e["kind"], fields.get("header"), fields["title"])
     if e["kind"] == "dossier" and (body.publish or e["status"] == "published"):
         if not subject:
@@ -18978,7 +19417,7 @@ def intel_revert(entry_id: int, body: IntelRevertIn, user: dict = Depends(requir
     old = db.intel_revision(entry_id, body.rev)
     if not old:
         raise HTTPException(status_code=404, detail="Revision not found.")
-    r = intel_md.render(old["body_md"] or "", IMAGE_PREVIEW_HOSTS)
+    r = intel_md.render(old["body_md"] or "", IMAGE_PREVIEW_HOSTS, own_files=True)
     uid, now = str(user["id"]), _now_iso()
     fields = {"title": old["title"], "slug": intel_md.section_slug(old["title"] or "untitled"),
               "summary": old.get("summary") or "", "body_md": old["body_md"] or "",
@@ -18989,7 +19428,7 @@ def intel_revert(entry_id: int, body: IntelRevertIn, user: dict = Depends(requir
         fields.update(subject_kind=subject[0], subject_ref=subject[1])
     try:
         db.intel_save_revision(entry_id, body.base_rev, fields, e["tags"],
-                               _intel_link_rows(r["refs"], fields.get("header", e.get("header"))), {
+                               _intel_link_rows(r["refs"], fields.get("header", e.get("header")), r["files"]), {
             "editor_id": uid, "editor_name": _resolve_member_name(uid, None),
             "note": f"Reverted to rev {body.rev}", "major": False, "created_at": now})
     except db.IntelConflict as c:
@@ -19047,7 +19486,7 @@ def intel_review_detail(entry_id: int, user: dict = Depends(require_session)):
             "title": {"from": e["title"], "to": pend["title"]},
             "summary": {"from": e.get("summary") or "", "to": pend.get("summary") or ""},
             "diff": body, "added": added, "removed": removed,
-            "html": intel_md.render(pend["body_md"] or "", IMAGE_PREVIEW_HOSTS)["html"],
+            "html": intel_md.render(pend["body_md"] or "", IMAGE_PREVIEW_HOSTS, own_files=True)["html"],
             "base_rev": pend.get("base_rev"), "current_rev": e["rev"],
             "mine": pend["editor_id"] == uid, "can_review": intel_reviewer(user)}
 
@@ -19063,14 +19502,14 @@ def intel_approve(entry_id: int, user: dict = Depends(require_session)):
     uid, now = str(user["id"]), _now_iso()
     approver = {"approved_by": uid, "approved_at": now}
     if e["status"] == "in_review":
-        r = intel_md.render(e["body_md"] or "", IMAGE_PREVIEW_HOSTS)
+        r = intel_md.render(e["body_md"] or "", IMAGE_PREVIEW_HOSTS, own_files=True)
         subject = _intel_subject(e["kind"], e.get("header"), e["title"])
         _intel_subject_free(subject, entry_id)
         db.intel_save_revision(entry_id, None, {
             "status": "published", "published_at": now, "revised_at": now, "updated_at": now,
             "submitted_at": None, "patch": _intel_patch_now(), "patch_confirmed": None,
             **({"subject_kind": subject[0], "subject_ref": subject[1]} if subject else {}),
-            "body_html": r["html"]}, e["tags"], _intel_link_rows(r["refs"], e.get("header")), {
+            "body_html": r["html"]}, e["tags"], _intel_link_rows(r["refs"], e.get("header"), r["files"]), {
             "editor_id": e["author_id"], "editor_name": e.get("author_name"),
             "note": "First published", "major": True, "created_at": now, **approver})
         # The author's 📣 choice from submission goes out now, at approval.
@@ -19085,7 +19524,7 @@ def intel_approve(entry_id: int, user: dict = Depends(require_session)):
     pend = db.intel_pending(entry_id) if e["status"] == "published" else None
     if not pend:
         raise HTTPException(status_code=409, detail="Nothing is waiting for review.")
-    r = intel_md.render(pend["body_md"] or "", IMAGE_PREVIEW_HOSTS)
+    r = intel_md.render(pend["body_md"] or "", IMAGE_PREVIEW_HOSTS, own_files=True)
     f = pend["fields"]
     header = pend.get("header") if pend.get("header") is not None else e.get("header")
     subject = _intel_subject(e["kind"], header, pend["title"])
@@ -19096,7 +19535,7 @@ def intel_approve(entry_id: int, user: dict = Depends(require_session)):
         "activity": f.get("activity"), "system": f.get("system"), "header": header,
         **({"subject_kind": subject[0], "subject_ref": subject[1]} if subject else {}),
         "patch": _intel_patch_now(), "patch_confirmed": None, "revised_at": now, "updated_at": now,
-    }, f.get("tags") or [], _intel_link_rows(r["refs"], header), {
+    }, f.get("tags") or [], _intel_link_rows(r["refs"], header, r["files"]), {
         "editor_id": pend["editor_id"], "editor_name": pend.get("editor_name"),
         "note": pend.get("note"), "major": True, "created_at": now, **approver})
     db.intel_set_revision_status(pend["id"], "approved")
