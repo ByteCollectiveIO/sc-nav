@@ -27,7 +27,12 @@ deck is Org Intel's **ACTIVITY** half; the switch at the top flips to
 procedures and tactics: anyone can write one (drafts save as you type),
 each shows the game patch it was written for and warns when the game has
 moved on, and every edit is kept with a diff and one-click revert. Search
-sits in the masthead. Reports, dossiers and questions are still being built
+sits in the masthead. An entry can be marked **RESTRICTED** so only admins
+and members holding the Discord roles an admin picks can find it, and an
+admin can turn on **review**: new procedures and tactics (and big changes to
+them) wait in a **Review** tab until a reviewer approves them or sends them
+back with a note. Reviewers can also mark an entry **Doctrine**, the org's
+official way of doing it. Reports, dossiers and questions are still being built
 (see [intelligence.md](../intelligence.md)). Open
 `#/intel/overview` and you get org-wide totals for mapping coverage, cargo hauling,
 trade-route profit, belt surveying, marketplace volume, per-contributor

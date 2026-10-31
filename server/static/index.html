@@ -608,6 +608,20 @@
     border: 1px solid var(--border); border-radius: 3px; padding: 0 6px; line-height: 16px; white-space: nowrap; }
   .ix-tag.free { text-transform: none; letter-spacing: 0; }
   .ix-tag.draft { color: var(--warn); border-color: var(--warn); }
+  /* slice 2: the marking + Doctrine. RESTRICTED reads as a caution, not an error. */
+  .ix-tag.restricted { color: var(--bad); border-color: var(--bad); }
+  .ix-tag.doctrine { color: var(--accent); border-color: var(--accent); }
+  .ix-count { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--warn); margin-left: 2px; }
+  .ix-banner { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 10px 22px; font-size: 12px;
+    line-height: 1.5; background: var(--warn-wash); border-bottom: 1px solid var(--border); color: var(--text); }
+  .ix-banner > span { flex: 1 1 260px; }
+  .ix-banner > .ix-ico { color: var(--warn); }
+  .ix-banner.returned > .ix-ico { color: var(--bad); }
+  .ix-banner .ix-btn, .ix-banner .ix-primary { padding: 5px 10px; }
+  .ix-banner-inline { display: flex; gap: 6px; align-items: flex-start; margin: 10px 0 0; font-size: 12px; color: var(--warn); }
+  .ix-seg-row { margin-bottom: 10px; }
+  .ix-seg-row .seg button { font-size: 11px; letter-spacing: .06em; padding: 5px 10px; }
+  textarea.ti#ix-ret-note { width: 100%; resize: vertical; }
   .ix-stale { color: var(--warn); display: inline-flex; gap: 5px; align-items: center; }
   .ix-stale .ix-ico { width: 12px; height: 12px; }
   .ix-group-h { font-size: 11px; letter-spacing: 1px; color: var(--dim); padding: 16px 8px 6px;
@@ -788,7 +802,7 @@
     .ix-row .ix-kind { grid-column: 1; grid-row: 1; }
     .ix-row .ix-when { grid-column: 2; grid-row: 1; }
     .ix-row .ix-body { grid-column: 1 / 3; grid-row: 2; }
-    .ix-head, .ix-prose { padding-left: 14px; padding-right: 14px; }
+    .ix-head, .ix-prose, .ix-banner { padding-left: 14px; padding-right: 14px; }
     .ix-title { font-size: 20px; }
     .ix-ed-head { padding: 14px 12px; }
     .ix-ed-meta { grid-template-columns: minmax(0, 1fr); }
@@ -2469,6 +2483,11 @@
   .ra-chips { display: flex; gap: 6px; flex-wrap: wrap; }
   .ra-chip { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--border); border-radius: 999px; padding: 2px 2px 2px 10px; font-size: 12px; }
   .ra-chip code { color: var(--dim); font-size: 11px; }
+  .ix-roles { padding: 10px 0; border-top: 1px solid var(--border); }
+  .ix-roles-h { font-size: 13px; margin-bottom: 8px; }
+  .ix-roles-h .muted { font-size: 12px; }
+  .ix-roles .ra-add .ix-rl-label { flex: 1 1 200px; }
+  .ix-roles .ra-add .ix-rl-id { width: 200px; }
   .ra-chip .ra-x { background: none; border: 0; color: var(--dim); cursor: pointer; padding: 0 6px; font-size: 14px; min-height: 0; }
   .ra-chip .ra-x:hover { color: var(--bad); }
   .ev-field label.ev-check { font-size: 13px; color: var(--text); letter-spacing: 0; display: flex; align-items: center; gap: 6px; align-self: flex-start; }
@@ -4778,6 +4797,38 @@
             <span class="muted" id="admin-ids-status" role="status" aria-live="polite"></span>
           </div>
         </div>
+        <div class="panel admin-grp" id="intel-access-panel">
+          <h2>INTELLIGENCE ACCESS &amp; REVIEW</h2>
+          <div class="muted" style="font-size:12px; margin-bottom:10px; max-width:80ch;">
+            Who can read <b>RESTRICTED</b> entries, and who reviews before something is published.
+            Both use Discord roles: turn on Developer Mode in Discord (User Settings › Advanced), then
+            right-click the role under Server Settings › Roles › <b>Copy Role ID</b>. Admins always
+            count as cleared and as reviewers. Roles are read when a member signs in, so a change in
+            Discord applies at their next sign-in.
+          </div>
+          <div class="ix-roles" data-key="intel_clearance_roles">
+            <div class="ix-roles-h"><b>Clearance roles</b> <span class="muted">— can read and write RESTRICTED entries. None set: admins only.</span></div>
+            <div class="ra-add"><input class="ti ix-rl-label" maxlength="60" placeholder="Role name, e.g. Officers" aria-label="Clearance role name">
+              <input class="ti ix-rl-id" maxlength="32" placeholder="Role ID" inputmode="numeric" aria-label="Clearance role ID">
+              <button type="button" class="ix-rl-add">Add</button></div>
+            <div class="ra-chips ix-rl-list"></div>
+          </div>
+          <div class="ix-roles" data-key="intel_reviewer_roles">
+            <div class="ix-roles-h"><b>Reviewer roles</b> <span class="muted">— approve submissions and mark Doctrine. None set: admins only.</span></div>
+            <div class="ra-add"><input class="ti ix-rl-label" maxlength="60" placeholder="Role name, e.g. Instructors" aria-label="Reviewer role name">
+              <input class="ti ix-rl-id" maxlength="32" placeholder="Role ID" inputmode="numeric" aria-label="Reviewer role ID">
+              <button type="button" class="ix-rl-add">Add</button></div>
+            <div class="ra-chips ix-rl-list"></div>
+          </div>
+          <div class="ix-roles">
+            <label class="chk" style="display:flex; gap:8px; align-items:flex-start;"><input type="checkbox" id="intel-review-on">
+              <span><b>Require review before publishing</b><br><span class="muted" style="font-size:12px;">Publishing becomes
+              <i>Submit for review</i> for these kinds, and so does a major revision. Minor edits never wait. Admins and
+              reviewers publish their own work directly.</span></span></label>
+            <div id="intel-review-kinds" style="display:flex; gap:6px 16px; flex-wrap:wrap; margin:8px 0 0 26px;"></div>
+          </div>
+          <div class="muted" id="intel-access-status" role="status" aria-live="polite" style="font-size:12px; margin-top:6px;"></div>
+        </div>
         <div class="panel admin-grp" id="handle-bind-panel">
           <h2>IN-GAME HANDLE BINDINGS</h2>
           <div class="muted" style="font-size:12px; margin-bottom:8px;">
@@ -5426,6 +5477,7 @@
           <a class="rm-tab" href="#/intel/library" data-sec="library">Library</a>
           <a class="rm-tab" href="#/intel/dossiers" data-sec="dossiers">Dossiers</a>
           <a class="rm-tab" href="#/intel/rfi" data-sec="rfi">RFI</a>
+          <a class="rm-tab" href="#/intel/review" data-sec="review" id="intel-tab-review" hidden>Review <span class="ix-count" id="intel-review-n"></span></a>
         </nav>
       </div>
       <div class="intel-mast-row" id="intel-act-row" hidden>
@@ -27170,17 +27222,17 @@ const INTEL_ALIAS = {
 let intelBoard = "mapping";   // which leaderboard the Boards section shows
 // Org Intel's two halves (#50). Every ACTIVITY slug predates the split and keeps
 // its flat route; INTELLIGENCE's slugs don't collide with them.
-const INTEL_KNOW_SECS = ["feed", "library", "dossiers", "rfi"];
+const INTEL_KNOW_SECS = ["feed", "library", "dossiers", "rfi", "review"];
 // Intelligence's deeper routes (#50 slice 1): an entry, its history, its
 // editor, a new entry, search results. All sit under the Library tab.
-const INTEL_KNOW_VIEWS = ["entry", "history", "edit", "new", "search"];
+const INTEL_KNOW_VIEWS = ["entry", "history", "edit", "new", "search", "reviewing"];
 let intelRoute = {};   // the parsed params of the current deeper route
 function intelParseRoute(sub) {
   if (sub == null) return null;
-  let m = /^e\/(\d+)(?:-[^/]*)?(?:\/(history|edit|sec-[a-z0-9-]+))?$/.exec(sub);
+  let m = /^e\/(\d+)(?:-[^/]*)?(?:\/(history|edit|review|sec-[a-z0-9-]+))?$/.exec(sub);
   if (m) {
     intelRoute = { id: +m[1], anchor: m[2] && m[2].startsWith("sec-") ? m[2] : null };
-    return m[2] === "history" || m[2] === "edit" ? m[2] : "entry";
+    return m[2] === "history" || m[2] === "edit" ? m[2] : m[2] === "review" ? "reviewing" : "entry";
   }
   m = /^new\/(procedure|tactic)$/.exec(sub);
   if (m) { intelRoute = { kind: m[1] }; return "new"; }
@@ -27925,7 +27977,11 @@ function renderIntel(section) {
   intelCurSec = section;
   const know = INTEL_KNOW_SECS.includes(section) || INTEL_KNOW_VIEWS.includes(section);
   // Deeper routes keep the Library tab lit (search lights none).
-  const tab = INTEL_KNOW_SECS.includes(section) ? section : section === "search" ? null : "library";
+  const tab = INTEL_KNOW_SECS.includes(section) ? section : section === "search" ? null
+    : section === "reviewing" && intelAccess().reviewer ? "review" : "library";
+  // Reviewers see a Review tab while the gate is on (#50 slice 2).
+  const ia = intelAccess();
+  $("intel-tab-review").hidden = !(ia.reviewer && ia.review_kinds.length) && section !== "review";
   const half = know ? "intel" : "activity";
   try { localStorage.setItem("scIntelHalf", half); } catch {}
   document.querySelectorAll("#intel-half button").forEach(b => {
@@ -28011,6 +28067,15 @@ let intelImageHosts = [];        // IMAGE_PREVIEW_HOSTS (from /api/intel/entries
 let intelEd = null;              // the open editor's state (null = none open)
 let intelLibFilter = { kind: "", activity: "" };
 
+// What the server says this member may do (/api/me intel_access). Labels only:
+// every route re-checks.
+function intelAccess() {
+  const a = (currentMe && currentMe.intel_access) || {};
+  return { cleared: !!a.cleared, reviewer: !!a.reviewer, review_kinds: a.review_kinds || [] };
+}
+const intelMarkTags = (e) =>
+  (e.visibility === "restricted" ? `<span class="ix-tag restricted" title="Only members with Intelligence clearance can see this">Restricted</span>` : "") +
+  (e.doctrine ? `<span class="ix-tag doctrine" title="Marked by a reviewer as the org's vetted way">Doctrine</span>` : "");
 const intelIco = (id, cls = "ix-ico") => `<svg class="${cls}" aria-hidden="true"><use href="#ix-i-${id}"/></svg>`;
 const intelHref = (e) => `#/intel/e/${e.id}-${encodeURIComponent(e.slug || "entry")}`;
 function intelWhen(iso) {
@@ -28053,16 +28118,18 @@ async function intelLoadPlaystyles() {
 }
 function intelRow(e, opts = {}) {
   const verb = opts.verb ? `<span class="ix-verb"> · ${e.revised_at && e.revised_at !== e.published_at ? "revised" : "published"}</span>` : "";
-  const draft = e.status === "draft" ? `<span class="ix-tag draft">Draft</span>` : "";
-  const meta = [draft, e.owner && e.owner.name ? `<span>by <b>${esc(e.owner.name)}</b></span>` : "",
+  const draft = e.status === "draft" ? `<span class="ix-tag draft">Draft</span>`
+    : e.status === "in_review" ? `<span class="ix-tag draft">In review</span>` : "";
+  const meta = [draft, intelMarkTags(e), e.owner && e.owner.name ? `<span>by <b>${esc(e.owner.name)}</b></span>` : "",
     e.activity ? `<span class="ix-tag">${esc(e.activity)}</span>` : "",
     e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "",
     ...(e.tags || []).slice(0, 4).map(t => `<span class="ix-tag free">#${esc(t)}</span>`),
-    e.status === "draft" ? "" : intelPatchChip(e.patch)].filter(Boolean).join("");
+    e.status === "published" ? intelPatchChip(e.patch) : ""].filter(Boolean).join("");
   const teaser = opts.snippet ? `<div class="ix-teaser">${opts.snippet}</div>`   // server-escaped, <mark> only
     : e.summary ? `<div class="ix-teaser">${esc(e.summary)}</div>` : "";
   const href = e.status === "draft" ? `${intelHref(e)}/edit` : intelHref(e);
-  const when = e.status === "draft" ? e.updated_at : (e.revised_at || e.published_at);
+  const when = e.status === "draft" ? e.updated_at : e.status === "in_review" ? e.submitted_at
+    : (e.revised_at || e.published_at);
   return `<a class="ix-row" href="${href}">` +
     `<span class="ix-kind">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind] || e.kind)}</span>` +
     `<span class="ix-body"><span class="ix-t">${esc(e.title || "Untitled")}</span>${verb}${teaser}` +
@@ -28079,6 +28146,8 @@ function renderIntelKnow(section) {
   if (intelEd && edKey && (intelEd.key === edKey || (intelEd.id && edKey === `e${intelEd.id}`))) return;
   if (intelEd) intelEdLeave();
   if (section !== "search") $("intel-search").value = "";
+  if (!$("intel-tab-review").hidden && section !== "review")
+    intelApi("/api/intel/review").then(d => intelSetReviewCount(d.items.length)).catch(() => {});
   if (INTEL_KNOW_EMPTY[section]) {
     const [title, lead, body] = INTEL_KNOW_EMPTY[section];
     box.innerHTML = `<div class="panel intel-know-empty"><h2>${title}</h2>` +
@@ -28087,7 +28156,8 @@ function renderIntelKnow(section) {
     return;
   }
   ({ feed: intelFeed, library: intelLibrary, search: intelSearchView, entry: intelEntryView,
-     history: intelHistory, edit: intelEditor, new: intelEditor })[section](box);
+     history: intelHistory, edit: intelEditor, new: intelEditor,
+     review: intelReviewQueue, reviewing: intelReviewView })[section](box);
 }
 
 // ---- FEED ----
@@ -28155,7 +28225,7 @@ async function intelLibrary(box) {
     }
     const order = [...groups.keys()].sort((a, b) => (a === "General") - (b === "General") || a.localeCompare(b));
     el.innerHTML = order.map(g => `<div class="ix-group-h"><span>${esc(g)}</span><span>${groups.get(g).length}</span></div>` +
-      groups.get(g).map(e => intelRow(e)).join("")).join("");
+      groups.get(g).slice().sort((a, b) => b.doctrine - a.doctrine).map(e => intelRow(e)).join("")).join("");
   } catch (err) { const el = $("ix-lib"); if (el) el.innerHTML = intelStatus(err.message, true); }
 }
 
@@ -28254,25 +28324,38 @@ async function intelEntryView(box) {
   if (intelCurSec !== "entry" || intelRoute.id !== id) return;
   if (e.status === "draft") { history.replaceState(null, "", `${intelHref(e)}/edit`); applyView(); return; }
   const p = e.patch;
+  const inReview = e.status === "in_review";
+  const reviewUrl = `${intelHref(e)}/review`;
+  // One status bar above the head: a submission waiting, or a revision waiting.
+  const banner = inReview
+    ? `<div class="ix-banner">${intelIco("history")}<span>Waiting for review since ${esc(intelWhen(e.submitted_at))}. ` +
+      `It isn't published yet; only you and the reviewers can see it.</span>` +
+      (e.is_reviewer ? `<a class="ix-primary" href="${reviewUrl}">Review it</a>` : `<button type="button" class="ix-btn" id="ix-withdraw">Withdraw to edit</button>`) + `</div>`
+    : e.pending ? `<div class="ix-banner">${intelIco("history")}<span>${e.pending.mine ? "Your" : `${esc(e.pending.editor_name || "Someone")}'s`} major revision ` +
+      `is waiting for review${e.pending.note ? `: “${esc(e.pending.note)}”` : ""}. Readers see this version until it's approved.</span>` +
+      `<a class="ix-btn" href="${reviewUrl}">${e.is_reviewer ? "Review it" : "See changes"}</a>` +
+      (e.pending.mine ? `<button type="button" class="ix-btn" id="ix-withdraw">Withdraw</button>` : "") + `</div>` : "";
+  const doctrineBtn = e.is_reviewer && e.status === "published"
+    ? `<button type="button" class="ix-btn" id="ix-doctrine">${e.doctrine ? "Remove Doctrine" : "Mark as Doctrine"}</button>` : "";
   const confirm = p.stale && e.can_edit
     ? `<button type="button" id="ix-confirm" title="Clears the warning without editing">Still valid on ${esc(intelMinor(p.current))}</button>` : "";
   const people = [e.owner.name && `<span>Owner <b>${esc(e.owner.name)}</b></span>`,
     e.maintainers.length ? `<span>Maintainers <b>${e.maintainers.map(m => esc(m.name)).join(", ")}</b></span>` : ""].filter(Boolean).join("");
   box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/library">Library</a><span>/</span>` +
     `<span>${esc(e.activity || "General")}</span></nav>` +
-    `<div class="ix-grid"><article class="panel ix-article"><div class="ix-head">` +
+    `<div class="ix-grid"><article class="panel ix-article">${banner}<div class="ix-head">` +
     `<div class="ix-kindline">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind])}` +
-    (e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "") + `</div>` +
+    (e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "") + intelMarkTags(e) + `</div>` +
     `<h1 class="ix-title">${esc(e.title)}</h1>` +
     (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") +
-    `<div class="ix-by">${people}<span>Rev <b>${e.rev}</b> · ${esc(intelWhen(e.revised_at || e.published_at))}</span>` +
-    `${intelPatchChip(p)}${confirm}</div>` +
+    `<div class="ix-by">${people}` + (inReview ? "" : `<span>Rev <b>${e.rev}</b> · ${esc(intelWhen(e.revised_at || e.published_at))}</span>`) +
+    `${inReview ? "" : intelPatchChip(p)}${confirm}</div>` +
     `<div class="ix-actions">` +
     (e.can_edit ? `<a class="ix-primary" href="${intelHref(e)}/edit">${intelIco("edit")}Edit</a>` : "") +
-    `<a class="ix-btn" href="${intelHref(e)}/history">${intelIco("history")}History</a>` +
+    (inReview ? "" : `<a class="ix-btn" href="${intelHref(e)}/history">${intelIco("history")}History</a>`) +
     `<button type="button" class="ix-btn" id="ix-copy">${intelIco("link")}Copy link</button>` +
-    `<span class="sp"></span>` +
-    (e.can_manage ? `<button type="button" class="ix-btn" id="ix-archive">Archive</button>` : "") +
+    `<span class="sp"></span>${doctrineBtn}` +
+    (e.can_manage && !inReview ? `<button type="button" class="ix-btn" id="ix-archive">Archive</button>` : "") +
     `</div></div><div class="ix-prose" id="ix-prose">${e.body_html || `<p class="muted">This entry has no body yet.</p>`}</div></article>` +
     `<aside class="ix-rail"><div class="panel" id="ix-toc-p" hidden><h2>ON THIS PAGE</h2><ul class="ix-toc" id="ix-toc"></ul></div>` +
     `<div class="panel"><h2>DETAILS</h2><dl class="ix-dl">` +
@@ -28280,7 +28363,10 @@ async function intelEntryView(box) {
     `<dt>ACTIVITY</dt><dd>${esc(e.activity || "General")}</dd>` +
     (e.system ? `<dt>SYSTEM</dt><dd>${esc(e.system)}</dd>` : "") +
     `<dt>PATCH</dt><dd>${p.written ? `${esc(p.written)}${p.confirmed ? " (re-confirmed)" : ""}` : "Not known"}</dd>` +
-    `<dt>PUBLISHED</dt><dd>${esc(e.published_at ? new Date(e.published_at).toLocaleDateString() : "")} by ${esc(e.author_name || "?")}</dd>` +
+    (inReview ? `<dt>SUBMITTED</dt><dd>${esc(new Date(e.submitted_at).toLocaleDateString())} by ${esc(e.author_name || "?")}</dd>`
+      : `<dt>PUBLISHED</dt><dd>${esc(e.published_at ? new Date(e.published_at).toLocaleDateString() : "")} by ${esc(e.author_name || "?")}</dd>`) +
+    `<dt>MARKING</dt><dd>${e.visibility === "restricted" ? "Restricted: cleared members only" : "Org: every member"}</dd>` +
+    (e.doctrine ? `<dt>DOCTRINE</dt><dd>Marked by ${esc(e.doctrine_by || "a reviewer")}</dd>` : "") +
     (e.tags.length ? `<dt>TAGS</dt><dd>${e.tags.map(t => `<span class="ix-tag free">#${esc(t)}</span>`).join("")}</dd>` : "") +
     `</dl></div></aside></div>`;
   const prose = $("ix-prose");
@@ -28302,6 +28388,16 @@ async function intelEntryView(box) {
     try { await intelApi(`/api/intel/entries/${e.id}/confirm`, { method: "POST" }); intelEntryView(box); }
     catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
   };
+  if ($("ix-withdraw")) $("ix-withdraw").onclick = async () => {
+    try {
+      await intelApi(`/api/intel/entries/${e.id}/withdraw`, { method: "POST" });
+      if (inReview) location.hash = `${intelHref(e)}/edit`; else intelEntryView(box);
+    } catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
+  };
+  if ($("ix-doctrine")) $("ix-doctrine").onclick = async () => {
+    try { await intelApi(`/api/intel/entries/${e.id}/doctrine`, { method: "POST", body: { on: !e.doctrine } }); intelEntryView(box); }
+    catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
+  };
   if ($("ix-archive")) $("ix-archive").onclick = async () => {
     const ok = await confirmDialog(`“${e.title}” leaves the Library, the Feed and search. Its history is kept and an admin can still see it.`,
       { title: "Archive this entry?", confirmLabel: "Archive", danger: true });
@@ -28309,6 +28405,110 @@ async function intelEntryView(box) {
     try { await intelApi(`/api/intel/entries/${e.id}`, { method: "DELETE" }); location.hash = "#/intel/library"; }
     catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
   };
+}
+
+// ---- REVIEW (#50 slice 2): the queue + one submission ----
+// The gate is optional and per kind (Settings › Members). A reviewer approves a
+// new entry (rev 1) or a waiting major revision, or returns it with a note.
+async function intelReviewQueue(box) {
+  box.innerHTML = `<div class="panel"><div class="ix-panel-h"><h2>REVIEW</h2>` +
+    `<span class="muted" id="ix-rq-sub"></span></div><div class="ix-list" id="ix-rq">${intelStatus("Loading…")}</div></div>`;
+  try {
+    const d = await intelApi("/api/intel/review");
+    const el = $("ix-rq"); if (!el) return;
+    intelSetReviewCount(d.items.length);
+    $("ix-rq-sub").textContent = d.required
+      ? `Reviewed before publishing: ${d.kinds.map(k => INTEL_KIND[k].toLowerCase() + "s").join(", ") || "nothing"}`
+      : "The review gate is off; anything left here was submitted while it was on";
+    el.innerHTML = d.items.length ? d.items.map(i => {
+      const what = i.review_type === "new" ? "New" : "Revision";
+      return `<a class="ix-row" href="${intelHref(i)}/review">` +
+        `<span class="ix-kind">${intelIco(i.kind)}${esc(INTEL_KIND[i.kind] || i.kind)}</span>` +
+        `<span class="ix-body"><span class="ix-t">${esc(i.title)}</span>` +
+        `<span class="ix-verb"> · ${what.toLowerCase()} from ${esc(i.submitted_by || "?")}</span>` +
+        (i.note ? `<div class="ix-teaser">“${esc(i.note)}”</div>` : "") +
+        `<span class="ix-meta"><span class="ix-tag${i.review_type === "new" ? " draft" : ""}">${what}</span>${intelMarkTags(i)}` +
+        (i.moved_on ? `<span class="ix-stale">${intelIco("alert")}live text changed since</span>` : "") + `</span></span>` +
+        `<span class="ix-when">${esc(intelWhen(i.submitted_at))}</span></a>`;
+    }).join("") : intelStatus("Nothing waiting. Submissions show up here, oldest first.");
+  } catch (err) { const el = $("ix-rq"); if (el) el.innerHTML = intelStatus(err.message, true); }
+}
+function intelSetReviewCount(n) {
+  const el = $("intel-review-n"); if (el) el.textContent = n ? String(n) : "";
+}
+async function intelReviewView(box) {
+  const id = intelRoute.id;
+  box.innerHTML = `<div class="panel">${intelStatus("Loading…")}</div>`;
+  let e, r;
+  try { [e, r] = await Promise.all([intelApi(`/api/intel/entries/${id}`), intelApi(`/api/intel/entries/${id}/review`)]); }
+  catch (err) { box.innerHTML = `<div class="panel">${intelStatus(err.status === 404 ? "Nothing is waiting for review here." : err.message, true)}</div>`; return; }
+  if (intelCurSec !== "reviewing" || intelRoute.id !== id) return;
+  const isNew = r.review_type === "new";
+  const ch = (lbl, x) => x.from !== x.to ? `<span>${lbl}: <del>${esc(x.from || "—")}</del> → <b>${esc(x.to || "—")}</b></span>` : "";
+  const back = r.can_review ? `<a href="#/intel/review">Review</a>` : `<a href="#/intel/library">Library</a>`;
+  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb">${back}<span>/</span>` +
+    `<a href="${intelHref(e)}">${esc(e.title)}</a><span>/</span><span>${isNew ? "New entry" : "Revision"}</span></nav>` +
+    `<div class="ix-grid"><div class="panel ix-article"><div class="ix-head">` +
+    `<div class="ix-kindline">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind])}${intelMarkTags(e)}</div>` +
+    `<h1 class="ix-title">${esc(isNew ? r.title : r.title.to)}</h1>` +
+    ((isNew ? r.summary : r.summary.to) ? `<p class="ix-lead">${esc(isNew ? r.summary : r.summary.to)}</p>` : "") +
+    `<div class="ix-by"><span>${isNew ? "Submitted" : "Revision"} by <b>${esc(r.submitted_by || "?")}</b> · ${esc(intelWhen(r.submitted_at))}</span>` +
+    (isNew ? "" : `<span>+${r.added} / −${r.removed} words</span>`) + `</div>` +
+    (r.note ? `<p class="ix-lead" style="margin:10px 0 0">“${esc(r.note)}”</p>` : "") +
+    (!isNew && r.base_rev !== r.current_rev ? `<p class="ix-banner-inline">${intelIco("alert")}Written on rev ${r.base_rev}; ` +
+      `the live text is now rev ${r.current_rev}. Approving replaces it, including the later edits.</p>` : "") +
+    `</div>` +
+    (isNew ? `<div class="ix-prose" id="ix-rv-body">${r.html || `<p class="muted">No body.</p>`}</div>`
+      : `<div class="ix-prose"><div class="ix-seg-row"><span class="seg" role="group" aria-label="Show">` +
+        `<button type="button" id="ix-rv-diff" class="on" aria-pressed="true">CHANGES</button>` +
+        `<button type="button" id="ix-rv-read" aria-pressed="false">AS IT WOULD READ</button></span></div>` +
+        `<div class="ix-diff-h">${ch("Title", r.title)}${ch("Summary", r.summary)}</div>` +
+        `<pre class="ix-diff" id="ix-rv-d">${r.diff}</pre>` +   // server-escaped; <ins>/<del> only
+        `<div id="ix-rv-body" hidden>${r.html}</div></div>`) +
+    `</div><aside class="ix-rail"><div class="panel" id="ix-rv-act"></div></aside></div>`;
+  intelHydrate($("ix-rv-body"), null);
+  if (!isNew) {
+    const show = (diff) => {
+      $("ix-rv-d").hidden = !diff; $("ix-rv-body").hidden = diff;
+      $("ix-rv-diff").classList.toggle("on", diff); $("ix-rv-read").classList.toggle("on", !diff);
+      $("ix-rv-diff").setAttribute("aria-pressed", diff); $("ix-rv-read").setAttribute("aria-pressed", !diff);
+    };
+    $("ix-rv-diff").onclick = () => show(true);
+    $("ix-rv-read").onclick = () => show(false);
+  }
+  const act = $("ix-rv-act");
+  const fail = (err) => { const el = $("ix-rv-err"); el.textContent = err.message; el.hidden = false; };
+  if (r.can_review) {
+    act.innerHTML = `<h2>DECISION</h2><div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-approve">` +
+      `${intelIco("check")}${isNew ? "Approve and publish" : "Approve revision"}</button></div>` +
+      `<label class="ix-fld" style="margin-top:14px"><span>OR RETURN IT WITH A NOTE</span>` +
+      `<textarea class="ti" id="ix-ret-note" rows="4" maxlength="1000" placeholder="What needs to change before it can go out"></textarea></label>` +
+      `<div class="ix-save-acts"><button type="button" class="ix-btn" id="ix-return" disabled>Return to ${esc(r.submitted_by || "the writer")}</button></div>` +
+      `<p class="ix-save-err" id="ix-rv-err" role="alert" hidden></p>`;
+    $("ix-ret-note").oninput = () => { $("ix-return").disabled = $("ix-ret-note").value.trim().length < 3; };
+    $("ix-approve").onclick = async () => {
+      $("ix-approve").disabled = true;
+      try { const d = await intelApi(`/api/intel/entries/${id}/approve`, { method: "POST" });
+        intelToast(`<span>${isNew ? "Approved and published." : `Approved as rev ${d.rev}.`}</span>`); location.hash = "#/intel/review"; }
+      catch (err) { $("ix-approve").disabled = false; fail(err); }
+    };
+    $("ix-return").onclick = async () => {
+      try { await intelApi(`/api/intel/entries/${id}/return`, { method: "POST", body: { note: $("ix-ret-note").value.trim() } });
+        intelToast(`<span>Returned with your note.</span>`); location.hash = "#/intel/review"; }
+      catch (err) { fail(err); }
+    };
+  } else {
+    act.innerHTML = `<h2>WAITING</h2><p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 12px">` +
+      `A reviewer approves it or sends it back with a note.</p>` +
+      ((isNew || r.mine) ? `<div class="ix-save-acts"><button type="button" class="ix-btn" id="ix-wd">Withdraw</button></div>` : "") +
+      `<p class="ix-save-err" id="ix-rv-err" role="alert" hidden></p>`;
+    if ($("ix-wd")) $("ix-wd").onclick = async () => {
+      try { await intelApi(`/api/intel/entries/${id}/withdraw`, { method: "POST" });
+        location.hash = isNew ? `${intelHref(e)}/edit` : intelHref(e); }
+      catch (err) { fail(err); }
+    };
+  }
+  window.scrollTo(0, 0);
 }
 
 // ---- HISTORY ----
@@ -28326,7 +28526,8 @@ async function intelHistory(box) {
     `<aside class="ix-rail"><div class="panel"><h2>REVISIONS</h2><ul class="ix-revs" id="ix-revs">` +
     h.revisions.map(r => `<li data-rev="${r.rev}"><span class="rv">${r.rev}${r.rev === h.current ? "" : ""}</span>` +
       `<span><span class="note">${esc(r.note || "No note")}</span>${r.major ? `<span class="ix-major">MAJOR</span>` : ""}` +
-      `<small>${esc(r.editor_name || "?")} · ${esc(intelWhen(r.created_at))}</small></span>` +
+      `<small>${esc(r.editor_name || "?")} · ${esc(intelWhen(r.created_at))}` +
+      `${r.approved_by_name ? ` · approved by ${esc(r.approved_by_name)}` : ""}</small></span>` +
       `<span class="acts"><button type="button" data-diff="${r.rev}">Changes</button>` +
       (h.can_edit && r.rev !== h.current ? `<button type="button" data-revert="${r.rev}">Revert</button>` : "") +
       `</span></li>`).join("") + `</ul></div></aside></div>`;
@@ -28432,9 +28633,18 @@ function intelHtmlToMd(html) {
 }
 function intelEdBackupKey() { return intelEd.id ? `scIntelEdit:${intelEd.id}` : `scIntelEdit:new:${intelEd.kind}`; }
 function intelEdValues() {
-  return { title: $("ix-ed-title").value, summary: $("ix-ed-sum").value, body: $("ix-area").value,
+  const v = { title: $("ix-ed-title").value, summary: $("ix-ed-sum").value, body: $("ix-area").value,
     activity: $("ix-ed-act").value || null, system: $("ix-ed-sys").value || null,
     tags: $("ix-ed-tags").value.split(/[,\s]+/).filter(Boolean) };
+  if (intelEd && intelEd.canMark) v.visibility = intelEd.visibility;
+  return v;
+}
+// Does this member's publish / major revision of this kind go to review?
+function intelEdGated() {
+  const ed = intelEd;
+  if (ed.entry) return !!ed.entry.review_gate;
+  const ia = intelAccess();
+  return !ia.reviewer && ia.review_kinds.includes(ed.kind);
 }
 function intelEdLeave() {
   // Navigating away from a draft with an autosave still pending: send it now.
@@ -28456,12 +28666,16 @@ async function intelEditor(box) {
   if (!isNew) {
     try { e = await intelApi(`/api/intel/entries/${id}`); }
     catch (err) { box.innerHTML = `<div class="panel">${intelStatus(err.status === 404 ? "This entry doesn't exist, or it was archived." : err.message, true)}</div>`; return; }
+    if (e.status === "in_review") { history.replaceState(null, "", intelHref(e)); applyView(); return; }
     if (!e.can_edit) { box.innerHTML = `<div class="panel">${intelStatus("Only the owner, maintainers or an admin can edit this entry.", true)}</div>`; return; }
   }
   if (intelCurSec !== (isNew ? "new" : "edit") || (!isNew && intelRoute.id !== id)) return;
   intelEd = { key: isNew ? `n${kind}` : `e${id}`, id, kind: e ? e.kind : kind, status: e ? e.status : "draft",
     rev: e ? e.rev : 0, entry: e, major: false, timer: null, saving: false, dirty: false,
-    templated: isNew };
+    templated: isNew, visibility: e ? e.visibility : "org",
+    // The marking control shows to cleared members, and on an entry that's
+    // already RESTRICTED (whoever can open it is cleared anyway).
+    canMark: intelAccess().cleared || (e && e.visibility === "restricted") };
   const published = intelEd.status === "published";
   const v = e ? { title: e.title, summary: e.summary, body: e.body_md, activity: e.activity, system: e.system, tags: e.tags }
     : { title: "", summary: "", body: INTEL_TEMPLATE[kind], activity: null, system: null, tags: [] };
@@ -28474,6 +28688,10 @@ async function intelEditor(box) {
     `<div class="ix-ed-grid"><div class="panel ix-ed">` +
     `<div class="ix-restore" id="ix-restore" hidden><span id="ix-restore-msg"></span>` +
     `<button type="button" id="ix-restore-go">Restore</button><button type="button" id="ix-restore-x">Discard</button></div>` +
+    (e && e.review_note ? `<div class="ix-banner returned">${intelIco("alert")}<span><b>Returned by ${esc(e.review_note.by || "a reviewer")}</b> ` +
+      `${esc(intelWhen(e.review_note.created_at))}: “${esc(e.review_note.note)}”</span></div>` : "") +
+    (e && e.pending ? `<div class="ix-banner">${intelIco("history")}<span>${e.pending.mine ? "Your" : `${esc(e.pending.editor_name || "Someone")}'s`} ` +
+      `major revision is waiting for review. You're editing the live text${e.pending.mine ? "; submitting again replaces your earlier one" : ""}.</span></div>` : "") +
     `<div class="ix-ed-head">` +
     (isNew ? `<div class="seg" id="ix-ed-kind" role="group" aria-label="Kind">` +
       ["procedure", "tactic"].map(k => `<button type="button" data-k="${k}" class="${k === kind ? "on" : ""}" aria-pressed="${k === kind}">${INTEL_KIND[k].toUpperCase()}</button>`).join("") + `</div>` : "") +
@@ -28715,12 +28933,27 @@ function intelEdRenderSave(keepNote) {
   const ed = intelEd, published = ed.status === "published";
   const noteVal = keepNote && $("ix-note") ? $("ix-note").value : "";
   const errVal = keepNote && $("ix-save-err") ? $("ix-save-err").textContent : "";
+  const gated = intelEdGated();
+  const lockOrg = published && ed.entry.visibility === "restricted" && !ed.entry.can_manage;
+  const marking = ed.canMark ? `<div class="ix-fld"><span>MARKING</span><div class="seg" role="group" aria-label="Marking">` +
+    `<button type="button" data-vis="org" class="${ed.visibility === "org" ? "on" : ""}" aria-pressed="${ed.visibility === "org"}"` +
+    `${lockOrg ? ` disabled title="Only the owner or an admin can lift RESTRICTED"` : ""}>ORG</button>` +
+    `<button type="button" data-vis="restricted" class="${ed.visibility === "restricted" ? "on" : ""}" aria-pressed="${ed.visibility === "restricted"}">RESTRICTED</button></div>` +
+    `<small>${ed.visibility === "restricted" ? "Only admins and members with an Intelligence clearance role can find or open it."
+      : "Every org member can read it."}${published && ed.visibility !== ed.entry.visibility ? " Applies when you save." : ""}</small></div>` : "";
+  const bindMarking = () => p.querySelectorAll("[data-vis]").forEach(b => b.onclick = () => {
+    if (ed.visibility === b.dataset.vis) return;
+    ed.visibility = b.dataset.vis; intelEdRenderSave(true); intelEdChanged();
+  });
   if (!published) {
-    p.innerHTML = `<h2>PUBLISH</h2><p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 12px">` +
-      `Only you can see a draft. Publishing puts it in the Library, the Feed and search, stamped with the game patch.</p>` +
-      `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-publish">Publish</button>` +
+    p.innerHTML = `<h2>${gated ? "SUBMIT" : "PUBLISH"}</h2>` + marking +
+      `<p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 12px">` +
+      (gated ? `Only you can see a draft. ${INTEL_KIND[ed.kind]}s are reviewed before they're published: a reviewer approves it, or sends it back with a note.`
+        : `Only you can see a draft. Publishing puts it in the Library, the Feed and search, stamped with the game patch.`) + `</p>` +
+      `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-publish">${gated ? "Submit for review" : "Publish"}</button>` +
       (ed.id ? `<button type="button" class="ix-btn" id="ix-del">Delete draft</button>` : "") + `</div>` +
       `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
+    bindMarking();
     $("ix-publish").onclick = () => intelEdSave({ publish: true });
     if ($("ix-del")) $("ix-del").onclick = async () => {
       const ok = await confirmDialog("This draft and everything in it is deleted. It was never published, so there's no history to keep.",
@@ -28734,21 +28967,24 @@ function intelEdRenderSave(keepNote) {
     return;
   }
   const major = ed.major;
-  p.innerHTML = `<h2>SAVE REV ${ed.rev + 1}</h2>` +
+  const toReview = gated && major;
+  p.innerHTML = `<h2>${toReview ? "SUBMIT A REVISION" : `SAVE REV ${ed.rev + 1}`}</h2>` + marking +
     `<div class="ix-fld"><span>KIND OF CHANGE</span><div class="seg" role="group" aria-label="Kind of change">` +
     `<button type="button" data-major="0" class="${major ? "" : "on"}" aria-pressed="${!major}">MINOR</button>` +
     `<button type="button" data-major="1" class="${major ? "on" : ""}" aria-pressed="${major}">MAJOR</button></div>` +
-    `<small>${major ? "The procedure itself changed. Shows as revised in the Feed and re-stamps the patch."
+    `<small>${toReview ? `The procedure itself changed. A reviewer approves it first; readers keep seeing rev ${ed.rev} until then.`
+      : major ? "The procedure itself changed. Shows as revised in the Feed and re-stamps the patch."
       : "Typos and wording. Doesn't show in the Feed or change the patch stamp."}</small></div>` +
     `<label class="ix-fld"><span>WHAT CHANGED${major ? " · required" : " · optional"}</span>` +
     `<input class="ti" id="ix-note" maxlength="300" autocomplete="off" placeholder="${major ? "e.g. Escorts now break at QT exit" : "e.g. Fixed typos"}" value="${esc(noteVal)}"></label>` +
-    `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-save">Save rev ${ed.rev + 1}</button>` +
+    `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-save">${toReview ? "Submit for review" : `Save rev ${ed.rev + 1}`}</button>` +
     `<a class="ix-btn" href="${intelHref(ed.entry)}">Cancel</a></div>` +
     `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
   const sync = () => { $("ix-save").disabled = ed.major && $("ix-note").value.trim().length < 3; };
   sync();
   $("ix-note").oninput = sync;
   p.querySelectorAll("[data-major]").forEach(b => b.onclick = () => { ed.major = b.dataset.major === "1"; intelEdRenderSave(true); });
+  bindMarking();
   $("ix-save").onclick = () => intelEdSave({ major: ed.major, note: $("ix-note").value, base_rev: ed.rev });
 }
 function intelEdErr(msg) { const el = $("ix-save-err"); if (el) { el.textContent = msg; el.hidden = false; } }
@@ -28768,7 +29004,10 @@ async function intelEdSave(extra) {
     const d = await intelApi(`/api/intel/entries/${id}`, { method: "PUT", body: { ...vals, ...extra } });
     try { localStorage.removeItem(`scIntelEdit:${id}`); } catch {}
     intelEd = null;
-    intelToast(`<span>${extra.publish ? "Published." : `Saved rev ${d.rev}.`}</span>`);
+    const msg = d.status === "in_review" ? "Submitted for review. You'll see it in your drafts until it's approved."
+      : d.pending && d.pending.mine && extra.major ? "Revision submitted for review."
+      : extra.publish ? "Published." : `Saved rev ${d.rev}.`;
+    intelToast(`<span>${msg}</span>`, 6000);
     location.hash = intelHref(d);
   } catch (err) {
     if (btn) btn.disabled = false;
@@ -29564,6 +29803,55 @@ function applyDiscordSettings(s) {
   if (document.activeElement !== $("discord-lead"))
     $("discord-lead").value = s.discord_reminder_lead_min || 30;
   if ("discord_role_aliases" in s) { roleAliases = s.discord_role_aliases || {}; renderRoleAliases(); }
+  if ("intel_clearance_roles" in s) applyIntelAccessSettings(s);
+}
+
+// ---- Intelligence access + review (#50 slice 2) ----
+// Two role lists (same shape as the event ping aliases) + the review gate.
+// Every add / remove / toggle saves just that key, like the toggles above.
+const INTEL_REVIEW_KIND_OPTS = [["procedure", "Procedures"], ["tactic", "Tactics"], ["report", "Reports"],
+  ["dossier", "Dossiers"], ["debrief", "Debriefs"]];
+let intelAccessSet = {};
+function applyIntelAccessSettings(s) {
+  intelAccessSet = s;
+  document.querySelectorAll("#intel-access-panel .ix-roles[data-key]").forEach(box => {
+    const key = box.dataset.key, list = s[key] || [];
+    const out = box.querySelector(".ix-rl-list");
+    out.innerHTML = list.length ? list.map(a => `<span class="ra-chip">@${esc(a.label || a.id)} <code>${esc(a.id)}</code>` +
+      `<button class="ra-x" data-id="${esc(a.id)}" aria-label="Remove @${esc(a.label || a.id)}">×</button></span>`).join("")
+      : `<span class="muted" style="font-size:12px;">None yet</span>`;
+    out.querySelectorAll(".ra-x").forEach(b => b.onclick = () =>
+      saveIntelAccess({ [key]: list.filter(a => a.id !== b.dataset.id) }, "Removed."));
+    box.querySelector(".ix-rl-add").onclick = async () => {
+      const id = box.querySelector(".ix-rl-id").value.trim(), label = box.querySelector(".ix-rl-label").value.trim();
+      if (!id) { $("intel-access-status").textContent = "Paste the Discord role ID."; return; }
+      if (await saveIntelAccess({ [key]: [...list, { id, label }] }, "Added.")) {
+        box.querySelector(".ix-rl-id").value = ""; box.querySelector(".ix-rl-label").value = "";
+      }
+    };
+  });
+  const on = !!s.intel_review_required, kinds = s.intel_review_kinds || [];
+  $("intel-review-on").checked = on;
+  $("intel-review-on").onchange = () => saveIntelAccess({ intel_review_required: $("intel-review-on").checked },
+    $("intel-review-on").checked ? "Review is on." : "Review is off.");
+  $("intel-review-kinds").innerHTML = INTEL_REVIEW_KIND_OPTS.map(([k, label]) =>
+    `<label class="chk" style="display:flex; gap:6px; align-items:center; font-size:12px;"><input type="checkbox" value="${k}"` +
+    `${kinds.includes(k) ? " checked" : ""}${on ? "" : " disabled"}> ${label}${k === "report" ? ' <span class="muted">(waiting makes a report stale)</span>' : ""}</label>`).join("");
+  $("intel-review-kinds").querySelectorAll("input").forEach(c => c.onchange = () => saveIntelAccess({
+    intel_review_kinds: [...$("intel-review-kinds").querySelectorAll("input:checked")].map(x => x.value) }, "Saved."));
+}
+async function saveIntelAccess(patch, okMsg) {
+  const st = $("intel-access-status");
+  st.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { st.textContent = typeof d.detail === "string" ? d.detail : "Couldn't save."; applyIntelAccessSettings(intelAccessSet); return false; }
+    applyIntelAccessSettings(d);
+    st.textContent = okMsg;
+    return true;
+  } catch { st.textContent = "Couldn't save."; return false; }
 }
 
 // ---- event role pings (docs/event-role-pings.md) ----

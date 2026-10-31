@@ -15885,5 +15885,299 @@ class IntelLibraryTests(unittest.TestCase):
         self.assertEqual(db.intel_get_entry(e["id"])["tags"], ["two"])
 
 
+
+class IntelAccessReviewTests(unittest.TestCase):
+    """Intelligence slice 2 (#50): the RESTRICTED marking (clearance from
+    Discord roles snapshotted at sign-in), the review gate (per kind; admins
+    and reviewers bypass), pending major revisions, return/withdraw, Doctrine."""
+
+    CLEAR_ROLE, REVIEW_ROLE = "111111111111111111", "222222222222222222"
+    OWNER = {"id": "11", "username": "owner", "is_admin": False}
+    OTHER = {"id": "22", "username": "other", "is_admin": False}
+    ADMIN = {"id": "33", "username": "admin", "is_admin": True}
+    CLEARED = {"id": "44", "username": "cleared", "is_admin": False}
+    REVIEWER = {"id": "55", "username": "reviewer", "is_admin": False}
+    BOTH = {"id": "66", "username": "both", "is_admin": False}
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls.user = cls.OWNER
+        app.app.dependency_overrides[app.require_session] = lambda: cls.user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls.user
+        cls._orig_members = app.members_dir.by_id
+        roles = {"44": [cls.CLEAR_ROLE], "55": [cls.REVIEW_ROLE], "66": [cls.CLEAR_ROLE, cls.REVIEW_ROLE]}
+        app.members_dir.by_id = {
+            m["id"]: {"display_name": m["username"].title(), "discord_roles": json.dumps(roles.get(m["id"], []))}
+            for m in (cls.OWNER, cls.OTHER, cls.ADMIN, cls.CLEARED, cls.REVIEWER, cls.BOTH)}
+        cls._orig_patch = app.patch_tracker._state
+        app.patch_tracker._state = {"seen": {}, "first": {}, "current": "4.3.0", "since": None}
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        app.members_dir.by_id = cls._orig_members
+        app.patch_tracker._state = cls._orig_patch
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        type(self).user = self.OWNER
+        with db._conn:
+            for t in ("intel_entries", "intel_revisions", "intel_tags", "intel_links", "intel_comments"):
+                db._conn.execute(f"DELETE FROM {t}")
+            if db.INTEL_SEARCH == "fts5":
+                db._conn.execute("DELETE FROM intel_fts")
+        db.set_setting("intel_clearance_roles", json.dumps([{"id": self.CLEAR_ROLE, "label": "Officers"}]))
+        db.set_setting("intel_reviewer_roles", json.dumps([{"id": self.REVIEW_ROLE, "label": "Reviewers"}]))
+        db.set_setting("intel_review_required", "0")
+        db.set_setting("intel_review_kinds", "")
+
+    def as_(self, who):
+        type(self).user = who
+
+    def gate(self, on=True):
+        db.set_setting("intel_review_required", "1" if on else "0")
+
+    def draft(self, title="Hull-C escort", body="Break at QT exit.", **kw):
+        r = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": title, "body": body, **kw})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def publish(self, title="Hull-C escort", body="Break at QT exit.", **kw):
+        d = self.draft(title, body, **kw)
+        r = self.client.put(f"/api/intel/entries/{d['id']}", json={"title": title, "body": body, "publish": True, **kw})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def get(self, eid):
+        return self.client.get(f"/api/intel/entries/{eid}")
+
+    # ---- RESTRICTED ----
+    def test_marking_restricted_needs_clearance(self):
+        r = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": "x", "visibility": "restricted"})
+        self.assertEqual(r.status_code, 403)
+        self.as_(self.CLEARED)
+        self.assertEqual(self.draft(visibility="restricted")["visibility"], "restricted")
+
+    def test_restricted_is_hidden_everywhere_without_clearance(self):
+        self.as_(self.CLEARED)
+        e = self.publish("Pyro gate counter-ambush", "Secret refinery plan", visibility="restricted")
+        self.as_(self.OTHER)
+        self.assertEqual(self.get(e["id"]).status_code, 404)
+        for sec in ("library", "feed"):
+            self.assertEqual(self.client.get(f"/api/intel/entries?section={sec}").json()["entries"], [])
+        self.assertEqual(self.client.get("/api/intel/search?q=refinery").json()["results"], [])
+        for path in ("revisions", "diff?rev=1"):
+            self.assertEqual(self.client.get(f"/api/intel/entries/{e['id']}/{path}").status_code, 404)
+        for who in (self.ADMIN, self.BOTH):
+            self.as_(who)
+            self.assertEqual(self.get(e["id"]).status_code, 200)
+            self.assertEqual(len(self.client.get("/api/intel/search?q=refinery").json()["results"]), 1)
+
+    def test_lifting_restricted_is_the_owners_call(self):
+        self.as_(self.CLEARED)
+        e = self.publish(visibility="restricted")
+        self.client.put(f"/api/intel/entries/{e['id']}/people", json={"maintainers": ["66"]})
+        self.as_(self.BOTH)
+        r = self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "x", "base_rev": 1, "visibility": "org"})
+        self.assertEqual(r.status_code, 403)
+        self.as_(self.CLEARED)
+        r = self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "x", "base_rev": 1, "visibility": "org"})
+        self.assertEqual(r.json()["visibility"], "org")
+
+    def test_restricted_entry_only_goes_to_cleared_people(self):
+        self.as_(self.CLEARED)
+        e = self.publish(visibility="restricted")
+        for body in ({"owner_id": "22"}, {"maintainers": ["22"]}):
+            r = self.client.put(f"/api/intel/entries/{e['id']}/people", json=body)
+            self.assertEqual(r.status_code, 422, body)
+        r = self.client.put(f"/api/intel/entries/{e['id']}/people", json={"maintainers": ["66"]})
+        self.assertEqual([m["id"] for m in r.json()["maintainers"]], ["66"])
+
+    # ---- review gate ----
+    def test_gate_sends_a_publish_to_review(self):
+        self.gate()
+        e = self.publish()
+        self.assertEqual((e["status"], e["rev"]), ("in_review", 0))
+        self.assertEqual(self.client.get("/api/intel/entries?section=library").json()["entries"], [])
+        drafts = self.client.get("/api/intel/entries?section=drafts").json()["entries"]
+        self.assertEqual([d["status"] for d in drafts], ["in_review"])
+        # Frozen while waiting; not visible to other members.
+        self.assertEqual(self.client.put(f"/api/intel/entries/{e['id']}", json={"title": "x", "body": "y"}).status_code, 409)
+        self.assertEqual(self.client.delete(f"/api/intel/entries/{e['id']}").status_code, 409)
+        self.as_(self.OTHER)
+        self.assertEqual(self.get(e["id"]).status_code, 404)
+        self.assertEqual(self.client.get("/api/intel/review").status_code, 403)
+        self.assertEqual(self.client.post(f"/api/intel/entries/{e['id']}/approve").status_code, 404)
+        self.as_(self.REVIEWER)
+        q = self.client.get("/api/intel/review").json()["items"]
+        self.assertEqual([(i["id"], i["review_type"]) for i in q], [(e["id"], "new")])
+        r = self.client.post(f"/api/intel/entries/{e['id']}/approve").json()
+        self.assertEqual((r["status"], r["rev"], r["patch"]["written"]), ("published", 1, "4.3.0"))
+        rev = db.intel_revision(e["id"], 1)
+        self.assertEqual((rev["editor_id"], rev["approved_by"]), ("11", "55"))
+        self.assertEqual(self.client.get("/api/intel/review").json()["items"], [])
+
+    def test_gate_is_per_kind_and_reviewers_bypass(self):
+        self.gate()
+        db.set_setting("intel_review_kinds", json.dumps(["tactic"]))
+        self.assertEqual(self.publish()["status"], "published")          # procedure: not gated now
+        self.assertEqual(app.INTEL_REVIEW_KINDS_DEFAULT, ("procedure", "tactic", "debrief"))  # reports exempt
+        db.set_setting("intel_review_kinds", "")
+        for who in (self.REVIEWER, self.ADMIN):
+            self.as_(who)
+            self.assertEqual(self.publish(title=f"by {who['username']}")["status"], "published")
+
+    def test_return_then_resubmit_and_withdraw(self):
+        self.gate()
+        e = self.publish()
+        self.as_(self.REVIEWER)
+        self.assertEqual(self.client.post(f"/api/intel/entries/{e['id']}/return", json={"note": ""}).status_code, 422)
+        r = self.client.post(f"/api/intel/entries/{e['id']}/return", json={"note": "Add the QED step"})
+        self.assertEqual(r.json()["status"], "draft")
+        self.as_(self.OWNER)
+        v = self.get(e["id"]).json()
+        self.assertEqual(v["review_note"]["note"], "Add the QED step")
+        r = self.client.put(f"/api/intel/entries/{e['id']}", json={"title": e["title"], "body": "now with QED", "publish": True})
+        self.assertEqual(r.json()["status"], "in_review")
+        self.assertNotIn("review_note", r.json())
+        r = self.client.post(f"/api/intel/entries/{e['id']}/withdraw")
+        self.assertEqual(r.json()["status"], "draft")
+
+    def test_major_revision_waits_and_live_text_stays(self):
+        e = self.publish(body="Hold at 8 km.")
+        self.gate()
+        r = self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "Hold at 12 km.", "base_rev": 1, "major": True, "note": "new range"})
+        v = r.json()
+        self.assertEqual((v["rev"], v["body_md"]), (1, "Hold at 8 km."))
+        self.assertTrue(v["pending"]["mine"])
+        # Minor edits still apply straight away (and move the live rev on).
+        self.client.put(f"/api/intel/entries/{e['id']}", json={"title": e["title"], "body": "Hold at 8 km!", "base_rev": 1})
+        # Someone else's major revision can't stack on top of a pending one.
+        self.client.put(f"/api/intel/entries/{e['id']}/people", json={"maintainers": ["22"]})
+        self.as_(self.OTHER)
+        r = self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "x", "base_rev": 2, "major": True, "note": "mine"})
+        self.assertEqual(r.status_code, 409)
+        self.as_(self.REVIEWER)
+        q = self.client.get("/api/intel/review").json()["items"]
+        self.assertEqual((q[0]["review_type"], q[0]["moved_on"]), ("revision", True))
+        d = self.client.get(f"/api/intel/entries/{e['id']}/review").json()
+        self.assertIn("<ins>", d["diff"])
+        v = self.client.post(f"/api/intel/entries/{e['id']}/approve").json()
+        self.assertEqual((v["rev"], v["body_md"]), (3, "Hold at 12 km."))
+        self.assertNotIn("pending", v)
+        revs = self.client.get(f"/api/intel/entries/{e['id']}/revisions").json()["revisions"]
+        self.assertEqual([r["rev"] for r in revs], [3, 2, 1])
+        self.assertEqual([r["approved_by_name"] for r in revs], ["Reviewer", None, None])
+        self.assertNotIn("approved_by", revs[0])
+
+    def test_returned_revision_note_reaches_the_editor(self):
+        e = self.publish()
+        self.gate()
+        self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "rewrite", "base_rev": 1, "major": True, "note": "rewrite"})
+        self.as_(self.REVIEWER)
+        self.client.post(f"/api/intel/entries/{e['id']}/return", json={"note": "Too vague"})
+        self.as_(self.OWNER)
+        v = self.get(e["id"]).json()
+        self.assertEqual((v["body_md"], v["review_note"]["note"]), ("Break at QT exit.", "Too vague"))
+        self.assertNotIn("pending", v)
+
+    def test_uncleared_reviewer_never_sees_restricted_submissions(self):
+        self.gate()
+        self.as_(self.CLEARED)
+        e = self.publish(visibility="restricted")
+        self.assertEqual(e["status"], "in_review")
+        self.as_(self.REVIEWER)                     # reviewer role, no clearance
+        self.assertEqual(self.client.get("/api/intel/review").json()["items"], [])
+        self.assertEqual(self.client.post(f"/api/intel/entries/{e['id']}/approve").status_code, 404)
+        self.as_(self.BOTH)
+        self.assertEqual(len(self.client.get("/api/intel/review").json()["items"]), 1)
+
+    # ---- Doctrine ----
+    def test_doctrine_is_a_reviewers_mark(self):
+        e = self.publish()
+        self.assertEqual(self.client.post(f"/api/intel/entries/{e['id']}/doctrine", json={"on": True}).status_code, 403)
+        self.as_(self.REVIEWER)
+        v = self.client.post(f"/api/intel/entries/{e['id']}/doctrine", json={"on": True}).json()
+        self.assertEqual((v["doctrine"], v["doctrine_by"]), (True, "Reviewer"))
+        self.as_(self.OWNER)
+        # A minor edit keeps it; an unreviewed major change un-marks it.
+        v = self.client.put(f"/api/intel/entries/{e['id']}", json={"title": e["title"], "body": "typo", "base_rev": 1}).json()
+        self.assertTrue(v["doctrine"])
+        v = self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "new plan", "base_rev": 2, "major": True, "note": "new plan"}).json()
+        self.assertFalse(v["doctrine"])
+
+    # ---- settings + me ----
+    def test_settings_and_access_flags(self):
+        self.as_(self.ADMIN)
+        r = self.client.post("/api/settings", json={"intel_clearance_roles": [{"id": "nope"}]})
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post("/api/settings", json={"intel_review_kinds": ["poem"]})
+        self.assertEqual(r.status_code, 400)
+        r = self.client.post("/api/settings", json={
+            "intel_reviewer_roles": [{"id": f"<@&{self.REVIEW_ROLE}>", "label": "@Reviewers"}],
+            "intel_review_required": True, "intel_review_kinds": ["report", "procedure"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        # The POST answers with the same block, so the panel re-renders from it.
+        self.assertEqual(r.json()["intel_review_kinds"], ["procedure", "report"])
+        s = self.client.get("/api/settings").json()
+        self.assertEqual(s["intel_reviewer_roles"], [{"id": self.REVIEW_ROLE, "label": "Reviewers"}])
+        self.assertEqual(s["intel_review_kinds"], ["procedure", "report"])
+        self.as_(self.REVIEWER)
+        self.assertEqual(app.intel_access(self.REVIEWER),
+                         {"cleared": False, "reviewer": True, "review_kinds": ["procedure", "report"]})
+        self.assertEqual(app.intel_access(self.CLEARED)["cleared"], True)
+
+    def test_login_snapshots_roles(self):
+        app.members_dir.upsert({"id": "77", "username": "new", "display_name": "New",
+                                "roles": [self.CLEAR_ROLE]})
+        try:
+            self.assertTrue(app.intel_cleared_id("77"))
+            self.assertEqual(json.loads(db.get_member("77")["discord_roles"]), [self.CLEAR_ROLE])
+        finally:
+            app.members_dir.by_id.pop("77", None)
+
+
+    def test_parallel_reads_share_the_connection_safely(self):
+        """The review page loads an entry and its review in parallel; sync
+        routes run on a thread pool over ONE sqlite connection, and unlocked
+        reads came back as None (a 500). Readers now hold db._lock."""
+        import threading
+        e = self.publish()
+        errors = []
+
+        def hammer():
+            try:
+                for _ in range(150):
+                    got = db.intel_get_entry(e["id"])
+                    assert got and got["id"] == e["id"], got
+                    db.intel_list(status="published", restricted_ok=True)
+                    db.intel_revisions(e["id"])
+            except Exception as exc:  # noqa: BLE001 — collected for the assert
+                errors.append(repr(exc))
+
+        def writer():
+            for i in range(60):
+                db.set_setting("intel_review_kinds", "" if i % 2 else "procedure")
+
+        threads = [threading.Thread(target=hammer) for _ in range(6)] + [threading.Thread(target=writer)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
