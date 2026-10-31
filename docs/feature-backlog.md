@@ -16,7 +16,7 @@ historical design prose that used to live here is preserved verbatim in
 
 ## Now / next
 
-### Org blueprint readiness + unlock goals 🔨 BUILT (2026-09-12, unreleased)
+### Org blueprint readiness + unlock goals ✅ SHIPPED v1.13.0 (2026-09-12)
 
 An org's real goal ("Priority One — Recco Battaglia blueprint initiative":
 5 mining recipes, all Industry members push Battaglia rep until a majority
@@ -32,7 +32,7 @@ majority is ready" becomes a real bar; (3) the existing gather goal for the
 crafting phase (List / Gather already seed it). Built same day, playstyle-
 scoped target as the user chose: [blueprint-readiness.md](blueprint-readiness.md).
 
-### Blueprint library table 🔨 BUILT (unreleased)
+### Blueprint library table ✅ SHIPPED v1.13.0 (2026-09-12)
 
 User request 2026-09-12: `#/blueprints` was an unordered list (name · category
 · Gather · Remove). Now a grouped, sortable, filterable table with the UEX
@@ -40,7 +40,7 @@ spec join, a craftable-now column off free stock (best-quality-first fill,
 weakest-input headline quality) and a **List** action that seeds a
 marketplace sale at that quality. Design: [blueprint-library.md](blueprint-library.md).
 
-### 151. Inventory item quality ✅ all 5 steps BUILT · dev-server test pending, unreleased
+### 151. Inventory item quality ✅ SHIPPED v1.13.0 (2026-09-12, user-verified live)
 
 User request, 2026-09-12. A holding is `(owner, item, location)`, so a second
 quality lot of the same ore **overwrites** the first (`upsert_inventory` SETs
@@ -51,7 +51,14 @@ goals already stamp `min_q` per line but progress never reads it. Design:
 the marketplace crafted blob on crafted holdings, derived subkind + band, then
 goals gate on it, craft preview reads pledged lots, listings/rollups follow.
 
-### 48. Inventory pickup runs (inventory/goal → cargo planner) 🔨 deliver half SHIPPED to dev (#272) · sell mode BUILT (2026-10-17, unreleased)
+### 49. Goal custody: hand delivered materials to a holder 📐 DESIGN (2026-10-21)
+User report: deleting a holding after delivering it to an org goal withdraws
+the contribution (`delete_inventory` drops its allocations), so a goal at
+100/500 drops to 0/500. Design: [goal-custody.md](goal-custody.md). Two-step
+donate → receive (receiver sets location), custodian per transfer, completion
+disposition chosen by the owner, org-holdings category in the rollup. Five slices.
+
+### 48. Inventory pickup runs (inventory/goal → cargo planner) ✅ deliver half + sell mode SHIPPED v1.22.0 (2026-10-18)
 Player request: pick your own holdings at known locations → an efficient
 collect-and-deliver route, usually to an org goal's drop-off once it fills.
 It's a **pre-filled hand-off to the existing cargo planner** (holding →
