@@ -563,6 +563,241 @@
     #intel-tabs { width: 100%; overflow-x: auto; }
     #intel-tabs .rm-tab { white-space: nowrap; padding: 6px 10px; }
   }
+
+  /* ---- Intelligence: lists, reading view, editor, history (#50 slice 1) ---- */
+  .ix-ico { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8;
+    stroke-linecap: round; stroke-linejoin: round; vertical-align: -3px; }
+  #intel-know { display: grid; gap: 14px; align-content: start; }
+  #intel-know[hidden] { display: none; }
+  .intel-search { margin-left: auto; position: relative; flex: 1 1 240px; max-width: 380px; }
+  .intel-search .ix-ico { position: absolute; left: 10px; top: 50%; transform: translateY(-50%);
+    color: var(--dim); pointer-events: none; }
+  .intel-search input { width: 100%; padding-left: 32px; }
+  .intel-search[hidden], .ix-new[hidden] { display: none; }
+  button.ix-primary, a.ix-primary { background: var(--accent); color: var(--ink-on-accent); border: 1px solid var(--accent);
+    font-weight: 700; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 7px 14px; border-radius: 6px; font-size: 12px; text-decoration: none; }
+  button.ix-primary:hover, a.ix-primary:hover { filter: brightness(1.08); }
+  .ix-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; }
+  a.ix-btn { background: var(--panel2); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+    font-size: 12px; text-decoration: none; }
+  a.ix-btn:hover { border-color: var(--accent); }
+  .ix-panel-h { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .ix-panel-h h2 { margin: 0; }
+  .ix-panel-h .muted { font-size: 11px; }
+  /* list rows (feed, library, search, drafts) */
+  .ix-list { display: grid; margin-top: 6px; }
+  .ix-row { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; gap: 0 14px; padding: 11px 8px;
+    border-top: 1px solid var(--border-soft); border-radius: 6px; color: inherit; text-decoration: none; }
+  .ix-list > .ix-row:first-child, .ix-group-h + .ix-row { border-top: none; }
+  .ix-row:hover { background: var(--inset-tint); }
+  .ix-row:hover .ix-t { color: var(--accent); }
+  .ix-row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
+  .ix-kind { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim);
+    display: flex; gap: 6px; align-items: flex-start; padding-top: 2px; }
+  .ix-kind .ix-ico { width: 14px; height: 14px; color: var(--text); margin-top: -1px; }
+  .ix-t { font-size: 14px; color: var(--text); line-height: 1.35; transition: color .12s; }
+  .ix-verb { color: var(--dim); font-size: 12px; }
+  .ix-teaser { font-size: 12px; color: var(--dim); margin-top: 3px; line-height: 1.45; overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .ix-teaser mark, .ix-snip mark { background: var(--accent-wash); color: var(--text); border-radius: 2px; padding: 0 1px; }
+  .ix-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px; margin-top: 6px; font-size: 11px; color: var(--dim); }
+  .ix-meta b { color: var(--text); font-weight: 400; }
+  .ix-when { font-size: 11px; color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; padding-top: 2px; text-align: right; }
+  .ix-tag { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim);
+    border: 1px solid var(--border); border-radius: 3px; padding: 0 6px; line-height: 16px; white-space: nowrap; }
+  .ix-tag.free { text-transform: none; letter-spacing: 0; }
+  .ix-tag.draft { color: var(--warn); border-color: var(--warn); }
+  .ix-stale { color: var(--warn); display: inline-flex; gap: 5px; align-items: center; }
+  .ix-stale .ix-ico { width: 12px; height: 12px; }
+  .ix-group-h { font-size: 11px; letter-spacing: 1px; color: var(--dim); padding: 16px 8px 6px;
+    border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; text-transform: uppercase; }
+  .ix-list > .ix-group-h:first-child { padding-top: 4px; }
+  .ix-filters { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin: 10px 0 2px; }
+  .ix-chip { font-size: 11px; padding: 4px 10px; border-radius: 14px; border: 1px solid var(--border);
+    background: transparent; color: var(--dim); display: inline-flex; align-items: center; gap: 6px; }
+  .ix-chip:hover { color: var(--text); }
+  .ix-chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+  .ix-chip .ix-ico { width: 13px; height: 13px; }
+  .ix-filters .sp { flex: 1; }
+  .ix-filters select.ti { padding: 4px 8px; font-size: 12px; }
+  .ix-status { font-size: 12px; color: var(--dim); padding: 18px 8px; }
+  .ix-status.err { color: var(--bad); }
+  /* reading view */
+  .ix-crumb { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--dim); }
+  .ix-crumb a { color: var(--accent); text-decoration: none; }
+  .ix-crumb a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .ix-grid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 14px; align-items: start; }
+  .panel.ix-article { padding: 0; min-width: 0; }
+  .ix-head { padding: 18px 22px 16px; border-bottom: 1px solid var(--border); }
+  .ix-kindline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px;
+    letter-spacing: .1em; color: var(--dim); text-transform: uppercase; }
+  .ix-kindline .ix-ico { color: var(--text); }
+  .ix-title { font-size: 24px; line-height: 1.25; font-weight: 600; margin: 10px 0 8px; text-wrap: balance;
+    max-width: 40ch; color: var(--text); letter-spacing: 0; }
+  .ix-lead { font-size: 14px; color: var(--dim); margin: 0 0 12px; max-width: 72ch; line-height: 1.55; }
+  .ix-by { font-size: 12px; color: var(--dim); display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center;
+    font-variant-numeric: tabular-nums; }
+  .ix-by b { color: var(--text); font-weight: 400; }
+  .ix-by button { padding: 2px 9px; font-size: 11px; }
+  .ix-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .ix-actions .sp { flex: 1; }
+  .ix-prose { padding: 18px 22px 24px; font-size: 14px; line-height: 1.7; }
+  .ix-prose > * { max-width: 72ch; }
+  .ix-prose p { margin: 0 0 1em; }
+  .ix-prose h2 { font-size: 13px; letter-spacing: 1px; text-transform: uppercase; color: var(--text); margin: 1.9em 0 .6em; scroll-margin-top: 16px; }
+  .ix-prose h3 { font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); margin: 1.6em 0 .5em; scroll-margin-top: 16px; }
+  .ix-prose > h2:first-child, .ix-prose > h3:first-child { margin-top: 0; }
+  .ix-prose .ix-anchor { margin-left: 8px; color: var(--dim); text-decoration: none; font-weight: 400; opacity: 0; }
+  .ix-prose h2:hover .ix-anchor, .ix-prose h3:hover .ix-anchor, .ix-prose .ix-anchor:focus-visible { opacity: 1; }
+  .ix-prose ul, .ix-prose ol { padding-left: 1.4em; margin: 0 0 1em; }
+  .ix-prose li { margin: .25em 0; }
+  .ix-prose li::marker { color: var(--dim); }
+  .ix-prose li.task-item { list-style: none; margin-left: -1.4em; }
+  .intel-task { display: inline-block; width: 13px; height: 13px; border: 1px solid var(--dim); border-radius: 3px;
+    margin-right: 9px; vertical-align: -2px; position: relative; }
+  .intel-task[data-done="1"] { background: var(--accent); border-color: var(--accent); }
+  .intel-task[data-done="1"]::after { content: ""; position: absolute; left: 3.5px; top: 0.5px; width: 3.5px; height: 7px;
+    border: solid var(--ink-on-accent); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+  .ix-prose blockquote { margin: 0 0 1em; padding: 2px 0 2px 14px; border-left: 1px solid var(--border); color: var(--dim); }
+  .ix-prose code { background: var(--panel2); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; font-size: 12px; }
+  .ix-prose pre { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; overflow: auto; margin: 0 0 1em; }
+  .ix-prose pre code { border: 0; background: none; padding: 0; }
+  .ix-prose .table-x { margin: 0 0 1em; }
+  .ix-prose table { border-collapse: collapse; font-size: 13px; }
+  .ix-prose th { text-align: left; font-size: 11px; color: var(--dim); letter-spacing: 1px; font-weight: 400;
+    border-bottom: 1px solid var(--border); padding: 6px 14px 6px 0; }
+  .ix-prose td { border-bottom: 1px solid var(--border-soft); padding: 7px 14px 7px 0; vertical-align: top; }
+  .ix-prose hr { border: 0; border-top: 1px solid var(--border); margin: 1.6em 0; }
+  .ix-prose a { color: var(--accent); text-underline-offset: 3px; text-decoration-thickness: 1px; }
+  .ix-prose .ext-host { color: var(--dim); font-size: 11px; }
+  .ix-ref { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text); white-space: nowrap;
+    border: 1px solid var(--border); background: var(--panel2); border-radius: 4px; padding: 0 7px; line-height: 20px; text-decoration: none; }
+  .ix-ref .ix-ico { width: 12px; height: 12px; color: var(--accent); }
+  a.ix-ref:hover { border-color: var(--accent); }
+  .ix-imglink { display: inline-flex; align-items: center; gap: 6px; border: 1px dashed var(--border); border-radius: 6px;
+    padding: 4px 10px; font-size: 12px; text-decoration: none; }
+  .ix-imglink .ix-ico { color: var(--accent); }
+  .ix-rail { display: grid; gap: 14px; position: sticky; top: 14px; }
+  .ix-toc { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 12px; }
+  .ix-toc a { color: var(--dim); text-decoration: none; display: block; padding: 3px 0; line-height: 1.4; }
+  .ix-toc a:hover { color: var(--accent); }
+  .ix-toc .lv3 { padding-left: 12px; }
+  .ix-dl { display: grid; grid-template-columns: 86px minmax(0, 1fr); margin: 0; font-size: 12px; line-height: 1.45; }
+  .ix-dl dt, .ix-dl dd { margin: 0; padding: 7px 0; border-top: 1px solid var(--border-soft); }
+  .ix-dl dt { color: var(--dim); font-size: 11px; letter-spacing: 1px; padding-top: 8px; }
+  .ix-dl > :nth-child(-n+2) { border-top: none; padding-top: 0; }
+  .ix-dl dd .ix-tag { margin: 0 4px 4px 0; display: inline-block; }
+  /* history */
+  .ix-revs { list-style: none; margin: 0; padding: 0; }
+  /* The rail is ~280 px: the actions sit under the note, never beside it. */
+  .ix-revs li { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 6px 8px; padding: 10px 6px;
+    border-top: 1px solid var(--border-soft); font-size: 12px; align-items: start; border-radius: 6px; }
+  .ix-revs li:first-child { border-top: none; }
+  .ix-revs li.sel { background: var(--accent-wash); }
+  .ix-revs .rv { font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600; }
+  .ix-revs .note { color: var(--text); }
+  .ix-revs small { display: block; color: var(--dim); font-size: 11px; margin-top: 2px; }
+  .ix-revs .acts { grid-column: 2; display: flex; gap: 6px; flex-wrap: wrap; }
+  .ix-revs .acts button { padding: 3px 9px; font-size: 11px; }
+  .ix-major { font-size: 11px; color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 0 5px; margin-left: 6px; }
+  .ix-diff { margin: 10px 0 0; padding: 12px 14px; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px;
+    font: inherit; font-size: 12px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; max-height: 70vh; overflow: auto; }
+  .ix-diff ins { background: color-mix(in srgb, var(--good) 22%, transparent); color: var(--text); text-decoration: none; }
+  .ix-diff del { background: var(--bad-wash); color: var(--bad); }
+  .ix-diff-h { font-size: 12px; color: var(--dim); display: flex; gap: 6px 14px; flex-wrap: wrap; margin-top: 10px; }
+  .ix-diff-h b { color: var(--text); font-weight: 400; }
+  /* editor */
+  .ix-ed-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
+  .panel.ix-ed { padding: 0; min-width: 0; }
+  .ix-ed-head { padding: 16px 18px 14px; display: grid; gap: 10px; }
+  input.ti.ix-ed-title { font-size: 18px; font-weight: 600; width: 100%; }
+  .ix-ed-head input.ti, .ix-ed-head select.ti { width: 100%; }
+  .ix-ed-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  .ix-lbl { display: grid; gap: 4px; font-size: 11px; color: var(--dim); letter-spacing: 1px; }
+  .ix-lbl > span { display: flex; justify-content: space-between; gap: 8px; }
+  .ix-lbl > span i { font-style: normal; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+  .ix-tools { display: flex; align-items: center; gap: 2px; padding: 6px 10px; border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border); background: var(--panel2); flex-wrap: wrap; position: relative; }
+  .ix-tools .sep { width: 1px; align-self: stretch; background: var(--border); margin: 3px 5px; }
+  .ix-tb { background: transparent; border: 1px solid transparent; padding: 4px 6px; min-width: 30px; height: 30px;
+    display: inline-flex; align-items: center; justify-content: center; color: var(--text); font-size: 13px; }
+  .ix-tb:hover { border-color: var(--border); background: var(--panel); }
+  .ix-tb[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+  .ix-tb .ix-ico { width: 15px; height: 15px; }
+  .ix-tools .seg { margin-left: auto; }
+  .ix-tools .seg button { font-size: 11px; letter-spacing: .06em; padding: 5px 10px; }
+  .ix-pop { position: absolute; z-index: 6; top: calc(100% + 6px); left: 10px; width: min(440px, calc(100% - 20px));
+    background: var(--panel); border: 1px solid var(--accent); border-radius: 8px; box-shadow: 0 8px 22px rgba(0,0,0,.45);
+    padding: 12px; display: grid; gap: 8px; }
+  .ix-pop[hidden] { display: none; }
+  .ix-pop input.ti { width: 100%; }
+  .ix-pop .row { display: flex; gap: 8px; justify-content: flex-end; }
+  .ix-hostcheck { font-size: 12px; line-height: 1.45; display: flex; gap: 6px; align-items: flex-start; color: var(--dim); }
+  .ix-hostcheck .ix-ico { width: 14px; height: 14px; margin-top: 2px; }
+  .ix-hostcheck.ok { color: var(--good); }
+  .ix-hostcheck.bad { color: var(--bad); }
+  textarea.ti.ix-area { width: 100%; min-height: 480px; border: 0; border-radius: 0; background: var(--panel);
+    padding: 16px 18px; font-size: 13px; line-height: 1.65; display: block; tab-size: 2; outline: none; }
+  textarea.ti.ix-area:focus { outline: none; box-shadow: inset 0 0 0 1px var(--accent); }
+  .ix-preview { min-height: 480px; }
+  .ix-preview[hidden], textarea.ti.ix-area[hidden] { display: none; }   /* same specificity as the display rule above */
+  .ix-ed-foot { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 9px 18px;
+    border-top: 1px solid var(--border); font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .ix-ed-foot .saved { margin-left: auto; }
+  .ix-restore { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; padding: 10px 18px;
+    background: var(--warn-wash); border-bottom: 1px solid var(--border); color: var(--text); }
+  .ix-restore[hidden] { display: none; }
+  .ix-ed-rail { display: grid; gap: 14px; position: sticky; top: 14px; }
+  .ix-fld { display: grid; gap: 5px; margin-bottom: 12px; }
+  .ix-fld > span { font-size: 11px; color: var(--dim); letter-spacing: 1px; }
+  .ix-fld .seg { display: flex; }
+  .ix-fld .seg button { flex: 1; font-size: 11px; letter-spacing: .06em; }
+  .ix-fld small { font-size: 11px; color: var(--dim); line-height: 1.45; }
+  .ix-fld input.ti { width: 100%; }
+  .ix-save-err { font-size: 12px; color: var(--bad); line-height: 1.45; margin: 8px 0 0; }
+  .ix-save-err[hidden] { display: none; }
+  .ix-save-acts { display: flex; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+  .ix-save-acts .ix-primary { flex: 1; }
+  .ix-people { display: grid; gap: 8px; font-size: 12px; }
+  .ix-people .who { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .ix-person { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); border-radius: 12px;
+    padding: 1px 4px 1px 9px; background: var(--panel2); font-size: 12px; }
+  .ix-person button { border: 0; background: none; padding: 0 5px; color: var(--dim); font-size: 13px; line-height: 1; }
+  .ix-person button:hover { color: var(--bad); }
+  .ix-pick { position: relative; }
+  .ix-pick ul { list-style: none; margin: 4px 0 0; padding: 4px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--panel); display: grid; gap: 2px; }
+  .ix-pick ul[hidden] { display: none; }
+  .ix-pick li button { width: 100%; text-align: left; background: transparent; border-color: transparent; }
+  .ix-pick li button:hover { border-color: var(--accent); }
+  .ix-toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 50; background: var(--panel2);
+    border: 1px solid var(--accent); border-radius: 8px; box-shadow: 0 14px 40px rgba(0,0,0,.5); padding: 10px 14px;
+    font-size: 12px; line-height: 1.5; display: flex; gap: 12px; align-items: center; max-width: min(640px, calc(100% - 32px)); }
+  .ix-toast[hidden] { display: none; }
+  .ix-toast b { color: var(--accent); font-weight: 400; }
+  .ix-toast .warn { color: var(--warn); }
+  .ix-toast button { padding: 3px 9px; font-size: 11px; white-space: nowrap; }
+  @media (max-width: 860px) {
+    .ix-grid, .ix-ed-grid { grid-template-columns: minmax(0, 1fr); }
+    .ix-rail, .ix-ed-rail { position: static; }
+  }
+  @media (max-width: 600px) {
+    .intel-search { flex-basis: 100%; max-width: none; order: 3; }
+    .ix-row { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 11px 4px; }
+    .ix-row .ix-kind { grid-column: 1; grid-row: 1; }
+    .ix-row .ix-when { grid-column: 2; grid-row: 1; }
+    .ix-row .ix-body { grid-column: 1 / 3; grid-row: 2; }
+    .ix-head, .ix-prose { padding-left: 14px; padding-right: 14px; }
+    .ix-title { font-size: 20px; }
+    .ix-ed-head { padding: 14px 12px; }
+    .ix-ed-meta { grid-template-columns: minmax(0, 1fr); }
+    .ix-tools { padding: 6px; row-gap: 6px; }
+    .ix-tools .seg { order: -1; width: 100%; margin: 0; display: flex; }
+    .ix-tools .seg button { flex: 1; }
+    .ix-tools .sep { display: none; }
+    textarea.ti.ix-area, .ix-preview { min-height: 55vh; padding-left: 12px; padding-right: 12px; }
+  }
   .intel-hero { display: flex; flex-direction: column; gap: 4px; padding: 20px 22px; margin-bottom: 12px;
     background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
     text-decoration: none; transition: border-color .12s; }
@@ -5144,6 +5379,32 @@
        older #/intel/<slug> route, unchanged). Bare #/intel opens the half the
        member last used (scIntelHalf); a first visit lands on the Feed. -->
   <div id="intel-view" hidden>
+    <!-- Intelligence glyphs: one stroke family, drawn (no emoji), so a kind reads
+         the same in the feed, the library and an entry's header. -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+      <symbol id="ix-i-procedure" viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10"/><path d="M3.5 6l1.6 1.6L8 4.7M3.5 12l1.6 1.6L8 10.7"/><path d="M4 18h3"/></symbol>
+      <symbol id="ix-i-tactic" viewBox="0 0 24 24"><path d="M4 17l5-5-5-5M12 17l5-5-5-5"/></symbol>
+      <symbol id="ix-i-report" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 4.9a10 10 0 0 1 0 14.2"/></symbol>
+      <symbol id="ix-i-dossier" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M7 13h6"/></symbol>
+      <symbol id="ix-i-debrief" viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5"/><path d="M3.5 3.5v5h5"/><path d="M12 7.5V12l3 2"/></symbol>
+      <symbol id="ix-i-rfi" viewBox="0 0 24 24"><path d="M20.5 12a8.5 8.5 0 0 1-12.3 7.6L3.5 20.5l1-4.5A8.5 8.5 0 1 1 20.5 12z"/><path d="M9.8 9.7a2.3 2.3 0 0 1 4.4.9c0 1.5-2.2 2-2.2 3.2"/><path d="M12 16.4h.01"/></symbol>
+      <symbol id="ix-i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></symbol>
+      <symbol id="ix-i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="ix-i-patch" viewBox="0 0 24 24"><path d="M12 7v5.5M12 16h.01"/><circle cx="12" cy="12" r="8.5"/></symbol>
+      <symbol id="ix-i-edit" viewBox="0 0 24 24"><path d="M4 20l1-4.5L16 4.5l3.5 3.5L8.5 19z"/><path d="M13.5 7l3.5 3.5"/></symbol>
+      <symbol id="ix-i-history" viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3.5 8.5"/><path d="M3.5 3.5v5h5"/><path d="M12 8v4.5"/></symbol>
+      <symbol id="ix-i-link" viewBox="0 0 24 24"><path d="M10 14a4.5 4.5 0 0 0 6.4.2l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2"/><path d="M14 10a4.5 4.5 0 0 0-6.4-.2l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"/></symbol>
+      <symbol id="ix-i-check" viewBox="0 0 24 24"><path d="M4.5 12.5l4.5 4.5L19.5 6.5"/></symbol>
+      <symbol id="ix-i-alert" viewBox="0 0 24 24"><path d="M12 3.5l9.5 16.5h-19z"/><path d="M12 10v4.5M12 17.4h.01"/></symbol>
+      <symbol id="ix-i-image" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5.5-5.5L6 19"/></symbol>
+      <symbol id="ix-i-list" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r=".6"/><circle cx="4.5" cy="12" r=".6"/><circle cx="4.5" cy="18" r=".6"/></symbol>
+      <symbol id="ix-i-olist" viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10"/><path d="M4 4.5h1.5V9M4 9h3M4 14.5c.5-.6 2.8-.8 2.8.7 0 1.3-2.8 2-2.8 3.3h3"/></symbol>
+      <symbol id="ix-i-task" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M8 12.5l3 3 5.5-6"/></symbol>
+      <symbol id="ix-i-quote" viewBox="0 0 24 24"><path d="M5 6v12M10 8h9M10 12h9M10 16h6"/></symbol>
+      <symbol id="ix-i-code" viewBox="0 0 24 24"><path d="M8.5 7L3.5 12l5 5M15.5 7l5 5-5 5"/></symbol>
+      <symbol id="ix-i-table" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="1.5"/><path d="M3 9.5h18M3 14.5h18M9 9.5v10"/></symbol>
+      <symbol id="ix-i-ref" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 2.5v5M12 16.5v5M2.5 12h5M16.5 12h5"/></symbol>
+    </defs></svg>
     <div class="panel intel-mast" id="intel-mast">
       <div class="intel-mast-row">
         <span class="rm-mast-name">ORG INTEL</span>
@@ -5151,6 +5412,13 @@
           <button type="button" data-half="intel" aria-pressed="true">INTELLIGENCE</button>
           <button type="button" data-half="activity" aria-pressed="false">ACTIVITY</button>
         </span>
+        <label class="intel-search" id="intel-search-wrap" hidden>
+          <svg class="ix-ico" aria-hidden="true"><use href="#ix-i-search"/></svg>
+          <input class="ti" id="intel-search" type="search" maxlength="200" autocomplete="off"
+            placeholder="Search the org's knowledge…" aria-label="Search Intelligence">
+        </label>
+        <a class="ix-primary ix-new" id="intel-new" href="#/intel/new/procedure" hidden>
+          <svg class="ix-ico" aria-hidden="true"><use href="#ix-i-plus"/></svg>New</a>
       </div>
       <div class="intel-mast-row" id="intel-know-row">
         <nav class="rm-tabs" id="intel-tabs" aria-label="Intelligence sections">
@@ -26903,6 +27171,22 @@ let intelBoard = "mapping";   // which leaderboard the Boards section shows
 // Org Intel's two halves (#50). Every ACTIVITY slug predates the split and keeps
 // its flat route; INTELLIGENCE's slugs don't collide with them.
 const INTEL_KNOW_SECS = ["feed", "library", "dossiers", "rfi"];
+// Intelligence's deeper routes (#50 slice 1): an entry, its history, its
+// editor, a new entry, search results. All sit under the Library tab.
+const INTEL_KNOW_VIEWS = ["entry", "history", "edit", "new", "search"];
+let intelRoute = {};   // the parsed params of the current deeper route
+function intelParseRoute(sub) {
+  if (sub == null) return null;
+  let m = /^e\/(\d+)(?:-[^/]*)?(?:\/(history|edit|sec-[a-z0-9-]+))?$/.exec(sub);
+  if (m) {
+    intelRoute = { id: +m[1], anchor: m[2] && m[2].startsWith("sec-") ? m[2] : null };
+    return m[2] === "history" || m[2] === "edit" ? m[2] : "entry";
+  }
+  m = /^new\/(procedure|tactic)$/.exec(sub);
+  if (m) { intelRoute = { kind: m[1] }; return "new"; }
+  if (sub === "search") { intelRoute = {}; return "search"; }
+  return null;
+}
 const INTEL_ACT_SECS = ["overview", "mapping", "hauling", "trading", "surveying",
   "market", "boards", "directory"];
 // The half a member last used: a per-browser convenience (like scTheme), so it
@@ -26946,7 +27230,8 @@ function applyView() {
   // opens the member's last half at its landing tab (first visit: the Feed).
   const intelSub = h.startsWith("#/intel/") ? h.slice(8) : null;
   const intelSec = h === "#/intel" ? (intelHalf() === "activity" ? "overview" : "feed")
-    : (INTEL_KNOW_SECS.includes(intelSub) || INTEL_ACT_SECS.includes(intelSub)) ? intelSub : null;
+    : (INTEL_KNOW_SECS.includes(intelSub) || INTEL_ACT_SECS.includes(intelSub)) ? intelSub
+    : intelParseRoute(intelSub);
   const intel = !!intelSec && authed;
   // Legal pages are public — readable before sign-in (linked from the login
   // splash), so they are NOT gated on `authed`. They also suppress the sign-in
@@ -27635,8 +27920,12 @@ function renderSurveyStats(d) {
 // Drives the section nav active state, shows the active section's view (Overview
 // + Market live inside #intel-view; Mapping / Hauling / Leaderboards reuse the
 // existing views as siblings below the nav), and loads that section's data.
+let intelCurSec = null;
 function renderIntel(section) {
-  const know = INTEL_KNOW_SECS.includes(section);
+  intelCurSec = section;
+  const know = INTEL_KNOW_SECS.includes(section) || INTEL_KNOW_VIEWS.includes(section);
+  // Deeper routes keep the Library tab lit (search lights none).
+  const tab = INTEL_KNOW_SECS.includes(section) ? section : section === "search" ? null : "library";
   const half = know ? "intel" : "activity";
   try { localStorage.setItem("scIntelHalf", half); } catch {}
   document.querySelectorAll("#intel-half button").forEach(b => {
@@ -27649,8 +27938,10 @@ function renderIntel(section) {
   $("intel-act-row").hidden = know;
   $("intel-act-intro").hidden = know;
   $("intel-know").hidden = !know;
+  $("intel-search-wrap").hidden = !know;
+  $("intel-new").hidden = !know;
   document.querySelectorAll("#intel-tabs a").forEach(a => {
-    const on = a.dataset.sec === section;
+    const on = a.dataset.sec === tab;
     a.classList.toggle("on", on);
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
@@ -27692,24 +27983,859 @@ function renderIntel(section) {
   }
 }
 
-// INTELLIGENCE half (#50). Slice 0 ships the half itself: the masthead, routes
-// and each tab's empty state. Writing arrives with the Library (slice 1).
+// INTELLIGENCE half (#50). Slice 1 = the LIBRARY: procedures + tactics, the
+// Markdown editor (toolbar, paste-to-Markdown, Write/Preview, kind templates,
+// server-side draft autosave), revisions with diff + revert, owner/maintainers,
+// the patch stamp + "Still valid on X" re-confirm, and search. Dossiers + RFI
+// keep their slice-0 empty states. The server renders + sanitizes every body
+// (intel_md.py); this module only hydrates the markers it emits.
 const INTEL_KNOW_EMPTY = {
-  feed: ["FEED", "Nothing published yet.",
-    "Reports, debriefs and procedure updates will appear here, newest first, with what's new since you last looked marked."],
-  library: ["LIBRARY", "No procedures or tactics yet.",
-    "The org's how-tos, grouped by activity: escort formations, mining checklists, the way your crews actually fly. Each one shows which patch it was written for."],
   dossiers: ["DOSSIERS", "No dossiers yet.",
     "One page per place or rival org, filled in automatically from the reports, warnings and ops that mention it."],
   rfi: ["RFI", "No questions yet.",
     "Requests for information: ask the org something, and the accepted answer stays where the next person can find it."],
 };
-function renderIntelKnow(section) {
-  const [title, lead, body] = INTEL_KNOW_EMPTY[section];
-  $("intel-know").innerHTML = `<div class="panel intel-know-empty"><h2>${title}</h2>` +
-    `<p class="lead">${lead}</p><p class="muted">${body}</p>` +
-    `<p class="note">Writing and publishing aren't switched on yet.</p></div>`;
+const INTEL_KIND = { procedure: "Procedure", tactic: "Tactic", report: "Report", dossier: "Dossier",
+  debrief: "Debrief", rfi: "RFI" };
+const INTEL_SYSTEM_OPTS = ["Stanton", "Nyx", "Pyro"];
+// Kind templates: a new entry starts from its kind's skeleton, so a procedure
+// reads like every other procedure. Swapped freely until the author types.
+const INTEL_TEMPLATE = {
+  procedure: "## Purpose\nWhat this gets done, in one or two sentences.\n\n## When to use it\n\n" +
+    "## Steps\n- [ ] First step\n- [ ] Next step\n\n## Loadout\n\n## Notes\n",
+  tactic: "## Situation\nWhat you're up against, and where.\n\n## Most likely\nWhat they usually do.\n\n" +
+    "## Most dangerous\nThe worst case worth planning for.\n\n## Counter\n- What to do about it\n\n## Loadout\n",
+};
+let intelPlaystyles = null;      // /api/playstyles, fetched once
+let intelImageHosts = [];        // IMAGE_PREVIEW_HOSTS (from /api/intel/entries)
+let intelEd = null;              // the open editor's state (null = none open)
+let intelLibFilter = { kind: "", activity: "" };
+
+const intelIco = (id, cls = "ix-ico") => `<svg class="${cls}" aria-hidden="true"><use href="#ix-i-${id}"/></svg>`;
+const intelHref = (e) => `#/intel/e/${e.id}-${encodeURIComponent(e.slug || "entry")}`;
+function intelWhen(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return "";
+  const days = Math.floor((Date.now() - d) / 86400000);
+  if (days < 1) return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  if (days < 7) return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(-days, "day");
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: days > 300 ? "numeric" : undefined });
 }
+const intelMinor = (p) => (p || "").split(".").slice(0, 2).join(".");
+// The patch an entry was written (or last re-confirmed) for; amber once the
+// org's game moved on a MINOR version.
+function intelPatchChip(p) {
+  if (!p || !p.written) return "";
+  return p.stale
+    ? `<span class="ix-stale" title="Written for ${esc(p.written)}; the org is on ${esc(p.current)}">${intelIco("alert")}` +
+      `written ${esc(intelMinor(p.written))} · now ${esc(intelMinor(p.current))}</span>`
+    : `<span title="${p.confirmed ? "Re-confirmed" : "Written"} on ${esc(p.written)}">${intelIco("patch")} ${esc(intelMinor(p.written))}</span>`;
+}
+async function intelApi(url, opts = {}) {
+  const o = { method: opts.method || "GET", headers: {} };
+  if (opts.body !== undefined) { o.headers["Content-Type"] = "application/json"; o.body = JSON.stringify(opts.body); }
+  const r = await fetch(url, o);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const det = d.detail;
+    const msg = typeof det === "string" ? det : det && det.message ? det.message
+      : Array.isArray(det) ? det.map(x => (x.msg || "").replace(/^Value error, /, "")).join("; ") : `Request failed (${r.status}).`;
+    const err = new Error(msg); err.status = r.status; err.detail = det; throw err;
+  }
+  return d;
+}
+async function intelLoadPlaystyles() {
+  if (!intelPlaystyles) {
+    try { intelPlaystyles = (await intelApi("/api/playstyles")).tags || []; } catch { intelPlaystyles = []; }
+  }
+  return intelPlaystyles;
+}
+function intelRow(e, opts = {}) {
+  const verb = opts.verb ? `<span class="ix-verb"> · ${e.revised_at && e.revised_at !== e.published_at ? "revised" : "published"}</span>` : "";
+  const draft = e.status === "draft" ? `<span class="ix-tag draft">Draft</span>` : "";
+  const meta = [draft, e.owner && e.owner.name ? `<span>by <b>${esc(e.owner.name)}</b></span>` : "",
+    e.activity ? `<span class="ix-tag">${esc(e.activity)}</span>` : "",
+    e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "",
+    ...(e.tags || []).slice(0, 4).map(t => `<span class="ix-tag free">#${esc(t)}</span>`),
+    e.status === "draft" ? "" : intelPatchChip(e.patch)].filter(Boolean).join("");
+  const teaser = opts.snippet ? `<div class="ix-teaser">${opts.snippet}</div>`   // server-escaped, <mark> only
+    : e.summary ? `<div class="ix-teaser">${esc(e.summary)}</div>` : "";
+  const href = e.status === "draft" ? `${intelHref(e)}/edit` : intelHref(e);
+  const when = e.status === "draft" ? e.updated_at : (e.revised_at || e.published_at);
+  return `<a class="ix-row" href="${href}">` +
+    `<span class="ix-kind">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind] || e.kind)}</span>` +
+    `<span class="ix-body"><span class="ix-t">${esc(e.title || "Untitled")}</span>${verb}${teaser}` +
+    (meta ? `<span class="ix-meta">${meta}</span>` : "") + `</span>` +
+    `<span class="ix-when">${esc(intelWhen(when))}</span></a>`;
+}
+const intelStatus = (msg, err) => `<div class="ix-status${err ? " err" : ""}" role="status">${esc(msg)}</div>`;
+
+function renderIntelKnow(section) {
+  const box = $("intel-know");
+  // An open editor survives re-renders of its OWN route (a hashchange that
+  // lands on the same draft, e.g. the first autosave's replaceState).
+  const edKey = section === "edit" ? `e${intelRoute.id}` : section === "new" ? `n${intelRoute.kind}` : null;
+  if (intelEd && edKey && (intelEd.key === edKey || (intelEd.id && edKey === `e${intelEd.id}`))) return;
+  if (intelEd) intelEdLeave();
+  if (section !== "search") $("intel-search").value = "";
+  if (INTEL_KNOW_EMPTY[section]) {
+    const [title, lead, body] = INTEL_KNOW_EMPTY[section];
+    box.innerHTML = `<div class="panel intel-know-empty"><h2>${title}</h2>` +
+      `<p class="lead">${lead}</p><p class="muted">${body}</p>` +
+      `<p class="note">Arrives in a later Intelligence update.</p></div>`;
+    return;
+  }
+  ({ feed: intelFeed, library: intelLibrary, search: intelSearchView, entry: intelEntryView,
+     history: intelHistory, edit: intelEditor, new: intelEditor })[section](box);
+}
+
+// ---- FEED ----
+async function intelFeed(box) {
+  box.innerHTML = `<div class="panel"><div class="ix-panel-h"><h2>FEED</h2>` +
+    `<span class="muted">Newest first: first publishes and major revisions</span></div>` +
+    `<div class="ix-list" id="ix-feed">${intelStatus("Loading…")}</div></div>`;
+  try {
+    const d = await intelApi("/api/intel/entries?section=feed");
+    intelImageHosts = d.image_hosts || intelImageHosts;
+    const el = $("ix-feed"); if (!el) return;
+    el.innerHTML = d.entries.length ? d.entries.map(e => intelRow(e, { verb: true })).join("")
+      : `<div class="intel-know-empty" style="padding:14px 8px"><p class="lead">Nothing published yet.</p>` +
+        `<p class="muted">Procedures and tactics appear here when they're published, and again when one gets a major revision.</p>` +
+        `<p style="margin-top:12px"><a class="ix-primary" href="#/intel/new/procedure">${intelIco("plus")}Write the first procedure</a></p></div>`;
+  } catch (err) { const el = $("ix-feed"); if (el) el.innerHTML = intelStatus(err.message, true); }
+}
+
+// ---- LIBRARY ----
+async function intelLibrary(box) {
+  const tags = await intelLoadPlaystyles();
+  const f = intelLibFilter;
+  const chip = (k, label, ico) => `<button type="button" class="ix-chip" data-k="${k}" aria-pressed="${f.kind === k}">` +
+    `${ico ? intelIco(ico) : ""}${label}</button>`;
+  box.innerHTML = `<div class="panel" id="ix-drafts" hidden></div>` +
+    `<div class="panel"><div class="ix-panel-h"><h2>LIBRARY</h2>` +
+    `<span class="muted">The org's procedures and tactics, by activity</span></div>` +
+    `<div class="ix-filters" role="group" aria-label="Filter the library">` +
+    chip("", "All") + chip("procedure", "Procedures", "procedure") + chip("tactic", "Tactics", "tactic") +
+    `<span class="sp"></span><select class="ti" id="ix-act" aria-label="Activity">` +
+    `<option value="">Every activity</option>` +
+    tags.map(t => `<option value="${esc(t)}"${f.activity === t ? " selected" : ""}>${esc(t)}</option>`).join("") +
+    `</select></div><div class="ix-list" id="ix-lib">${intelStatus("Loading…")}</div></div>`;
+  box.querySelectorAll(".ix-chip").forEach(b => b.onclick = () => { f.kind = b.dataset.k; intelLibrary(box); });
+  $("ix-act").onchange = (ev) => { f.activity = ev.target.value; intelLibrary(box); };
+  const q = new URLSearchParams({ section: "library" });
+  if (f.kind) q.set("kind", f.kind);
+  if (f.activity) q.set("activity", f.activity);
+  try {
+    const [lib, drafts] = await Promise.all([intelApi(`/api/intel/entries?${q}`),
+      intelApi("/api/intel/entries?section=drafts").catch(() => ({ entries: [] }))]);
+    intelImageHosts = lib.image_hosts || intelImageHosts;
+    const el = $("ix-lib"); if (!el) return;
+    const dEl = $("ix-drafts");
+    if (drafts.entries.length) {
+      dEl.hidden = false;
+      dEl.innerHTML = `<div class="ix-panel-h"><h2>YOUR DRAFTS</h2><span class="muted">Only you can see these</span></div>` +
+        `<div class="ix-list">${drafts.entries.map(e => intelRow(e)).join("")}</div>`;
+    }
+    if (!lib.entries.length) {
+      el.innerHTML = f.kind || f.activity ? intelStatus("Nothing matches that filter.")
+        : `<div class="intel-know-empty" style="padding:14px 8px"><p class="lead">No procedures or tactics yet.</p>` +
+          `<p class="muted">The org's how-tos: escort formations, mining checklists, the way your crews actually fly. ` +
+          `Each one shows which patch it was written for.</p>` +
+          `<p style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">` +
+          `<a class="ix-primary" href="#/intel/new/procedure">${intelIco("plus")}New procedure</a>` +
+          `<a class="ix-btn" href="#/intel/new/tactic">${intelIco("tactic")}New tactic</a></p></div>`;
+      return;
+    }
+    const groups = new Map();
+    for (const e of lib.entries) {
+      const g = e.activity || "General";
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(e);
+    }
+    const order = [...groups.keys()].sort((a, b) => (a === "General") - (b === "General") || a.localeCompare(b));
+    el.innerHTML = order.map(g => `<div class="ix-group-h"><span>${esc(g)}</span><span>${groups.get(g).length}</span></div>` +
+      groups.get(g).map(e => intelRow(e)).join("")).join("");
+  } catch (err) { const el = $("ix-lib"); if (el) el.innerHTML = intelStatus(err.message, true); }
+}
+
+// ---- SEARCH (masthead box; results at #/intel/search) ----
+let intelSearchT = null;
+function intelSearchInput() {
+  clearTimeout(intelSearchT);
+  intelSearchT = setTimeout(() => {
+    const q = $("intel-search").value.trim();
+    if (!q) { if (location.hash === "#/intel/search") location.hash = "#/intel/library"; return; }
+    if (location.hash !== "#/intel/search") location.hash = "#/intel/search";
+    else intelSearchView($("intel-know"));
+  }, 250);
+}
+async function intelSearchView(box) {
+  const q = $("intel-search").value.trim();
+  if (!q) {
+    box.innerHTML = `<div class="panel">${intelStatus("Type in the search box to look through every published procedure and tactic.")}</div>`;
+    $("intel-search").focus();
+    return;
+  }
+  if (!$("ix-search-res")) {
+    box.innerHTML = `<div class="panel"><div class="ix-panel-h"><h2>SEARCH</h2><span class="muted" id="ix-search-n"></span></div>` +
+      `<div class="ix-list" id="ix-search-res">${intelStatus("Searching…")}</div></div>`;
+  }
+  try {
+    const d = await intelApi(`/api/intel/search?q=${encodeURIComponent(q)}`);
+    if ($("intel-search").value.trim() !== q) return;   // a newer query is in flight
+    const el = $("ix-search-res"); if (!el) return;
+    $("ix-search-n").textContent = `${d.results.length} result${d.results.length === 1 ? "" : "s"} for “${q}”`;
+    el.innerHTML = d.results.length ? d.results.map(e => intelRow(e, { snippet: e.snippet })).join("")
+      : intelStatus("Nothing matches. Try fewer words, or a ship, place or activity name.");
+  } catch (err) { const el = $("ix-search-res"); if (el) el.innerHTML = intelStatus(err.message, true); }
+}
+
+// ---- READING VIEW ----
+function intelHydrate(root, e) {
+  root.querySelectorAll("table").forEach(t => {
+    if (t.parentElement.classList.contains("table-x")) return;
+    const w = document.createElement("div"); w.className = "table-x"; t.replaceWith(w); w.appendChild(t);
+  });
+  root.querySelectorAll("a[href]").forEach(a => {
+    if (/^https?:/i.test(a.getAttribute("href"))) { a.target = "_blank"; a.rel = "noopener noreferrer nofollow"; }
+  });
+  root.querySelectorAll("span.intel-ref").forEach(s => {
+    const kind = s.dataset.refKind, id = s.dataset.refId;
+    const label = s.textContent || `${kind}:${id}`;
+    const el = document.createElement(kind === "entry" ? "a" : "span");
+    el.className = "ix-ref";
+    if (kind === "entry") el.href = `#/intel/e/${encodeURIComponent(id)}`;
+    el.innerHTML = intelIco("ref");
+    el.append(label);
+    s.replaceWith(el);
+  });
+  // Images are links until one-click loading ships (slice 8): nothing loads
+  // from a third-party host without a reader's click.
+  root.querySelectorAll("span.intel-img").forEach(s => {
+    const src = s.dataset.src || "";
+    let host = ""; try { host = new URL(src).host; } catch {}
+    const a = document.createElement("a");
+    a.className = "ix-imglink"; a.href = src; a.target = "_blank"; a.rel = "noopener noreferrer nofollow";
+    a.referrerPolicy = "no-referrer";
+    a.innerHTML = intelIco("image");
+    a.append(`${s.dataset.alt || "Image"} · ${host}`);
+    s.replaceWith(a);
+  });
+  root.querySelectorAll("time[datetime]").forEach(t => {
+    const sec = Date.parse(t.getAttribute("datetime")) / 1000;
+    if (Number.isFinite(sec)) t.textContent = discordTime(sec, t.dataset.fmt || "f");
+  });
+  if (e) root.querySelectorAll("h2[id], h3[id]").forEach(h => {
+    const a = document.createElement("a");
+    a.className = "ix-anchor"; a.textContent = "§";
+    a.href = `${intelHref(e)}/${h.id}`; a.setAttribute("aria-label", `Link to ${h.textContent}`);
+    a.onclick = (ev) => { ev.preventDefault(); intelCopy(location.origin + location.pathname + a.getAttribute("href"), "Section link copied"); };
+    h.appendChild(a);
+  });
+}
+function intelToast(html, ms = 4000) {
+  let t = $("ix-toast");
+  if (!t) { t = document.createElement("div"); t.id = "ix-toast"; t.className = "ix-toast"; t.setAttribute("role", "status"); document.body.appendChild(t); }
+  t.innerHTML = html; t.hidden = false;
+  clearTimeout(intelToast.h); intelToast.h = setTimeout(() => { t.hidden = true; }, ms);
+  return t;
+}
+async function intelCopy(text, msg) {
+  try { await navigator.clipboard.writeText(text); intelToast(`<span>${esc(msg)}</span>`); }
+  catch { intelToast(`<span>Couldn't copy. The link is ${esc(text)}</span>`, 8000); }
+}
+async function intelEntryView(box) {
+  const id = intelRoute.id;
+  box.innerHTML = `<div class="panel">${intelStatus("Loading…")}</div>`;
+  let e;
+  try { e = await intelApi(`/api/intel/entries/${id}`); }
+  catch (err) { box.innerHTML = `<div class="panel">${intelStatus(err.status === 404 ? "This entry doesn't exist, or it was archived." : err.message, true)}</div>`; return; }
+  if (intelCurSec !== "entry" || intelRoute.id !== id) return;
+  if (e.status === "draft") { history.replaceState(null, "", `${intelHref(e)}/edit`); applyView(); return; }
+  const p = e.patch;
+  const confirm = p.stale && e.can_edit
+    ? `<button type="button" id="ix-confirm" title="Clears the warning without editing">Still valid on ${esc(intelMinor(p.current))}</button>` : "";
+  const people = [e.owner.name && `<span>Owner <b>${esc(e.owner.name)}</b></span>`,
+    e.maintainers.length ? `<span>Maintainers <b>${e.maintainers.map(m => esc(m.name)).join(", ")}</b></span>` : ""].filter(Boolean).join("");
+  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/library">Library</a><span>/</span>` +
+    `<span>${esc(e.activity || "General")}</span></nav>` +
+    `<div class="ix-grid"><article class="panel ix-article"><div class="ix-head">` +
+    `<div class="ix-kindline">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind])}` +
+    (e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "") + `</div>` +
+    `<h1 class="ix-title">${esc(e.title)}</h1>` +
+    (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") +
+    `<div class="ix-by">${people}<span>Rev <b>${e.rev}</b> · ${esc(intelWhen(e.revised_at || e.published_at))}</span>` +
+    `${intelPatchChip(p)}${confirm}</div>` +
+    `<div class="ix-actions">` +
+    (e.can_edit ? `<a class="ix-primary" href="${intelHref(e)}/edit">${intelIco("edit")}Edit</a>` : "") +
+    `<a class="ix-btn" href="${intelHref(e)}/history">${intelIco("history")}History</a>` +
+    `<button type="button" class="ix-btn" id="ix-copy">${intelIco("link")}Copy link</button>` +
+    `<span class="sp"></span>` +
+    (e.can_manage ? `<button type="button" class="ix-btn" id="ix-archive">Archive</button>` : "") +
+    `</div></div><div class="ix-prose" id="ix-prose">${e.body_html || `<p class="muted">This entry has no body yet.</p>`}</div></article>` +
+    `<aside class="ix-rail"><div class="panel" id="ix-toc-p" hidden><h2>ON THIS PAGE</h2><ul class="ix-toc" id="ix-toc"></ul></div>` +
+    `<div class="panel"><h2>DETAILS</h2><dl class="ix-dl">` +
+    `<dt>KIND</dt><dd>${esc(INTEL_KIND[e.kind])}</dd>` +
+    `<dt>ACTIVITY</dt><dd>${esc(e.activity || "General")}</dd>` +
+    (e.system ? `<dt>SYSTEM</dt><dd>${esc(e.system)}</dd>` : "") +
+    `<dt>PATCH</dt><dd>${p.written ? `${esc(p.written)}${p.confirmed ? " (re-confirmed)" : ""}` : "Not known"}</dd>` +
+    `<dt>PUBLISHED</dt><dd>${esc(e.published_at ? new Date(e.published_at).toLocaleDateString() : "")} by ${esc(e.author_name || "?")}</dd>` +
+    (e.tags.length ? `<dt>TAGS</dt><dd>${e.tags.map(t => `<span class="ix-tag free">#${esc(t)}</span>`).join("")}</dd>` : "") +
+    `</dl></div></aside></div>`;
+  const prose = $("ix-prose");
+  intelHydrate(prose, e);
+  const heads = [...prose.querySelectorAll("h2[id], h3[id]")];
+  if (heads.length > 1) {
+    $("ix-toc-p").hidden = false;
+    $("ix-toc").innerHTML = heads.map(h => `<li class="lv${h.tagName[1]}"><a href="${intelHref(e)}/${h.id}" data-sec="${h.id}">` +
+      `${esc(h.firstChild ? h.firstChild.textContent : h.textContent)}</a></li>`).join("");
+    $("ix-toc").querySelectorAll("a").forEach(a => a.onclick = (ev) => {
+      ev.preventDefault(); history.replaceState(null, "", a.getAttribute("href"));
+      const t = document.getElementById(a.dataset.sec); if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+  if (intelRoute.anchor) { const t = document.getElementById(intelRoute.anchor); if (t) t.scrollIntoView({ block: "start" }); }
+  else window.scrollTo(0, 0);
+  $("ix-copy").onclick = () => intelCopy(location.origin + location.pathname + intelHref(e), "Link copied");
+  if ($("ix-confirm")) $("ix-confirm").onclick = async () => {
+    try { await intelApi(`/api/intel/entries/${e.id}/confirm`, { method: "POST" }); intelEntryView(box); }
+    catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
+  };
+  if ($("ix-archive")) $("ix-archive").onclick = async () => {
+    const ok = await confirmDialog(`“${e.title}” leaves the Library, the Feed and search. Its history is kept and an admin can still see it.`,
+      { title: "Archive this entry?", confirmLabel: "Archive", danger: true });
+    if (!ok) return;
+    try { await intelApi(`/api/intel/entries/${e.id}`, { method: "DELETE" }); location.hash = "#/intel/library"; }
+    catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
+  };
+}
+
+// ---- HISTORY ----
+async function intelHistory(box) {
+  const id = intelRoute.id;
+  box.innerHTML = `<div class="panel">${intelStatus("Loading…")}</div>`;
+  let e, h;
+  try { [e, h] = await Promise.all([intelApi(`/api/intel/entries/${id}`), intelApi(`/api/intel/entries/${id}/revisions`)]); }
+  catch (err) { box.innerHTML = `<div class="panel">${intelStatus(err.message, true)}</div>`; return; }
+  if (intelCurSec !== "history" || intelRoute.id !== id) return;
+  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/library">Library</a><span>/</span>` +
+    `<a href="${intelHref(e)}">${esc(e.title)}</a><span>/</span><span>History</span></nav>` +
+    `<div class="ix-grid"><div class="panel"><div class="ix-panel-h"><h2>CHANGES</h2><span class="muted" id="ix-diff-n"></span></div>` +
+    `<div id="ix-diff-box">${intelStatus("Pick a revision to see what it changed.")}</div></div>` +
+    `<aside class="ix-rail"><div class="panel"><h2>REVISIONS</h2><ul class="ix-revs" id="ix-revs">` +
+    h.revisions.map(r => `<li data-rev="${r.rev}"><span class="rv">${r.rev}${r.rev === h.current ? "" : ""}</span>` +
+      `<span><span class="note">${esc(r.note || "No note")}</span>${r.major ? `<span class="ix-major">MAJOR</span>` : ""}` +
+      `<small>${esc(r.editor_name || "?")} · ${esc(intelWhen(r.created_at))}</small></span>` +
+      `<span class="acts"><button type="button" data-diff="${r.rev}">Changes</button>` +
+      (h.can_edit && r.rev !== h.current ? `<button type="button" data-revert="${r.rev}">Revert</button>` : "") +
+      `</span></li>`).join("") + `</ul></div></aside></div>`;
+  const show = async (rev) => {
+    box.querySelectorAll("#ix-revs li").forEach(li => li.classList.toggle("sel", +li.dataset.rev === rev));
+    const out = $("ix-diff-box");
+    try {
+      const d = await intelApi(`/api/intel/entries/${id}/diff?rev=${rev}`);
+      if (!$("ix-diff-box")) return;
+      $("ix-diff-n").textContent = d.from_rev ? `rev ${d.from_rev} → ${d.rev}` : `rev ${d.rev} (first)`;
+      const ch = (lbl, x) => x.from != null && x.from !== x.to
+        ? `<span>${lbl}: <del>${esc(x.from || "—")}</del> → <b>${esc(x.to || "—")}</b></span>` : "";
+      out.innerHTML = `<div class="ix-diff-h"><span><b>${esc(d.editor_name || "?")}</b> · ${esc(new Date(d.created_at).toLocaleString())}</span>` +
+        `<span>+${d.added} / −${d.removed} words</span>${ch("Title", d.title)}${ch("Summary", d.summary)}</div>` +
+        (d.note ? `<p style="margin:8px 0 0;font-size:13px">${esc(d.note)}</p>` : "") +
+        `<pre class="ix-diff">${d.html}</pre>`;   // server-escaped; <ins>/<del> only
+    } catch (err) { out.innerHTML = intelStatus(err.message, true); }
+  };
+  box.querySelectorAll("[data-diff]").forEach(b => b.onclick = () => show(+b.dataset.diff));
+  box.querySelectorAll("[data-revert]").forEach(b => b.onclick = async () => {
+    const rev = +b.dataset.revert;
+    const ok = await confirmDialog(`This saves rev ${h.current + 1} with rev ${rev}'s text. Nothing is deleted: rev ${h.current} stays in the history.`,
+      { title: `Revert to rev ${rev}?`, confirmLabel: "Revert" });
+    if (!ok) return;
+    try {
+      await intelApi(`/api/intel/entries/${id}/revert`, { method: "POST", body: { rev, base_rev: h.current } });
+      intelToast(`<span>Reverted to rev ${rev}.</span>`);
+      intelHistory(box);
+    } catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 7000); }
+  });
+  if (h.revisions.length) show(h.revisions[0].rev);
+}
+
+// ---- EDITOR ----
+// Paste: clipboard HTML (Docs / Notion / Word / a web page) → Markdown. Parsed
+// with DOMParser (inert: no scripts run, nothing loads) and never attached to
+// the page; the server re-renders + sanitizes whatever comes out anyway.
+function intelHtmlToMd(html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const st = { h: 0, list: 0, table: 0, dropped: 0, img: 0, lost: 0 };
+  const isGone = (h) => /(^|\.)(google|googleusercontent|googledocs)\.com$/.test(h) || /discord(app)?\.(com|net)$/.test(h);
+  const kids = (n, ctx) => [...n.childNodes].map(c => walk(c, ctx)).join("");
+  function walk(n, ctx = { depth: 0 }) {
+    if (n.nodeType === 3) return n.textContent.replace(/\s+/g, " ");
+    if (n.nodeType !== 1) return "";
+    const t = n.tagName.toLowerCase(), s = n.getAttribute("style") || "";
+    if (["script", "style", "meta", "link", "title", "head", "template"].includes(t)) return "";
+    if (/^h[1-6]$/.test(t)) { st.h++; const lv = Math.min(Math.max(+t[1], 2), 3); return `\n\n${"#".repeat(lv)} ${kids(n, ctx).trim()}\n\n`; }
+    if (t === "p" || t === "div") return `\n\n${kids(n, ctx).trim()}\n\n`;
+    if (t === "br") return "\n";
+    if (t === "hr") return "\n\n---\n\n";
+    if (t === "pre") return `\n\n\`\`\`\n${n.textContent.replace(/\n$/, "")}\n\`\`\`\n\n`;
+    if (t === "code") return "`" + n.textContent + "`";
+    if (t === "blockquote") return "\n\n" + kids(n, ctx).trim().split("\n").map(x => "> " + x).join("\n") + "\n\n";
+    if (t === "ul" || t === "ol") {
+      st.list++; let k = 0;
+      return "\n" + [...n.children].filter(c => c.tagName === "LI").map(li => {
+        k++;
+        const box = li.querySelector(":scope > input[type=checkbox]");
+        const mark = t === "ol" ? `${k}.` : "-";
+        const task = box ? (box.checked ? "[x] " : "[ ] ") : "";
+        const inner = [...li.childNodes].filter(c => !["UL", "OL", "INPUT"].includes(c.tagName))
+          .map(c => walk(c, ctx)).join("").replace(/\s+/g, " ").trim();
+        const sub = [...li.children].filter(c => c.tagName === "UL" || c.tagName === "OL")
+          .map(c => walk(c, { depth: ctx.depth + 1 })).join("");
+        return "  ".repeat(ctx.depth) + `${mark} ${task}${inner}` + sub;
+      }).join("\n") + "\n";
+    }
+    if (t === "table") {
+      st.table++;
+      const rows = [...n.querySelectorAll("tr")].map(r => [...r.children].map(c => kids(c, ctx).replace(/\s+/g, " ").replace(/\|/g, "\\|").trim()));
+      if (!rows.length) return "";
+      const w = Math.max(...rows.map(r => r.length));
+      const line = r => "| " + Array.from({ length: w }, (_, j) => r[j] || "").join(" | ") + " |";
+      return "\n\n" + [line(rows[0]), "| " + Array(w).fill("---").join(" | ") + " |", ...rows.slice(1).map(line)].join("\n") + "\n\n";
+    }
+    if (t === "img") {
+      const src = n.getAttribute("src") || ""; let host = ""; try { host = new URL(src).host; } catch {}
+      if (intelImageHosts.includes(host)) { st.img++; return `![${(n.getAttribute("alt") || "").replace(/[\[\]]/g, "")}](${src})`; }
+      if (isGone(host) || src.startsWith("data:") || src.startsWith("blob:")) st.lost++; else st.dropped++;
+      return "";
+    }
+    if (t === "a") {
+      const href = n.getAttribute("href") || ""; const txt = kids(n, ctx).trim();
+      return /^https?:/i.test(href) ? `[${txt || href}](${href})` : txt;
+    }
+    let inner = kids(n, ctx);
+    // Docs wraps the whole paste in <b style="font-weight:normal">: honour the
+    // style's intent, not the tag.
+    const bold = (t === "strong" || t === "b") ? !/font-weight:\s*(normal|400)/.test(s) : /font-weight:\s*(bold|[6-9]00)/.test(s);
+    const ital = t === "em" || t === "i" || /font-style:\s*italic/.test(s);
+    const under = t === "u" || /text-decoration[^;]*underline/.test(s);
+    const strike = ["s", "strike", "del"].includes(t) || /text-decoration[^;]*line-through/.test(s);
+    if (/color|font-family|font-size|background/.test(s)) st.dropped++;
+    const wrap = (m, x) => { const m2 = x.match(/^(\s*)(.*?)(\s*)$/s); return m2[2] ? `${m2[1]}${m}${m2[2]}${m}${m2[3]}` : x; };
+    if (bold) inner = wrap("**", inner);
+    if (ital) inner = wrap("*", inner);
+    if (under) inner = wrap("__", inner);
+    if (strike) inner = wrap("~~", inner);
+    return inner;
+  }
+  return { md: walk(doc.body).replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim(), st };
+}
+function intelEdBackupKey() { return intelEd.id ? `scIntelEdit:${intelEd.id}` : `scIntelEdit:new:${intelEd.kind}`; }
+function intelEdValues() {
+  return { title: $("ix-ed-title").value, summary: $("ix-ed-sum").value, body: $("ix-area").value,
+    activity: $("ix-ed-act").value || null, system: $("ix-ed-sys").value || null,
+    tags: $("ix-ed-tags").value.split(/[,\s]+/).filter(Boolean) };
+}
+function intelEdLeave() {
+  // Navigating away from a draft with an autosave still pending: send it now.
+  if (intelEd && intelEd.timer && intelEd.status === "draft") { clearTimeout(intelEd.timer); intelEdAutosave(true); }
+  intelEd = null;
+}
+async function intelEditor(box) {
+  const isNew = intelCurSec === "new";
+  const id = isNew ? null : intelRoute.id;
+  const kind = isNew ? intelRoute.kind : null;
+  box.innerHTML = `<div class="panel">${intelStatus("Loading…")}</div>`;
+  let e = null;
+  const tags = await intelLoadPlaystyles();
+  // A deep link into the editor hasn't seen a list response yet: the image
+  // host check needs the allowed hosts it carries.
+  if (!intelImageHosts.length) {
+    try { intelImageHosts = (await intelApi("/api/intel/entries?section=drafts")).image_hosts || []; } catch {}
+  }
+  if (!isNew) {
+    try { e = await intelApi(`/api/intel/entries/${id}`); }
+    catch (err) { box.innerHTML = `<div class="panel">${intelStatus(err.status === 404 ? "This entry doesn't exist, or it was archived." : err.message, true)}</div>`; return; }
+    if (!e.can_edit) { box.innerHTML = `<div class="panel">${intelStatus("Only the owner, maintainers or an admin can edit this entry.", true)}</div>`; return; }
+  }
+  if (intelCurSec !== (isNew ? "new" : "edit") || (!isNew && intelRoute.id !== id)) return;
+  intelEd = { key: isNew ? `n${kind}` : `e${id}`, id, kind: e ? e.kind : kind, status: e ? e.status : "draft",
+    rev: e ? e.rev : 0, entry: e, major: false, timer: null, saving: false, dirty: false,
+    templated: isNew };
+  const published = intelEd.status === "published";
+  const v = e ? { title: e.title, summary: e.summary, body: e.body_md, activity: e.activity, system: e.system, tags: e.tags }
+    : { title: "", summary: "", body: INTEL_TEMPLATE[kind], activity: null, system: null, tags: [] };
+  const opt = (list, cur, none) => `<option value="">${none}</option>` +
+    list.map(x => `<option value="${esc(x)}"${x === cur ? " selected" : ""}>${esc(x)}</option>`).join("");
+  const tb = (md, label, inner, kbd) => `<button type="button" class="ix-tb" data-md="${md}" title="${label}${kbd ? ` (${kbd})` : ""}" aria-label="${label}">${inner}</button>`;
+  const crumbTail = e ? `<a href="${published ? intelHref(e) : "#/intel/library"}">${esc(e.title)}</a><span>/</span><span>Edit</span>`
+    : `<span id="ix-crumb-t">New ${esc(INTEL_KIND[kind].toLowerCase())}</span>`;
+  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/library">Library</a><span>/</span>${crumbTail}</nav>` +
+    `<div class="ix-ed-grid"><div class="panel ix-ed">` +
+    `<div class="ix-restore" id="ix-restore" hidden><span id="ix-restore-msg"></span>` +
+    `<button type="button" id="ix-restore-go">Restore</button><button type="button" id="ix-restore-x">Discard</button></div>` +
+    `<div class="ix-ed-head">` +
+    (isNew ? `<div class="seg" id="ix-ed-kind" role="group" aria-label="Kind">` +
+      ["procedure", "tactic"].map(k => `<button type="button" data-k="${k}" class="${k === kind ? "on" : ""}" aria-pressed="${k === kind}">${INTEL_KIND[k].toUpperCase()}</button>`).join("") + `</div>` : "") +
+    `<input class="ti ix-ed-title" id="ix-ed-title" maxlength="140" autocomplete="off" aria-label="Title" ` +
+    `placeholder="${intelEd.kind === "tactic" ? "e.g. Countering a gate camp at Pyro Gateway" : "e.g. Hull-C escort formation"}" value="${esc(v.title)}">` +
+    `<label class="ix-lbl"><span>SUMMARY <i id="ix-sum-n"></i></span>` +
+    `<input class="ti" id="ix-ed-sum" maxlength="300" autocomplete="off" placeholder="One line: what this is for. Shows in lists and search." value="${esc(v.summary)}"></label>` +
+    `<div class="ix-ed-meta">` +
+    `<label class="ix-lbl"><span>ACTIVITY</span><select class="ti" id="ix-ed-act">${opt(tags, v.activity, "General")}</select></label>` +
+    `<label class="ix-lbl"><span>SYSTEM</span><select class="ti" id="ix-ed-sys">${opt(INTEL_SYSTEM_OPTS, v.system, "Any system")}</select></label>` +
+    `<label class="ix-lbl"><span>TAGS</span><input class="ti" id="ix-ed-tags" autocomplete="off" placeholder="escort, hull-c" value="${esc(v.tags.join(", "))}"></label>` +
+    `</div></div>` +
+    `<div class="ix-tools" role="toolbar" aria-label="Formatting">` +
+    tb("h", "Heading", "<b>H</b>") + tb("b", "Bold", "<b>B</b>", "Ctrl+B") + tb("i", "Italic", "<i>I</i>", "Ctrl+I") +
+    tb("u", "Underline", "<u>U</u>") + tb("s", "Strikethrough", "<s>S</s>") + `<span class="sep"></span>` +
+    tb("ul", "Bulleted list", intelIco("list")) + tb("ol", "Numbered list", intelIco("olist")) + tb("task", "Checklist", intelIco("task")) +
+    tb("q", "Quote", intelIco("quote")) + tb("code", "Code", intelIco("code")) + tb("table", "Table", intelIco("table")) +
+    `<span class="sep"></span>` + tb("link", "Link", intelIco("link"), "Ctrl+K") +
+    `<button type="button" class="ix-tb" id="ix-tb-img" title="Image link" aria-label="Image link" aria-expanded="false" aria-controls="ix-pop-img">${intelIco("image")}</button>` +
+    `<span class="seg" role="group" aria-label="Write or preview"><button type="button" id="ix-m-write" class="on" aria-pressed="true">WRITE</button>` +
+    `<button type="button" id="ix-m-prev" aria-pressed="false">PREVIEW</button></span>` +
+    `<div class="ix-pop" id="ix-pop-img" hidden role="dialog" aria-label="Insert an image link">` +
+    `<label class="ix-lbl"><span>IMAGE LINK</span><input class="ti" id="ix-img-url" type="url" autocomplete="off" placeholder="https://i.imgur.com/…"></label>` +
+    `<div class="ix-hostcheck" id="ix-img-check"></div>` +
+    `<label class="ix-lbl"><span>CAPTION</span><input class="ti" id="ix-img-cap" maxlength="120" autocomplete="off" placeholder="What it shows"></label>` +
+    `<div class="row"><button type="button" id="ix-img-x">Cancel</button><button type="button" class="ix-primary" id="ix-img-go" disabled>Insert</button></div></div>` +
+    `</div>` +
+    `<textarea class="ti ix-area" id="ix-area" spellcheck="true" aria-label="Body (Markdown)"></textarea>` +
+    `<div class="ix-prose ix-preview" id="ix-preview" hidden></div>` +
+    `<div class="ix-ed-foot"><span id="ix-count"></span><span>Paste from Docs or Notion keeps the formatting. Shift-paste for plain text.</span>` +
+    `<span class="saved" id="ix-saved" role="status"></span></div>` +
+    `</div><aside class="ix-ed-rail"><div class="panel" id="ix-save-p"></div><div class="panel" id="ix-people-p" hidden></div></aside></div>`;
+  const ta = $("ix-area");
+  ta.value = v.body || "";
+  intelEdCounts();
+  intelEdRenderSave();
+  if (e && e.can_manage && published) intelEdRenderPeople();
+  // Restore an unsaved local copy (a published entry's edit, or a new entry
+  // that never got a title, so never reached the server).
+  let bk = null;
+  try { bk = JSON.parse(localStorage.getItem(intelEdBackupKey()) || "null"); } catch {}
+  if (bk && (bk.body !== ta.value || bk.title !== $("ix-ed-title").value)) {
+    $("ix-restore").hidden = false;
+    $("ix-restore-msg").textContent = bk.rev && published && bk.rev !== intelEd.rev
+      ? `You have unsaved changes from ${intelWhen(bk.at)}, made on rev ${bk.rev} (this is rev ${intelEd.rev}).`
+      : `You have unsaved changes from ${intelWhen(bk.at)}.`;
+    $("ix-restore-go").onclick = () => {
+      $("ix-ed-title").value = bk.title || ""; $("ix-ed-sum").value = bk.summary || ""; ta.value = bk.body || "";
+      $("ix-ed-act").value = bk.activity || ""; $("ix-ed-sys").value = bk.system || ""; $("ix-ed-tags").value = (bk.tags || []).join(", ");
+      $("ix-restore").hidden = true; intelEd.templated = false; intelEdChanged();
+    };
+    $("ix-restore-x").onclick = () => { try { localStorage.removeItem(intelEdBackupKey()); } catch {} $("ix-restore").hidden = true; };
+  }
+  if (isNew) $("ix-ed-kind").querySelectorAll("button").forEach(b => b.onclick = () => {
+    if (b.dataset.k === intelEd.kind) return;
+    const swap = intelEd.templated && ta.value === INTEL_TEMPLATE[intelEd.kind];
+    intelEd.kind = b.dataset.k; intelEd.key = `n${intelEd.kind}`;
+    $("ix-ed-kind").querySelectorAll("button").forEach(x => { const on = x === b; x.classList.toggle("on", on); x.setAttribute("aria-pressed", on); });
+    if (swap) ta.value = INTEL_TEMPLATE[intelEd.kind];
+    $("ix-ed-title").placeholder = intelEd.kind === "tactic" ? "e.g. Countering a gate camp at Pyro Gateway" : "e.g. Hull-C escort formation";
+    history.replaceState(null, "", `#/intel/new/${intelEd.kind}`);
+    $("ix-crumb-t").textContent = `New ${INTEL_KIND[intelEd.kind].toLowerCase()}`;
+    intelRoute = { kind: intelEd.kind };
+    intelEdCounts();
+  });
+  for (const fid of ["ix-ed-title", "ix-ed-sum", "ix-ed-tags", "ix-area"]) $(fid).addEventListener("input", intelEdChanged);
+  for (const fid of ["ix-ed-act", "ix-ed-sys"]) $(fid).addEventListener("change", intelEdChanged);
+  // toolbar
+  const ACT = {
+    h: () => intelPrefixLines(l => "## " + l.replace(/^#+\s*/, "")),
+    b: () => intelWrapSel("**"), i: () => intelWrapSel("*"), u: () => intelWrapSel("__"), s: () => intelWrapSel("~~"),
+    ul: () => intelPrefixLines(l => "- " + l), ol: () => intelPrefixLines((l, k) => `${k + 1}. ` + l),
+    task: () => intelPrefixLines(l => "- [ ] " + l), q: () => intelPrefixLines(l => "> " + l),
+    code: () => intelWrapSel("`", "`", "code"),
+    table: () => intelInsertBlock("| Column | Column | Column |\n|---|---|---|\n|  |  |  |\n|  |  |  |\n"),
+    link: () => intelWrapSel("[", "](https://)", "link text"),
+  };
+  box.querySelectorAll(".ix-tb[data-md]").forEach(b => b.onclick = () => ACT[b.dataset.md]());
+  ta.addEventListener("keydown", (ev) => {
+    if (!(ev.ctrlKey || ev.metaKey) || ev.altKey) return;
+    const k = ev.key.toLowerCase();
+    if (k === "b" || k === "i" || k === "k") { ev.preventDefault(); ({ b: ACT.b, i: ACT.i, k: ACT.link })[k](); }
+  });
+  // image-link popover
+  const pop = $("ix-pop-img"), popBtn = $("ix-tb-img");
+  const setPop = (on) => { pop.hidden = !on; popBtn.setAttribute("aria-expanded", on);
+    if (on) { $("ix-img-url").value = ""; $("ix-img-cap").value = ""; intelCheckHost(); $("ix-img-url").focus(); } };
+  popBtn.onclick = () => setPop(pop.hidden);
+  $("ix-img-x").onclick = () => { setPop(false); popBtn.focus(); };
+  $("ix-img-url").oninput = intelCheckHost;
+  pop.addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); setPop(false); popBtn.focus(); }
+    if (ev.key === "Enter" && !$("ix-img-go").disabled) { ev.preventDefault(); $("ix-img-go").click(); } });
+  $("ix-img-go").onclick = () => {
+    const u = $("ix-img-url").value.trim(), c = $("ix-img-cap").value.trim().replace(/[\[\]]/g, "");
+    setPop(false); intelInsertBlock(`![${c}](${u})\n`);
+  };
+  // write / preview
+  const setPreview = async (on) => {
+    ta.hidden = on; $("ix-preview").hidden = !on;
+    $("ix-m-write").classList.toggle("on", !on); $("ix-m-prev").classList.toggle("on", on);
+    $("ix-m-write").setAttribute("aria-pressed", !on); $("ix-m-prev").setAttribute("aria-pressed", on);
+    box.querySelectorAll(".ix-tb").forEach(b => { b.disabled = on; });
+    if (!on) { ta.focus(); return; }
+    const pv = $("ix-preview");
+    pv.innerHTML = intelStatus("Rendering…");
+    try {
+      const r = await intelApi("/api/intel/render", { method: "POST", body: { body: ta.value } });
+      pv.innerHTML = r.html || `<p class="muted">Nothing to preview yet.</p>`;
+      intelHydrate(pv, null);
+    } catch (err) { pv.innerHTML = intelStatus(err.message, true); }
+  };
+  $("ix-m-write").onclick = () => setPreview(false);
+  $("ix-m-prev").onclick = () => setPreview(true);
+  // paste: rich HTML → Markdown (Shift = plain text)
+  let shift = false;
+  ta.addEventListener("keydown", (ev) => { shift = ev.shiftKey; });
+  ta.addEventListener("paste", (ev) => {
+    const cd = ev.clipboardData; if (!cd) return;
+    const h = cd.getData("text/html"), plain = cd.getData("text/plain");
+    if (!h || shift) return;
+    const { md, st } = intelHtmlToMd(h);
+    if (!md && !st.lost) return;   // nothing structural: let the browser paste plain text
+    ev.preventDefault();
+    const undo = { v: ta.value, s: ta.selectionStart, e: ta.selectionEnd };
+    // Pasted blocks start on their own paragraph, not glued to the line above.
+    const before = ta.value.slice(0, ta.selectionStart);
+    const pad = !before || before.endsWith("\n\n") || !/\n|^(#|[-*>|]|\d+\.)/.test(md) ? "" : before.endsWith("\n") ? "\n" : "\n\n";
+    intelInsert(pad + md);
+    const n = (x, w) => x ? `${x} ${w}${x > 1 ? "s" : ""}` : "";
+    const bits = [n(st.h, "heading"), n(st.list, "list"), n(st.table, "table"), n(st.img, "image link")].filter(Boolean);
+    const t = intelToast(`<span>Pasted as Markdown${bits.length ? `: <b>${bits.join(" · ")}</b>` : ""}` +
+      `${st.dropped ? " · dropped fonts, colours and unsupported images" : ""}` +
+      (st.lost ? `<br><span class="warn">${st.lost === 1 ? "1 image wasn't" : `${st.lost} images weren't`} kept: Google Docs and Discord image links expire.</span> ` +
+        `Upload them to imgur and add them with the image-link button.` : "") +
+      `</span><button type="button" id="ix-t-undo">Undo</button><button type="button" id="ix-t-plain">Paste as plain text</button>`, 10000);
+    $("ix-t-undo").onclick = () => { ta.value = undo.v; ta.setSelectionRange(undo.s, undo.e); intelEdChanged(); t.hidden = true; ta.focus(); };
+    $("ix-t-plain").onclick = () => { ta.value = undo.v; ta.setSelectionRange(undo.s, undo.e); intelInsert(plain); t.hidden = true; };
+  });
+  if (isNew || !v.title) $("ix-ed-title").focus(); else ta.focus();
+}
+function intelInsert(text) {
+  const ta = $("ix-area"); ta.focus();
+  ta.setRangeText(text, ta.selectionStart, ta.selectionEnd, "end");
+  ta.dispatchEvent(new Event("input"));
+}
+// A block (table, image) starts its own paragraph, or Markdown glues it to
+// the list or line above.
+function intelInsertBlock(text) {
+  const ta = $("ix-area"), before = ta.value.slice(0, ta.selectionStart);
+  intelInsert((!before || before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n") + text);
+}
+function intelWrapSel(a, b = a, ph = "text") {
+  const ta = $("ix-area"), s = ta.selectionStart, e = ta.selectionEnd, sel = ta.value.slice(s, e) || ph;
+  ta.focus(); ta.setRangeText(a + sel + b, s, e, "select");
+  ta.setSelectionRange(s + a.length, s + a.length + sel.length);
+  ta.dispatchEvent(new Event("input"));
+}
+function intelPrefixLines(fn) {
+  const ta = $("ix-area"); let s = ta.selectionStart, e = ta.selectionEnd;
+  s = ta.value.lastIndexOf("\n", s - 1) + 1;
+  const nl = ta.value.indexOf("\n", e); e = nl < 0 ? ta.value.length : nl;
+  const lines = ta.value.slice(s, e).split("\n").map(fn).join("\n");
+  ta.focus(); ta.setRangeText(lines, s, e, "select");
+  ta.dispatchEvent(new Event("input"));
+}
+function intelCheckHost() {
+  const val = $("ix-img-url").value.trim(), c = $("ix-img-check");
+  let host = ""; try { host = new URL(val).host; } catch {}
+  const allowed = intelImageHosts.length ? intelImageHosts.join(", ") : "imgur, ibb, postimg, X, RSI";
+  let cls = "", msg = `Paste a link from ${allowed}. Images aren't uploaded: the entry stores the link.`, ok = false;
+  if (val && !host) { cls = "bad"; msg = "That isn't a full link. It should start with https://"; }
+  else if (/(^|\.)(google|googleusercontent)\.com$/.test(host)) { cls = "bad"; msg = `${host}: Google Drive and Docs image links can't be shown (Drive returns 403; Docs links expire). Upload it to imgur, or add it as a plain link.`; }
+  else if (/discord(app)?\.(com|net)$/.test(host)) { cls = "bad"; msg = `${host}: Discord image links expire after a day. Upload it to imgur and paste that link.`; }
+  else if (host && !intelImageHosts.includes(host)) { cls = "bad"; msg = `${host} isn't an allowed image host, so it would show as a plain link. Allowed: ${allowed}.`; }
+  else if (host) { cls = "ok"; msg = `${host} is allowed. Readers see it as a link to the image.`; ok = true; }
+  c.className = "ix-hostcheck " + cls;
+  c.innerHTML = intelIco(ok ? "check" : cls === "bad" ? "alert" : "image") + `<span>${esc(msg)}</span>`;
+  $("ix-img-go").disabled = !ok;
+}
+function intelEdCounts() {
+  const n = $("ix-ed-sum").value.length;
+  $("ix-sum-n").textContent = `${n} / 300`;
+  $("ix-count").textContent = `${$("ix-area").value.length.toLocaleString()} characters`;
+}
+function intelEdChanged() {
+  if (!intelEd) return;
+  intelEd.dirty = true;
+  if (intelEd.templated && $("ix-area").value !== INTEL_TEMPLATE[intelEd.kind]) intelEd.templated = false;
+  intelEdCounts();
+  const vals = intelEdValues();
+  try { localStorage.setItem(intelEdBackupKey(), JSON.stringify({ ...vals, rev: intelEd.rev, at: new Date().toISOString() })); } catch {}
+  if (intelEd.status === "draft") {
+    $("ix-saved").textContent = vals.title.trim() ? "Saving draft…" : "Add a title to save the draft";
+    clearTimeout(intelEd.timer);
+    intelEd.timer = setTimeout(() => intelEdAutosave(false), 1200);
+  } else {
+    $("ix-saved").textContent = "Unsaved changes";
+  }
+  intelEdRenderSave(true);
+}
+// Drafts autosave to the SERVER, so a draft started on a phone can be finished
+// at a desk. The first save creates the entry; the URL then names it without a
+// re-render (replaceState fires no hashchange).
+async function intelEdAutosave(leaving) {
+  const ed = intelEd; if (!ed) return;
+  ed.timer = null;
+  const vals = intelEdValues();
+  if (!vals.title.trim()) return;
+  if (ed.saving) { ed.timer = setTimeout(() => intelEdAutosave(leaving), 600); return; }
+  ed.saving = true;
+  try {
+    let d;
+    if (!ed.id) {
+      d = await intelApi("/api/intel/entries", { method: "POST", body: { ...vals, kind: ed.kind } });
+      try { localStorage.removeItem(`scIntelEdit:new:${ed.kind}`); } catch {}
+      ed.id = d.id; ed.key = `e${d.id}`; ed.entry = d;
+      if (!leaving && intelEd === ed) {
+        history.replaceState(null, "", `${intelHref(d)}/edit`);
+        intelRoute = { id: d.id }; intelCurSec = "edit";
+        const k = $("ix-ed-kind"); if (k) k.remove();
+        const c = $("ix-crumb-t"); if (c) c.textContent = `${INTEL_KIND[ed.kind]} draft`;
+      }
+    } else {
+      d = await intelApi(`/api/intel/entries/${ed.id}`, { method: "PUT", body: vals });
+      ed.entry = d;
+    }
+    try { localStorage.removeItem(`scIntelEdit:${ed.id}`); } catch {}
+    ed.dirty = false;
+    if (intelEd === ed && $("ix-saved")) {
+      $("ix-saved").textContent = `Draft saved · ${new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
+      intelEdRenderSave();
+    }
+  } catch (err) {
+    if (intelEd === ed && $("ix-saved")) $("ix-saved").textContent = `Not saved: ${err.message}`;
+  } finally { ed.saving = false; }
+}
+function intelEdRenderSave(keepNote) {
+  const p = $("ix-save-p"); if (!p || !intelEd) return;
+  const ed = intelEd, published = ed.status === "published";
+  const noteVal = keepNote && $("ix-note") ? $("ix-note").value : "";
+  const errVal = keepNote && $("ix-save-err") ? $("ix-save-err").textContent : "";
+  if (!published) {
+    p.innerHTML = `<h2>PUBLISH</h2><p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 12px">` +
+      `Only you can see a draft. Publishing puts it in the Library, the Feed and search, stamped with the game patch.</p>` +
+      `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-publish">Publish</button>` +
+      (ed.id ? `<button type="button" class="ix-btn" id="ix-del">Delete draft</button>` : "") + `</div>` +
+      `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
+    $("ix-publish").onclick = () => intelEdSave({ publish: true });
+    if ($("ix-del")) $("ix-del").onclick = async () => {
+      const ok = await confirmDialog("This draft and everything in it is deleted. It was never published, so there's no history to keep.",
+        { title: "Delete this draft?", confirmLabel: "Delete", danger: true });
+      if (!ok) return;
+      try { clearTimeout(ed.timer); ed.timer = null; await intelApi(`/api/intel/entries/${ed.id}`, { method: "DELETE" });
+        try { localStorage.removeItem(`scIntelEdit:${ed.id}`); } catch {}
+        intelEd = null; location.hash = "#/intel/library"; }
+      catch (err) { intelEdErr(err.message); }
+    };
+    return;
+  }
+  const major = ed.major;
+  p.innerHTML = `<h2>SAVE REV ${ed.rev + 1}</h2>` +
+    `<div class="ix-fld"><span>KIND OF CHANGE</span><div class="seg" role="group" aria-label="Kind of change">` +
+    `<button type="button" data-major="0" class="${major ? "" : "on"}" aria-pressed="${!major}">MINOR</button>` +
+    `<button type="button" data-major="1" class="${major ? "on" : ""}" aria-pressed="${major}">MAJOR</button></div>` +
+    `<small>${major ? "The procedure itself changed. Shows as revised in the Feed and re-stamps the patch."
+      : "Typos and wording. Doesn't show in the Feed or change the patch stamp."}</small></div>` +
+    `<label class="ix-fld"><span>WHAT CHANGED${major ? " · required" : " · optional"}</span>` +
+    `<input class="ti" id="ix-note" maxlength="300" autocomplete="off" placeholder="${major ? "e.g. Escorts now break at QT exit" : "e.g. Fixed typos"}" value="${esc(noteVal)}"></label>` +
+    `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-save">Save rev ${ed.rev + 1}</button>` +
+    `<a class="ix-btn" href="${intelHref(ed.entry)}">Cancel</a></div>` +
+    `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
+  const sync = () => { $("ix-save").disabled = ed.major && $("ix-note").value.trim().length < 3; };
+  sync();
+  $("ix-note").oninput = sync;
+  p.querySelectorAll("[data-major]").forEach(b => b.onclick = () => { ed.major = b.dataset.major === "1"; intelEdRenderSave(true); });
+  $("ix-save").onclick = () => intelEdSave({ major: ed.major, note: $("ix-note").value, base_rev: ed.rev });
+}
+function intelEdErr(msg) { const el = $("ix-save-err"); if (el) { el.textContent = msg; el.hidden = false; } }
+async function intelEdSave(extra) {
+  const ed = intelEd; if (!ed) return;
+  const vals = intelEdValues();
+  if (!vals.title.trim()) { intelEdErr("Give it a title first."); $("ix-ed-title").focus(); return; }
+  clearTimeout(ed.timer); ed.timer = null;
+  const btn = $("ix-publish") || $("ix-save"); if (btn) btn.disabled = true;
+  try {
+    let id = ed.id;
+    if (!id) {   // publishing straight from a never-saved new entry
+      const d = await intelApi("/api/intel/entries", { method: "POST", body: { ...vals, kind: ed.kind } });
+      id = ed.id = d.id;
+      try { localStorage.removeItem(`scIntelEdit:new:${ed.kind}`); } catch {}
+    }
+    const d = await intelApi(`/api/intel/entries/${id}`, { method: "PUT", body: { ...vals, ...extra } });
+    try { localStorage.removeItem(`scIntelEdit:${id}`); } catch {}
+    intelEd = null;
+    intelToast(`<span>${extra.publish ? "Published." : `Saved rev ${d.rev}.`}</span>`);
+    location.hash = intelHref(d);
+  } catch (err) {
+    if (btn) btn.disabled = false;
+    if (err.status === 409 && err.detail && err.detail.current_rev) {
+      // Rebase onto their revision: the NEXT save is a deliberate overwrite,
+      // made after the author has been told and can check History first.
+      ed.rev = err.detail.current_rev;
+      intelEdRenderSave(true);
+      intelEdErr(`Someone saved rev ${ed.rev} since you opened this. Your text is still here. ` +
+        `Check their changes in History (opens in a new tab), then save again to put yours on top as rev ${ed.rev + 1}.`);
+      const h = $("ix-save-err");
+      h.insertAdjacentHTML("beforeend", ` <a href="${intelHref(ed.entry)}/history" target="_blank" rel="noopener">Open History</a>`);
+    } else intelEdErr(err.message);
+  }
+}
+function intelEdRenderPeople() {
+  const p = $("ix-people-p"), ed = intelEd; if (!p || !ed) return;
+  const e = ed.entry;
+  p.hidden = false;
+  p.innerHTML = `<h2>PEOPLE</h2><div class="ix-people">` +
+    `<div class="ix-fld"><span>OWNER</span><div class="who"><span class="ix-person" style="padding-right:9px">${esc(e.owner.name || "?")}</span></div>` +
+    `<div class="ix-pick"><input class="ti" id="ix-own-q" autocomplete="off" placeholder="Hand over to…" aria-label="Find a new owner"><ul id="ix-own-res" hidden></ul></div>` +
+    `<small>The owner keeps it current and picks the maintainers.</small></div>` +
+    `<div class="ix-fld"><span>MAINTAINERS</span><div class="who" id="ix-maint">` +
+    (e.maintainers.length ? e.maintainers.map(m => `<span class="ix-person">${esc(m.name)}<button type="button" data-rm="${esc(m.id)}" aria-label="Remove ${esc(m.name)}">×</button></span>`).join("")
+      : `<span class="muted">None yet</span>`) + `</div>` +
+    `<div class="ix-pick"><input class="ti" id="ix-mnt-q" autocomplete="off" placeholder="Add a maintainer…" aria-label="Find a maintainer"><ul id="ix-mnt-res" hidden></ul></div>` +
+    `<small>Maintainers can edit and re-confirm it.</small></div>` +
+    `<p class="ix-save-err" id="ix-people-err" role="alert" hidden></p></div>`;
+  const put = async (body, confirmMsg) => {
+    if (confirmMsg && !(await confirmDialog(confirmMsg.m, { title: confirmMsg.t, confirmLabel: confirmMsg.ok }))) return;
+    try {
+      const d = await intelApi(`/api/intel/entries/${e.id}/people`, { method: "PUT", body });
+      if (intelEd !== ed) return;
+      ed.entry = { ...ed.entry, owner: d.owner, maintainers: d.maintainers, can_manage: d.can_manage };
+      if (!d.can_manage) { p.hidden = true; return; }
+      intelEdRenderPeople();
+    } catch (err) { const el = $("ix-people-err"); if (el) { el.textContent = err.message; el.hidden = false; } }
+  };
+  const ids = () => ed.entry.maintainers.map(m => m.id);
+  p.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => put({ maintainers: ids().filter(x => x !== b.dataset.rm) }));
+  intelPicker("ix-own-q", "ix-own-res", (m) => put({ owner_id: m.discord_id },
+    { t: `Make ${m.name} the owner?`, m: `${m.name} takes over this entry and picks its maintainers. You keep edit access only if you're a maintainer or an admin.`, ok: "Hand over" }));
+  intelPicker("ix-mnt-q", "ix-mnt-res", (m) => { if (!ids().includes(m.discord_id) && m.discord_id !== e.owner.id) put({ maintainers: [...ids(), m.discord_id] }); });
+}
+function intelPicker(inputId, listId, onPick) {
+  const inp = $(inputId), ul = $(listId); let t = null;
+  inp.oninput = () => {
+    clearTimeout(t);
+    const q = inp.value.trim();
+    if (q.length < 2) { ul.hidden = true; return; }
+    t = setTimeout(async () => {
+      let ms = [];
+      try { ms = (await intelApi(`/api/intel/members?q=${encodeURIComponent(q)}`)).members; } catch {}
+      if (inp.value.trim() !== q) return;
+      ul.hidden = false;
+      ul.innerHTML = ms.length ? ms.map((m, i) => `<li><button type="button" data-i="${i}">${esc(m.name)}</button></li>`).join("")
+        : `<li class="muted" style="padding:4px 8px">No member matches.</li>`;
+      ul.querySelectorAll("button").forEach(b => b.onclick = () => { ul.hidden = true; inp.value = ""; onPick(ms[+b.dataset.i]); });
+    }, 200);
+  };
+  inp.onkeydown = (ev) => { if (ev.key === "Escape") { ul.hidden = true; } };
+}
+$("intel-search").addEventListener("input", intelSearchInput);
+$("intel-search").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") { clearTimeout(intelSearchT); intelSearchT = null; intelSearchInput(); }
+});
 
 // Admin-only member directory: the cross-walk between each member's Discord
 // identity and their watcher-bound in-game handle(s). Opted-out members are kept
@@ -27894,6 +29020,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
   const iv = $("intel-view");
   if (!iv || iv.hidden) return;
+  if (INTEL_KNOW_VIEWS.includes(intelCurSec)) return;   // reading/editing: arrows are the page's
   const tag = e.target && e.target.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
   // Scoped to the visible half's row (#50): the arrows never jump between halves.

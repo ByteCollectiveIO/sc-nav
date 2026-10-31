@@ -23,8 +23,12 @@ It's built entirely from data the rest of the suite already has. There's no
 separate reporting step, no form to fill out, no admin who has to compile
 numbers — you play the game, use the tools, and the deck updates itself. The
 deck is Org Intel's **ACTIVITY** half; the switch at the top flips to
-**INTELLIGENCE**, the org's knowledge hub (procedures, reports, dossiers and
-questions — being built, see [intelligence.md](../intelligence.md)). Open
+**INTELLIGENCE**, the org's knowledge hub. Its **Library** holds the org's
+procedures and tactics: anyone can write one (drafts save as you type),
+each shows the game patch it was written for and warns when the game has
+moved on, and every edit is kept with a diff and one-click revert. Search
+sits in the masthead. Reports, dossiers and questions are still being built
+(see [intelligence.md](../intelligence.md)). Open
 `#/intel/overview` and you get org-wide totals for mapping coverage, cargo hauling,
 trade-route profit, belt surveying, marketplace volume, per-contributor
 leaderboards and an ops-attendance board, plus (if you're an admin) a member

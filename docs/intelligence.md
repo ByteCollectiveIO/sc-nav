@@ -1,7 +1,7 @@
 # Intelligence — the org's knowledge hub (inside Org Intel)
 
 **Status:** 🔨 building. Slice 0 built 2026-10-31 (masthead, data model,
-renderer, FTS5 probe; as-built detail in
+renderer, FTS5 probe); slice 1, the Library, built 2026-10-31 (as-built detail in
 [implementation-notes.md](implementation-notes.md#intelligence-50)). Settled
 calls are marked **(user)**. Everything else is a recommendation open to change.
 

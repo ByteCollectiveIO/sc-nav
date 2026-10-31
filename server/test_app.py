@@ -15634,5 +15634,256 @@ class IntelSliceZeroTests(unittest.TestCase):
             app.app.dependency_overrides[app.require_session] = lambda: self._member
 
 
+class IntelLibraryTests(unittest.TestCase):
+    """Intelligence slice 1 (#50): the Library API. Drafts autosave without
+    revisions; publishing writes rev 1; owner/maintainers/admins edit; a stale
+    base_rev 409s; major revisions need a note and re-stamp the patch;
+    search, diff and revert all read the same revision store."""
+
+    OWNER = {"id": "11", "username": "owner", "is_admin": False}
+    OTHER = {"id": "22", "username": "other", "is_admin": False}
+    ADMIN = {"id": "33", "username": "admin", "is_admin": True}
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls.user = cls.OWNER
+        app.app.dependency_overrides[app.require_session] = lambda: cls.user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls.user
+        cls._orig_members = app.members_dir.by_id
+        app.members_dir.by_id = {m["id"]: {"display_name": m["username"].title()}
+                                 for m in (cls.OWNER, cls.OTHER, cls.ADMIN)}
+        cls._orig_patch = app.patch_tracker._state
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        app.members_dir.by_id = cls._orig_members
+        app.patch_tracker._state = cls._orig_patch
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        type(self).user = self.OWNER
+        self.patch("4.3.0")
+        with db._conn:
+            for t in ("intel_entries", "intel_revisions", "intel_tags", "intel_links"):
+                db._conn.execute(f"DELETE FROM {t}")
+            if db.INTEL_SEARCH == "fts5":
+                db._conn.execute("DELETE FROM intel_fts")
+
+    def patch(self, p):
+        app.patch_tracker._state = {"seen": {}, "first": {}, "current": p, "since": None}
+
+    def as_(self, who):
+        type(self).user = who
+
+    def publish(self, title="Hull-C escort formation", body="## Steps\n\n- [ ] Break at QT exit",
+                **kw):
+        d = self.client.post("/api/intel/entries", json={
+            "kind": "procedure", "title": title, "body": body, **kw}).json()
+        r = self.client.put(f"/api/intel/entries/{d['id']}", json={
+            "title": title, "body": body, "publish": True, **kw})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def test_draft_autosave_then_publish(self):
+        r = self.client.post("/api/intel/entries", json={
+            "kind": "procedure", "title": "Pre-undock", "body": "x", "tags": ["#Hathor", "hathor", "Pyro Gate"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()
+        self.assertEqual((d["status"], d["rev"]), ("draft", 0))
+        self.assertEqual(d["tags"], ["hathor", "pyro-gate"])
+        self.client.put(f"/api/intel/entries/{d['id']}", json={"title": "Pre-undock", "body": "y"})
+        self.assertEqual(db.intel_revisions(d["id"]), [])          # autosave writes no history
+        # A draft is private to its author, and out of the Library.
+        self.as_(self.OTHER)
+        self.assertEqual(self.client.get(f"/api/intel/entries/{d['id']}").status_code, 404)
+        self.as_(self.OWNER)
+        self.assertEqual(self.client.get("/api/intel/entries?section=library").json()["entries"], [])
+        self.assertEqual(len(self.client.get("/api/intel/entries?section=drafts").json()["entries"]), 1)
+        p = self.client.put(f"/api/intel/entries/{d['id']}", json={
+            "title": "Pre-undock", "body": "y", "publish": True}).json()
+        self.assertEqual((p["status"], p["rev"]), ("published", 1))
+        self.assertEqual(p["patch"]["written"], "4.3.0")
+        lib = self.client.get("/api/intel/entries?section=library").json()["entries"]
+        self.assertEqual([e["title"] for e in lib], ["Pre-undock"])
+        self.assertEqual(lib[0]["owner"]["name"], "Owner")
+
+    def test_only_library_kinds_can_be_written(self):
+        r = self.client.post("/api/intel/entries", json={"kind": "report", "title": "x"})
+        self.assertEqual(r.status_code, 422)
+        r = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": "x",
+                                                         "activity": "not-a-playstyle"})
+        self.assertEqual(r.status_code, 422)
+
+    def test_edit_rights(self):
+        e = self.publish()
+        body = {"title": e["title"], "body": "changed", "base_rev": 1}
+        self.as_(self.OTHER)
+        self.assertEqual(self.client.put(f"/api/intel/entries/{e['id']}", json=body).status_code, 403)
+        self.assertFalse(self.client.get(f"/api/intel/entries/{e['id']}").json()["can_edit"])
+        # The owner makes them a maintainer; now they can.
+        self.as_(self.OWNER)
+        r = self.client.put(f"/api/intel/entries/{e['id']}/people", json={"maintainers": ["22"]})
+        self.assertEqual([m["name"] for m in r.json()["maintainers"]], ["Other"])
+        self.as_(self.OTHER)
+        self.assertEqual(self.client.put(f"/api/intel/entries/{e['id']}", json=body).status_code, 200)
+        # A maintainer can't hand the entry on; the owner or an admin can.
+        self.assertEqual(self.client.put(f"/api/intel/entries/{e['id']}/people",
+                                         json={"owner_id": "22"}).status_code, 403)
+        self.as_(self.ADMIN)
+        r = self.client.put(f"/api/intel/entries/{e['id']}/people", json={"owner_id": "22"})
+        self.assertEqual(r.json()["owner"]["id"], "22")
+        self.assertEqual(r.json()["maintainers"], [])   # the new owner isn't also a maintainer
+
+    def test_conflict_on_stale_base_rev(self):
+        e = self.publish()
+        ok = self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "first edit", "base_rev": 1})
+        self.assertEqual(ok.json()["rev"], 2)
+        r = self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "second edit from an old tab", "base_rev": 1})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.json()["detail"]["current_rev"], 2)
+        self.assertEqual(db.intel_get_entry(e["id"])["body_md"], "first edit")
+
+    def test_major_needs_note_and_restamps_patch(self):
+        e = self.publish()
+        self.patch("4.4.0")
+        d = self.client.get(f"/api/intel/entries/{e['id']}").json()
+        self.assertTrue(d["patch"]["stale"])
+        # A hotfix isn't a new patch.
+        self.patch("4.3.2")
+        self.assertFalse(self.client.get(f"/api/intel/entries/{e['id']}").json()["patch"]["stale"])
+        self.patch("4.4.0")
+        r = self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "typo", "base_rev": 1})
+        self.assertTrue(r.json()["patch"]["stale"])          # minor: still stale
+        r = self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "rewrite", "base_rev": 2, "major": True})
+        self.assertEqual(r.status_code, 422)
+        r = self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "rewrite", "base_rev": 2, "major": True,
+            "note": "Escorts break at QT exit now"})
+        self.assertFalse(r.json()["patch"]["stale"])
+        self.assertEqual(r.json()["patch"]["written"], "4.4.0")
+        revs = self.client.get(f"/api/intel/entries/{e['id']}/revisions").json()["revisions"]
+        self.assertEqual([(v["rev"], v["major"], v["note"]) for v in revs],
+                         [(3, 1, "Escorts break at QT exit now"), (2, 0, None), (1, 1, "First published")])
+
+    def test_confirm_clears_staleness(self):
+        e = self.publish()
+        self.patch("4.4.0")
+        self.as_(self.OTHER)
+        self.assertEqual(self.client.post(f"/api/intel/entries/{e['id']}/confirm").status_code, 403)
+        self.as_(self.OWNER)
+        r = self.client.post(f"/api/intel/entries/{e['id']}/confirm").json()
+        self.assertEqual((r["patch"]["written"], r["patch"]["confirmed"], r["patch"]["stale"]),
+                         ("4.4.0", True, False))
+
+    def test_search(self):
+        self.publish("Hull-C escort formation", "Escorts break at the QT exit.", tags=["hauling-escort"])
+        self.publish("Quantanium run", "Watch the refinery timer.")
+        r = self.client.get("/api/intel/search?q=refinery").json()["results"]
+        self.assertEqual([x["title"] for x in r], ["Quantanium run"])
+        self.assertIn("<mark>", r[0]["snippet"] if db.INTEL_SEARCH == "fts5" else "<mark>")
+        r = self.client.get("/api/intel/search?q=escort").json()["results"]
+        self.assertEqual(r[0]["title"], "Hull-C escort formation")
+        # Snippet text is escaped; only <mark> is markup.
+        self.publish("Tags", "a <script>x</script> refinery")
+        r = self.client.get("/api/intel/search?q=refinery").json()["results"]
+        self.assertTrue(all("<script>" not in x["snippet"] for x in r))
+        # Drafts never show up in search.
+        self.client.post("/api/intel/entries", json={"kind": "tactic", "title": "Secret refinery draft"})
+        self.assertNotIn("Secret refinery draft",
+                         [x["title"] for x in self.client.get("/api/intel/search?q=secret").json()["results"]])
+
+    def test_search_snippet_drops_markdown_syntax(self):
+        self.publish("Mining", "## Steps\n\n| Ore | Q |\n|---|---|\n| quantanium | 900 |\n\n- [ ] **Refinery** run")
+        r = self.client.get("/api/intel/search?q=refinery").json()["results"]
+        snip = r[0]["snippet"]
+        for noise in ("##", "|", "---", "[ ]", "**"):
+            self.assertNotIn(noise, snip)
+
+    def test_lists_carry_image_hosts(self):
+        # The editor's image-link check reads the allowed hosts from here.
+        d = self.client.get("/api/intel/entries?section=library").json()
+        self.assertEqual(d["image_hosts"], list(app.IMAGE_PREVIEW_HOSTS))
+
+    def test_search_like_fallback(self):
+        self.publish("Quantanium run", "Watch the refinery timer.")
+        saved = db.INTEL_SEARCH
+        db.INTEL_SEARCH = "like"
+        try:
+            r = self.client.get("/api/intel/search?q=REFINERY").json()["results"]
+            self.assertEqual([x["title"] for x in r], ["Quantanium run"])
+            self.assertEqual(self.client.get("/api/intel/search?q=100%25").json()["results"], [])
+        finally:
+            db.INTEL_SEARCH = saved
+
+    def test_diff_and_revert(self):
+        e = self.publish(body="Hold at 8 km on arrival.")
+        self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "Hold at 10 km on arrival.", "base_rev": 1})
+        d = self.client.get(f"/api/intel/entries/{e['id']}/diff?rev=2").json()
+        self.assertIn("<del>8</del>", d["html"])
+        self.assertIn("<ins>10</ins>", d["html"])
+        self.assertEqual((d["added"], d["removed"]), (1, 1))
+        r = self.client.post(f"/api/intel/entries/{e['id']}/revert", json={"rev": 1, "base_rev": 2})
+        self.assertEqual(r.json()["rev"], 3)
+        self.assertEqual(r.json()["body_md"], "Hold at 8 km on arrival.")
+        revs = db.intel_revisions(e["id"])
+        self.assertEqual((revs[0]["note"], revs[0]["major"]), ("Reverted to rev 1", 0))
+        # A revert from a stale history page conflicts like any save.
+        self.assertEqual(self.client.post(f"/api/intel/entries/{e['id']}/revert",
+                                          json={"rev": 1, "base_rev": 2}).status_code, 409)
+
+    def test_diff_escapes(self):
+        e = self.publish(body="safe")
+        self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "<img src=x onerror=alert(1)>", "base_rev": 1})
+        d = self.client.get(f"/api/intel/entries/{e['id']}/diff?rev=2").json()
+        self.assertNotIn("<img", d["html"])
+
+    def test_archive_and_delete(self):
+        e = self.publish()
+        self.as_(self.OTHER)
+        self.assertEqual(self.client.delete(f"/api/intel/entries/{e['id']}").status_code, 403)
+        self.as_(self.OWNER)
+        self.assertEqual(self.client.delete(f"/api/intel/entries/{e['id']}").json(), {"archived": True})
+        self.assertEqual(self.client.get(f"/api/intel/entries/{e['id']}").status_code, 404)
+        self.assertEqual(self.client.get("/api/intel/entries?section=library").json()["entries"], [])
+        d = self.client.post("/api/intel/entries", json={"kind": "tactic", "title": "scratch"}).json()
+        self.assertEqual(self.client.delete(f"/api/intel/entries/{d['id']}").json(), {"deleted": True})
+
+    def test_feed_orders_by_publish_or_major(self):
+        a = self.publish("Alpha")
+        self.publish("Bravo")
+        feed = [e["title"] for e in self.client.get("/api/intel/entries?section=feed").json()["entries"]]
+        self.assertEqual(feed, ["Bravo", "Alpha"])
+        # A minor edit doesn't resurface an entry; a major one does.
+        self.client.put(f"/api/intel/entries/{a['id']}", json={"title": "Alpha", "body": "t", "base_rev": 1})
+        feed = [e["title"] for e in self.client.get("/api/intel/entries?section=feed").json()["entries"]]
+        self.assertEqual(feed, ["Bravo", "Alpha"])
+        self.client.put(f"/api/intel/entries/{a['id']}", json={
+            "title": "Alpha", "body": "t2", "base_rev": 2, "major": True, "note": "rewritten"})
+        feed = [e["title"] for e in self.client.get("/api/intel/entries?section=feed").json()["entries"]]
+        self.assertEqual(feed, ["Alpha", "Bravo"])
+
+    def test_refs_and_tags_follow_the_current_text(self):
+        e = self.publish(body="See [[poi:1842]]", tags=["one"])
+        self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "See [[poi:7]]", "tags": ["two"], "base_rev": 1})
+        links = db._conn.execute("SELECT ref_kind, ref_id FROM intel_links WHERE entry_id=?",
+                                 (e["id"],)).fetchall()
+        self.assertEqual([tuple(r) for r in links], [("poi", "7")])
+        self.assertEqual(db.intel_get_entry(e["id"])["tags"], ["two"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
