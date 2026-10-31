@@ -46,7 +46,7 @@ the org's page about one place or one other org: any member can edit them
 allied, unknown) and its aliases, and underneath, the page gathers the
 reports, procedures, live warnings and events that mention it by itself; an
 org's *Seen at* counts the reports that name it as the unit. In the navigator,
-your destination shows **◆ Dossier** or **◆ Start dossier**. **RFI** is where
+your destination shows **◆ Dossier** or **◆ Start dossier**. **Questions** is where
 you ask the org a question (optionally about a place, so it shows on that
 place's dossier). Anyone answers; the asker marks the answer that did it, and an
 accepted answer can be **promoted** into a procedure or onto the place's dossier,
@@ -74,10 +74,11 @@ comments on it; **Watching · N updated** shows just those. **Flag** an entry or
 a comment (out of date, inaccurate, inappropriate, names a player) and it goes
 to the admins, who work a flag queue on the Review tab and can **hide** an
 entry: it's kept, out of every list, and only admins can open it until it's
-unhidden. New to writing? **Writing guide** (on the Library, in the
-editor's footer and in every empty state, or `#/intel/guide`) walks through
-writing a procedure and a report, the formatting you can use with a live
-"you type / readers see" example of each, and how to get an image link in.
+unhidden. New to writing? **Writing guide**, at the end of the Intelligence
+tab row (and next to each form's header in the editor), walks through writing
+a procedure, a report, a dossier and a question, the formatting you can use
+with a live "you type / readers see" example of each, and how to get an image
+link in.
 Open
 `#/intel/overview` and you get org-wide totals for mapping coverage, cargo hauling,
 trade-route profit, belt surveying, marketplace volume, per-contributor
