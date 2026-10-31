@@ -306,6 +306,18 @@ orgs and behaviour, not individual players*, and the flag reason
   each with a glyph as well as a colour, per the colour-blind rule), aliases,
   and the RSI org SID. The SID is just text, never matched against anything
   of ours.
+- **Stance changes are revisions.** Setting or changing the stance saves a
+  revision like a summary edit ("Stance: unknown → hostile", by whom, when).
+  It shows in History, and reverting that revision restores the old stance.
+  The Identity panel shows the current stance with when it was set, what it
+  was before, and who set it.
+- **"Seen at" counts only the UNIT line.** An org dossier's *Seen at* list
+  counts reports whose SALUTE **UNIT** field links that dossier, grouped by
+  the report's location. A dossier mentioned anywhere else in a report (body,
+  comments, another field) is still a backlink and still lists the report,
+  but it doesn't count as a sighting. "We saw Red Wake" and "this is like
+  what Red Wake does" are different claims, and only the UNIT line makes the
+  first one.
 - Place dossiers can be **started from the navigator** ("◆ Start dossier" on a
   POI with none).
 
@@ -379,12 +391,12 @@ intel_entries   id, kind, title, slug, summary, body_md, body_html,
                 subject_kind, subject_ref,  -- dossier subject: place | org (unique per kind+ref)
                 superseded_by, accepted_comment_id (rfi),
                 created_at, updated_at, published_at
-intel_revisions id, entry_id, rev, title, body_md, editor_id, note, created_at,
+intel_revisions id, entry_id, rev, title, body_md, header (json), editor_id, note, created_at,
                 status        -- live | suggested | rejected
 intel_comments  id, entry_id, parent_id, author_id, body_md, body_html,
                 kind          -- comment | addendum | corroborate | dispute | answer
                 created_at, edited_at, deleted_at
-intel_links     entry_id, ref_kind, ref_id          -- backlink index, rebuilt per save
+intel_links     entry_id, ref_kind, ref_id, field   -- backlink index, rebuilt per save; field = body | salute_unit | salute_location | …
 intel_reads     member_id, entry_id, rev, read_at   -- required reading + unread markers
 intel_tags      entry_id, tag                       -- free tags (activity is a column)
 intel_collections       id, title, summary, owner_id, visibility
