@@ -18,9 +18,12 @@ thread-safe for the occasional asyncio.to_thread caller.
 """
 
 import json
+import logging
 import math
 import sqlite3
 import threading
+
+log = logging.getLogger("sc-nav.db")
 
 # Reserved id ranges so customs never collide with upstream item_ids (~1-2000)
 # and observations never collide with custom POIs.
@@ -817,7 +820,145 @@ CREATE TABLE IF NOT EXISTS price_reports (
     uex_state     TEXT NOT NULL DEFAULT 'none'
 );
 CREATE INDEX IF NOT EXISTS price_reports_pair ON price_reports(poi_id, commodity);
+
+-- Intelligence (docs/intelligence.md, backlog #50). The WHOLE data model ships
+-- in slice 0, member features included, so later slices never need a migration
+-- for something the design already decided. One store for every kind
+-- (procedure | tactic | report | dossier | debrief | rfi): one search index, one
+-- permission check, one link model. People are Discord ids (TEXT), like events
+-- and ops; nothing here is keyed on PlayerID, so _merge_handle_rows is unaffected.
+CREATE TABLE IF NOT EXISTS intel_entries (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind          TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    slug          TEXT NOT NULL,
+    summary       TEXT,
+    body_md       TEXT NOT NULL DEFAULT '',
+    body_html     TEXT NOT NULL DEFAULT '',      -- intel_md.render, on save
+    status        TEXT NOT NULL DEFAULT 'draft', -- draft | published | archived
+    visibility    TEXT NOT NULL DEFAULT 'org',   -- org | restricted
+    author_id     TEXT NOT NULL,
+    author_name   TEXT,                          -- kept as it was if access is revoked
+    owner_id      TEXT,
+    maintainers   TEXT NOT NULL DEFAULT '[]',    -- JSON list of discord ids
+    system        TEXT,                          -- Stanton | Nyx | Pyro | NULL (any)
+    patch         TEXT,                          -- build written for
+    patch_confirmed TEXT,                        -- build last re-confirmed on
+    activity      TEXT,                          -- #30 playstyle taxonomy
+    review_due    TEXT,
+    valid_until   TEXT,                          -- reports
+    grade_rel     TEXT,                          -- A–F (reports)
+    grade_cred    INTEGER,                       -- 1–6 (reports)
+    header        TEXT,                          -- JSON: SALUTE fields / op snapshot / stance
+    subject_kind  TEXT,                          -- dossiers: place | org
+    subject_ref   TEXT,
+    superseded_by INTEGER,
+    accepted_comment_id INTEGER,                 -- rfi
+    created_at    TEXT, updated_at TEXT, published_at TEXT
+);
+CREATE INDEX IF NOT EXISTS intel_entries_feed ON intel_entries(status, published_at);
+CREATE INDEX IF NOT EXISTS intel_entries_kind ON intel_entries(kind, status);
+-- One dossier per subject: a second "Ruin Station" opens the first instead.
+CREATE UNIQUE INDEX IF NOT EXISTS intel_entries_subject
+    ON intel_entries(subject_kind, subject_ref) WHERE subject_kind IS NOT NULL;
+
+-- Full text per revision (readable diffs, one-click revert). `header` is in the
+-- snapshot so an org dossier's stance change is a revertable revision too.
+CREATE TABLE IF NOT EXISTS intel_revisions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id   INTEGER NOT NULL,
+    rev        INTEGER NOT NULL,
+    title      TEXT, body_md TEXT, header TEXT,
+    editor_id  TEXT, editor_name TEXT,
+    note       TEXT,                             -- "What changed" (required on major)
+    major      INTEGER NOT NULL DEFAULT 0,
+    status     TEXT NOT NULL DEFAULT 'live',     -- live | suggested | rejected
+    created_at TEXT,
+    UNIQUE (entry_id, rev)
+);
+
+CREATE TABLE IF NOT EXISTS intel_comments (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id   INTEGER NOT NULL,
+    parent_id  INTEGER,                          -- one level of reply
+    author_id  TEXT NOT NULL, author_name TEXT,
+    body_md    TEXT, body_html TEXT,
+    kind       TEXT NOT NULL DEFAULT 'comment',  -- comment | addendum | corroborate | dispute | answer
+    created_at TEXT, edited_at TEXT, deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS intel_comments_entry ON intel_comments(entry_id, created_at);
+
+-- Backlink index, rebuilt per save. `field` says where the reference sits: an
+-- org dossier's "Seen at" counts ONLY field='salute_unit' (a sighting), while a
+-- mention in the body is still a backlink.
+CREATE TABLE IF NOT EXISTS intel_links (
+    entry_id INTEGER NOT NULL,
+    ref_kind TEXT NOT NULL,
+    ref_id   TEXT NOT NULL,
+    field    TEXT NOT NULL DEFAULT 'body',       -- body | salute_unit | salute_location | …
+    PRIMARY KEY (entry_id, ref_kind, ref_id, field)
+);
+CREATE INDEX IF NOT EXISTS intel_links_target ON intel_links(ref_kind, ref_id);
+
+CREATE TABLE IF NOT EXISTS intel_reads (       -- required reading + unread markers
+    member_id TEXT NOT NULL, entry_id INTEGER NOT NULL, rev INTEGER, read_at TEXT,
+    PRIMARY KEY (member_id, entry_id)
+);
+CREATE TABLE IF NOT EXISTS intel_tags (
+    entry_id INTEGER NOT NULL, tag TEXT NOT NULL,
+    PRIMARY KEY (entry_id, tag)
+);
+CREATE INDEX IF NOT EXISTS intel_tags_tag ON intel_tags(tag);
+CREATE TABLE IF NOT EXISTS intel_collections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL, summary TEXT, owner_id TEXT,
+    visibility TEXT NOT NULL DEFAULT 'org', created_at TEXT, updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS intel_collection_items (
+    collection_id INTEGER NOT NULL, entry_id INTEGER NOT NULL, position INTEGER NOT NULL,
+    PRIMARY KEY (collection_id, entry_id)
+);
+CREATE TABLE IF NOT EXISTS intel_watches (
+    member_id TEXT NOT NULL,
+    target_kind TEXT NOT NULL,                    -- entry | tag | collection
+    target_id TEXT NOT NULL,
+    created_at TEXT,
+    PRIMARY KEY (member_id, target_kind, target_id)
+);
+CREATE TABLE IF NOT EXISTS intel_flags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_kind TEXT NOT NULL, target_id TEXT NOT NULL,
+    member_id TEXT NOT NULL, reason TEXT NOT NULL, note TEXT,
+    resolved_by TEXT, resolved_at TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS intel_discord_posts (
+    entry_id INTEGER NOT NULL, rev INTEGER, channel_key TEXT NOT NULL,
+    message_id TEXT, thread_id TEXT, posted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS intel_discord_posts_entry ON intel_discord_posts(entry_id);
+-- Import uploads (slice 8): the only image FILES the server ever stores.
+CREATE TABLE IF NOT EXISTS intel_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sha256 TEXT NOT NULL UNIQUE, mime TEXT NOT NULL, bytes INTEGER NOT NULL,
+    width INTEGER, height INTEGER, import_id INTEGER, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS intel_file_refs (
+    file_id INTEGER NOT NULL, entry_id INTEGER NOT NULL,
+    PRIMARY KEY (file_id, entry_id)
+);
+CREATE TABLE IF NOT EXISTS intel_imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_id TEXT NOT NULL, status TEXT NOT NULL,
+    files_total INTEGER, files_skipped INTEGER, bytes_stored INTEGER,
+    report TEXT, created_at TEXT
+);
 """
+
+# Intelligence search backend, set by _init_intel_search at db.init:
+# "fts5" (ranked full text) or "like" (substring fallback). The official
+# python:3.12-slim image is expected to ship FTS5, but a SQLite built without it
+# must degrade search, never fail the boot.
+INTEL_SEARCH = "like"
 
 
 def init(db_path) -> None:
@@ -998,6 +1139,28 @@ def init(db_path) -> None:
         _ensure_column("inventory_allocations", "delivered_qty", "REAL NOT NULL DEFAULT 0")
         if denorm_added:                        # only on the boot that adds the columns
             _backfill_listing_denorm()
+        _init_intel_search()
+
+
+def _init_intel_search() -> None:
+    """Create the Intelligence full-text index if this SQLite has FTS5.
+
+    A self-contained FTS5 table (it keeps its own copy of the text, keyed by
+    rowid = intel_entries.id), written by the entry save path rather than by
+    triggers: the indexed `tags` column is a join over intel_tags, which an
+    external-content table can't express without a view, and the 'delete'
+    command needs the exact old values. Visibility is NOT stored here — search
+    joins intel_entries and filters by marking in SQL."""
+    global INTEL_SEARCH
+    try:
+        _conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS intel_fts USING fts5("
+            "title, summary, body, tags, tokenize='porter unicode61')")
+        INTEL_SEARCH = "fts5"
+    except sqlite3.OperationalError as e:
+        INTEL_SEARCH = "like"
+        log.warning("intel search: SQLite %s has no FTS5 (%s); falling back to "
+                    "LIKE search", sqlite3.sqlite_version, e)
 
 
 # Marks a `handle_key` that deliberately claims nothing: the row lost a

@@ -51,7 +51,7 @@ goals already stamp `min_q` per line but progress never reads it. Design:
 the marketplace crafted blob on crafted holdings, derived subkind + band, then
 goals gate on it, craft preview reads pledged lots, listings/rollups follow.
 
-### 50. Intelligence: the org's knowledge hub, inside Org Intel 📐 DESIGN (2026-10-31)
+### 50. Intelligence: the org's knowledge hub, inside Org Intel 🔨 SLICE 0 BUILT (2026-10-31)
 Org knowledge (SOPs, tactics, notes on places and hostile orgs, op lessons)
 lives in Discord and scrolls away. Design: [intelligence.md](intelligence.md).
 Org Intel grows a second half (INTELLIGENCE · ACTIVITY; every `#/intel/<slug>`
@@ -61,6 +61,8 @@ paste-to-Markdown; `[[poi:…]]` reference chips + backlinks; patch-stamp
 staleness; RESTRICTED + admin-enforceable review from Discord roles;
 author-chosen Discord publishing; link-only images. Built in, not an embedded
 Discourse/Wiki.js. No player dossiers, no loadout builder. Nine slices.
+Slice 0 (masthead + empty Intelligence half, data model, Markdown renderer,
+FTS5 probe, `POST /api/intel/render`) built 2026-10-31; next is slice 1, the Library.
 
 ### 49. Goal custody: hand delivered materials to a holder 📐 DESIGN (2026-10-21)
 User report: deleting a holding after delivering it to an org goal withdraws

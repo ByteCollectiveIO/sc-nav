@@ -42,6 +42,7 @@ import calendar_ics
 import catalog
 import db
 import event_taxonomy
+import intel_md
 import nav_core
 import notify
 import notify_templates
@@ -2027,6 +2028,9 @@ _RATE_LIMITS = {
     # Calendar feed fetches, per feed owner. Apple's fastest refresh is every
     # 5 min (12/h) per device; a few devices sit well under this.
     "calendar": (120, 3600.0),
+    # Intelligence Markdown preview (Write → Preview). A click per preview; a
+    # 100 KB body renders in milliseconds, so this only stops a loop.
+    "render": (60, 60.0),
 }
 
 
@@ -17132,6 +17136,24 @@ async def set_directory_opt_out(body: DirectoryOptIn, user: dict = Depends(requi
     exists in the handle registry); the UI says so plainly."""
     members_dir.set_opt_out(user["id"], body.opt_out)
     return {"ok": True, "directory_opt_out": body.opt_out}
+
+
+# ---- Intelligence (docs/intelligence.md, backlog #50) ----
+class IntelRenderIn(BaseModel):
+    body: str = Field("", max_length=intel_md.MAX_BODY_CHARS)
+
+
+@app.post("/api/intel/render")
+async def intel_render(body: IntelRenderIn, user: dict = Depends(require_session)):
+    """Markdown → sanitized HTML for the editor's Preview: the same
+    intel_md.render the save path uses, so Preview can't differ from what gets
+    published. Images are placeholders for IMAGE_PREVIEW_HOSTS only, whatever
+    the in-app preview toggle says — the toggle gates LOADING them, which the
+    reader does per entry, not what the stored HTML may contain."""
+    rate_limit("render", user["id"])
+    r = await asyncio.to_thread(intel_md.render, body.body, IMAGE_PREVIEW_HOSTS)
+    return {"html": r["html"], "refs": [{"kind": k, "id": i} for k, i in r["refs"]],
+            "images": r["images"]}
 
 
 @app.get("/api/intel/directory")

@@ -34,6 +34,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -15427,6 +15428,210 @@ class LiveEventAnnouncementTests(unittest.TestCase):
         asyncio.run(app._notify_event_reminder(db.get_event(ev["id"])))
         self.assertIn("**Crew** 1 / 5 going", sent[0]["description"])
         self.assertIn("**Roles** Salvage 1/2", sent[0]["description"])
+
+
+class IntelMarkdownTests(unittest.TestCase):
+    """Intelligence slice 0 (#50): intel_md.render is the ONE path from a
+    member's Markdown to stored/served HTML. These pin the allow-list in
+    docs/intelligence.md ("Formatting: Markdown, not rich text") and, above all,
+    that nothing a member types becomes live markup."""
+
+    HOSTS = ("i.imgur.com",)
+
+    def html(self, src):
+        return __import__("intel_md").render(src, self.HOSTS)["html"]
+
+    def test_raw_html_is_text(self):
+        out = self.html('<script>alert(1)</script> <img src=x onerror=alert(1)> <b>x</b>')
+        self.assertNotIn("<script", out)
+        self.assertNotIn("<img", out)
+        self.assertNotIn("<b>", out)
+        self.assertIn("&lt;script&gt;", out)
+
+    def test_only_http_links(self):
+        for bad in ("javascript:alert(1)", "data:text/html,x", "vbscript:x", "file:///etc/passwd"):
+            out = self.html(f"[go]({bad})")
+            self.assertNotIn("<a ", out, bad)
+        out = self.html("[go](https://erkul.games/x)")
+        self.assertIn('href="https://erkul.games/x"', out)
+        self.assertIn('rel="noopener noreferrer nofollow"', out)
+        self.assertIn('<span class="ext-host">(erkul.games)</span>', out)
+
+    def test_bare_urls_link_without_trailing_punctuation(self):
+        out = self.html("see https://example.com/a, then stop.")
+        self.assertIn('<a href="https://example.com/a" rel="noopener noreferrer nofollow">'
+                      "https://example.com/a</a>,", out)
+
+    def test_images_never_render_as_img(self):
+        out = self.html("![scan](https://i.imgur.com/a.png) ![x](https://evil.example/b.png)")
+        self.assertNotIn("<img", out)
+        self.assertIn('<span class="intel-img" data-src="https://i.imgur.com/a.png" '
+                      'data-alt="scan">', out)
+        # Any other host is a plain link, so the reader never fetches it.
+        self.assertIn('<a href="https://evil.example/b.png"', out)
+        self.assertNotIn('data-src="https://evil.example', out)
+        # An allowed host over plain http isn't a placeholder either.
+        self.assertNotIn("data-src", self.html("![s](http://i.imgur.com/a.png)"))
+
+    def test_underline_is_discord_semantics(self):
+        out = self.html("__under__ and **bold**")
+        self.assertIn("<u>under</u>", out)
+        self.assertIn("<strong>bold</strong>", out)
+
+    def test_headings_demoted_and_anchored(self):
+        out = self.html("# Top\n\n#### Deep\n\n## Top")
+        self.assertIn('<h2 id="sec-top">Top</h2>', out)
+        self.assertIn('<h3 id="sec-deep">Deep</h3>', out)
+        self.assertIn('<h2 id="sec-top-2">Top</h2>', out)
+        self.assertNotIn("<h1", out)
+        self.assertNotIn("<h4", out)
+        # A heading can't take an id the app itself uses.
+        self.assertIn('id="sec-intel-view"', self.html("## intel-view"))
+
+    def test_task_ids_are_stable_across_reorder(self):
+        import intel_md
+        a = intel_md.render("- [ ] pre-undock\n- [x] comms check")["html"]
+        b = intel_md.render("- [x] comms check\n- [ ] pre-undock")["html"]
+        ids = lambda h: sorted(re.findall(r'data-task-id="(t-[0-9a-f]+)"', h))
+        self.assertEqual(len(ids(a)), 2)
+        self.assertEqual(ids(a), ids(b))
+        self.assertIn('data-done="1"', a)
+        self.assertNotIn("<input", a)          # display-only, never a form control
+
+    def test_refs_become_placeholders_and_are_collected(self):
+        import intel_md
+        r = intel_md.render("At [[poi:1842]], see [[entry:5]], again [[poi:1842]]; "
+                            "[[bogus:1]] [[poi:abc]]")
+        self.assertEqual(r["refs"], [("poi", "1842"), ("entry", "5")])
+        self.assertIn('<span class="intel-ref" data-ref-kind="poi" data-ref-id="1842">', r["html"])
+        self.assertIn("[[bogus:1]]", r["html"])   # unknown kinds stay plain text
+
+    def test_discord_timestamps(self):
+        out = self.html("at <t:1730410800:f> and <t:1730410800> and <t:99999999999999:f>")
+        self.assertIn('<time datetime="2024-10-31T21:40:00Z" data-fmt="f">', out)
+        self.assertEqual(out.count("<time"), 2)
+        self.assertIn("&lt;t:99999999999999:f&gt;", out)   # out of range stays text
+
+    def test_tables_keep_only_alignment_style(self):
+        out = self.html("| a | b |\n|:--|--:|\n| 1 | 2 |")
+        self.assertIn('<th style="text-align:left">a</th>', out)
+        self.assertIn("<table>", out)
+
+    def test_sanitizer_is_the_backstop(self):
+        import intel_md
+        # Even if a rule ever emitted these, the allow-list drops them.
+        out = intel_md.sanitize('<a href="javascript:x" onclick="y">a</a><iframe src="https://x"></iframe>'
+                                '<span class="evil" style="color:red">s</span><script>z</script>')
+        self.assertNotIn("javascript", out)
+        self.assertNotIn("onclick", out)
+        self.assertNotIn("<iframe", out)
+        self.assertNotIn("evil", out)
+        self.assertNotIn("color", out)
+        self.assertNotIn("z", out.replace("noreferrer", ""))
+
+
+class IntelSliceZeroTests(unittest.TestCase):
+    """Intelligence slice 0 (#50): the data model boots (twice, idempotently),
+    search picks FTS5 or degrades to LIKE, and the Preview endpoint is the same
+    renderer behind a session and a rate limit."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls._member = {"id": "1", "username": "tester", "is_admin": False}
+        app.app.dependency_overrides[app.require_session] = lambda: cls._member
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls._member
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        app._rate_hits.clear()
+
+    def test_schema_is_complete_and_idempotent(self):
+        db.init(Path(self._tmp.name))   # a second boot must not fail
+        names = {r[0] for r in db._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'intel_%'")}
+        for t in ("intel_entries", "intel_revisions", "intel_comments", "intel_links",
+                  "intel_reads", "intel_tags", "intel_collections",
+                  "intel_collection_items", "intel_watches", "intel_flags",
+                  "intel_discord_posts", "intel_files", "intel_file_refs", "intel_imports"):
+            self.assertIn(t, names)
+        cols = lambda t: {r[1] for r in db._conn.execute(f"PRAGMA table_info({t})")}
+        self.assertIn("field", cols("intel_links"))       # "Seen at" = UNIT line only
+        self.assertIn("header", cols("intel_revisions"))  # stance changes revert
+
+    def test_one_dossier_per_subject(self):
+        ins = ("INSERT INTO intel_entries (kind, title, slug, author_id, subject_kind, "
+               "subject_ref) VALUES ('dossier', 'Ruin', 'ruin', '1', 'place', 'poi:903')")
+        with db._conn:
+            db._conn.execute(ins)
+        with self.assertRaises(sqlite3.IntegrityError), db._conn:
+            db._conn.execute(ins)
+        # Entries without a subject (every other kind) don't collide.
+        with db._conn:
+            for _ in range(2):
+                db._conn.execute("INSERT INTO intel_entries (kind, title, slug, author_id) "
+                                 "VALUES ('procedure', 'x', 'x', '1')")
+
+    def test_search_mode_probe(self):
+        self.assertIn(db.INTEL_SEARCH, ("fts5", "like"))
+        has_fts = db._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='intel_fts'").fetchone() is not None
+        self.assertEqual(has_fts, db.INTEL_SEARCH == "fts5")
+
+    def test_search_degrades_without_fts5(self):
+        real = db._conn
+        class NoFts:
+            def execute(self, sql, *a):
+                if "fts5" in sql:
+                    raise sqlite3.OperationalError("no such module: fts5")
+                return real.execute(sql, *a)
+        db._conn = NoFts()
+        try:
+            with self.assertLogs("sc-nav.db", level="WARNING"):
+                db._init_intel_search()
+            self.assertEqual(db.INTEL_SEARCH, "like")
+        finally:
+            db._conn = real
+            db._init_intel_search()
+
+    def test_render_endpoint(self):
+        r = self.client.post("/api/intel/render",
+                             json={"body": "## Hi\n\n<b>x</b> [[poi:7]] ![a](https://i.imgur.com/a.png)"})
+        self.assertEqual(r.status_code, 200)
+        j = r.json()
+        self.assertIn('<h2 id="sec-hi">Hi</h2>', j["html"])
+        self.assertIn("&lt;b&gt;", j["html"])
+        self.assertEqual(j["refs"], [{"kind": "poi", "id": "7"}])
+        self.assertEqual(j["images"], 1)
+
+    def test_render_endpoint_caps_and_limits(self):
+        import intel_md
+        big = "x" * (intel_md.MAX_BODY_CHARS + 1)
+        self.assertEqual(self.client.post("/api/intel/render", json={"body": big}).status_code, 422)
+        limit = app._RATE_LIMITS["render"][0]
+        codes = [self.client.post("/api/intel/render", json={"body": "x"}).status_code
+                 for _ in range(limit + 1)]
+        self.assertEqual(codes[-1], 429)
+        self.assertNotIn(429, codes[:-1])
+
+    def test_render_needs_a_session(self):
+        app.session_user = lambda request: None
+        app.app.dependency_overrides.pop(app.require_session, None)
+        try:
+            r = TestClient(app.app).post("/api/intel/render", json={"body": "x"})
+            self.assertIn(r.status_code, (401, 403))
+        finally:
+            app.session_user = lambda request: self._member
+            app.app.dependency_overrides[app.require_session] = lambda: self._member
 
 
 if __name__ == "__main__":
