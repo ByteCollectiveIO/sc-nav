@@ -1,7 +1,9 @@
 # Intelligence — the org's knowledge hub (inside Org Intel)
 
-**Status:** 📐 design 2026-10-31, not built. Settled calls are marked
-**(user)**. Everything else is a recommendation open to change.
+**Status:** 🔨 building. Slice 0 built 2026-10-31 (masthead, data model,
+renderer, FTS5 probe; as-built detail in
+[implementation-notes.md](implementation-notes.md#intelligence-50)). Settled
+calls are marked **(user)**. Everything else is a recommendation open to change.
 
 **Settled 2026-10-31 (user):**
 

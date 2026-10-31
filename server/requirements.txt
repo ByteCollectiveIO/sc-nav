@@ -7,3 +7,9 @@ itsdangerous>=2.0   # signed session cookies (Starlette SessionMiddleware)
 # 0.0.18 fixes CVE-2024-53981 (multipart parsing DoS). Reachable from the one
 # multipart route we expose, the org-logo upload.
 python-multipart>=0.0.18
+# Intelligence Markdown (#50, server/intel_md.py). markdown-it-py 2.2.0 fixed
+# CVE-2023-26302/26303 (crash/DoS on crafted input); 4.x is the API we target.
+markdown-it-py>=4.0
+# The sanitizer that is the trust boundary for entry HTML (Rust ammonia
+# binding, prebuilt wheels). 0.3 is the API intel_md.sanitize uses.
+nh3>=0.3

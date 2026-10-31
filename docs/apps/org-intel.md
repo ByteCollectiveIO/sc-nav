@@ -21,8 +21,11 @@ someone else's session.
 
 It's built entirely from data the rest of the suite already has. There's no
 separate reporting step, no form to fill out, no admin who has to compile
-numbers — you play the game, use the tools, and the deck updates itself. Open
-`#/intel` and you get org-wide totals for mapping coverage, cargo hauling,
+numbers — you play the game, use the tools, and the deck updates itself. The
+deck is Org Intel's **ACTIVITY** half; the switch at the top flips to
+**INTELLIGENCE**, the org's knowledge hub (procedures, reports, dossiers and
+questions — being built, see [intelligence.md](../intelligence.md)). Open
+`#/intel/overview` and you get org-wide totals for mapping coverage, cargo hauling,
 trade-route profit, belt surveying, marketplace volume, per-contributor
 leaderboards and an ops-attendance board, plus (if you're an admin) a member
 directory that cross-walks Discord identity to in-game handles and shows each

@@ -544,6 +544,25 @@
   .intel-nav a:hover { color: var(--text); }
   .intel-nav a.active { background: var(--accent); color: var(--ink-on-accent); cursor: default; }
   .intel-nav a:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
+  /* Two-level masthead (#50): the half switch on top, the active half's own row
+     under it. `.panel.intel-mast` (two classes) so it out-ranks `.panel`'s
+     padding wherever that rule sits in this file. */
+  .panel.intel-mast { padding: 0; }
+  .intel-mast-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 14px; padding: 10px 14px; }
+  .intel-mast-row + .intel-mast-row { border-top: 1px solid var(--border); }
+  .intel-mast-row[hidden] { display: none; }   /* author display: beats UA [hidden] */
+  .intel-half button { font-size: 11px; font-weight: 700; letter-spacing: .08em; padding: 7px 14px; }
+  .intel-know-empty { padding: 26px 22px 24px; }
+  .intel-know-empty .lead { font-size: 15px; color: var(--text); margin: 6px 0 6px; }
+  .intel-know-empty p { margin: 0; max-width: 62ch; font-size: 13px; line-height: 1.6; }
+  .intel-know-empty .note { margin-top: 14px; font-size: 12px; color: var(--dim); }
+  @media (max-width: 520px) {
+    .intel-mast-row { padding: 9px 12px; }
+    .intel-half { flex: 1; display: flex; }
+    .intel-half button { flex: 1; padding: 8px 6px; }
+    #intel-tabs { width: 100%; overflow-x: auto; }
+    #intel-tabs .rm-tab { white-space: nowrap; padding: 6px 10px; }
+  }
   .intel-hero { display: flex; flex-direction: column; gap: 4px; padding: 20px 22px; margin-bottom: 12px;
     background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
     text-decoration: none; transition: border-color .12s; }
@@ -3844,8 +3863,8 @@
         <a class="app-card" href="#/intel">
           <img class="app-logo" data-app="intel" loading="lazy" src="/images/org_intel_logo.png?v={{APP_VERSION}}" alt="" width="160" height="160">
           <div class="app-name">Org Intel</div>
-          <div class="app-desc">Your org's analytics deck — mapping coverage, hauling and
-            marketplace activity, and the contributor leaderboards, all in one place.</div>
+          <div class="app-desc">What the org knows and how it's doing: procedures, reports
+            and dossiers, plus the activity deck and contributor leaderboards.</div>
         </a>
       </div>
     </section>
@@ -5120,9 +5139,30 @@
   <!-- Org Intel: one analytics app. This shell holds the section nav + the two new
        sections (Overview, Market); the Mapping/Hauling/Leaderboard sections reuse the
        existing views below (siblings, shown under the nav per the active section). -->
+  <!-- Two halves (#50, docs/intelligence.md): INTELLIGENCE = what the org knows
+       (#/intel/feed|library|dossiers|rfi), ACTIVITY = the analytics deck (every
+       older #/intel/<slug> route, unchanged). Bare #/intel opens the half the
+       member last used (scIntelHalf); a first visit lands on the Feed. -->
   <div id="intel-view" hidden>
+    <div class="panel intel-mast" id="intel-mast">
+      <div class="intel-mast-row">
+        <span class="rm-mast-name">ORG INTEL</span>
+        <span class="seg intel-half" id="intel-half" role="group" aria-label="Org Intel half">
+          <button type="button" data-half="intel" aria-pressed="true">INTELLIGENCE</button>
+          <button type="button" data-half="activity" aria-pressed="false">ACTIVITY</button>
+        </span>
+      </div>
+      <div class="intel-mast-row" id="intel-know-row">
+        <nav class="rm-tabs" id="intel-tabs" aria-label="Intelligence sections">
+          <a class="rm-tab" href="#/intel/feed" data-sec="feed">Feed</a>
+          <a class="rm-tab" href="#/intel/library" data-sec="library">Library</a>
+          <a class="rm-tab" href="#/intel/dossiers" data-sec="dossiers">Dossiers</a>
+          <a class="rm-tab" href="#/intel/rfi" data-sec="rfi">RFI</a>
+        </nav>
+      </div>
+      <div class="intel-mast-row" id="intel-act-row" hidden>
     <nav class="intel-nav" id="intel-nav" aria-label="Org Intel sections">
-      <a href="#/intel" data-sec="overview">Overview</a>
+      <a href="#/intel/overview" data-sec="overview">Overview</a>
       <a href="#/intel/mapping" data-sec="mapping">Mapping</a>
       <a href="#/intel/hauling" data-sec="hauling">Hauling</a>
       <a href="#/intel/trading" data-sec="trading">Trading</a>
@@ -5131,7 +5171,10 @@
       <a href="#/intel/boards" data-sec="boards">Leaderboards</a>
       <a href="#/intel/directory" data-sec="directory" id="intel-nav-directory" hidden>Directory</a>
     </nav>
-    <p class="intel-intro muted">Your guild's activity at a glance — mapping coverage, cargo hauling,
+      </div>
+    </div>
+    <div id="intel-know" hidden></div>
+    <p class="intel-intro muted" id="intel-act-intro">Your guild's activity at a glance — mapping coverage, cargo hauling,
       marketplace trade, and contributor leaderboards. Read-only; use ← → to move between sections.
       <span id="intel-fresh" class="intel-fresh"></span></p>
     <div id="intel-live" class="sr-only" role="status" aria-live="polite"></div>
@@ -26857,6 +26900,17 @@ const INTEL_ALIAS = {
   "#/leaderboard": ["#/intel/boards", "mapping"], "#/cargo-leaderboard": ["#/intel/boards", "hauling"],
 };
 let intelBoard = "mapping";   // which leaderboard the Boards section shows
+// Org Intel's two halves (#50). Every ACTIVITY slug predates the split and keeps
+// its flat route; INTELLIGENCE's slugs don't collide with them.
+const INTEL_KNOW_SECS = ["feed", "library", "dossiers", "rfi"];
+const INTEL_ACT_SECS = ["overview", "mapping", "hauling", "trading", "surveying",
+  "market", "boards", "directory"];
+// The half a member last used: a per-browser convenience (like scTheme), so it
+// lives in localStorage and every access is guarded.
+function intelHalf() {
+  try { return localStorage.getItem("scIntelHalf") === "activity" ? "activity" : "intel"; }
+  catch { return "intel"; }
+}
 function applyView() {
   // Every view requires sign-in; the login gate covers anonymous users, but guard
   // here too so a stray deep-link can't leave a view exposed behind the gate.
@@ -26888,11 +26942,11 @@ function applyView() {
   const pirates = h === "#/pirates" && authed;   // Danger Board — pirate warning board (#24)
   const settings = (h === "#/settings" || h.startsWith("#/settings/")) && authed;
   const setup = h === "#/setup" && authed;
-  // Org Intel: one analytics app whose section is selected by the sub-route.
-  const intelSec = h === "#/intel" ? "overview" : h === "#/intel/mapping" ? "mapping"
-    : h === "#/intel/hauling" ? "hauling" : h === "#/intel/trading" ? "trading"
-    : h === "#/intel/surveying" ? "surveying" : h === "#/intel/market" ? "market"
-    : h === "#/intel/boards" ? "boards" : h === "#/intel/directory" ? "directory" : null;
+  // Org Intel: two halves, the section picked by the sub-route. Bare #/intel
+  // opens the member's last half at its landing tab (first visit: the Feed).
+  const intelSub = h.startsWith("#/intel/") ? h.slice(8) : null;
+  const intelSec = h === "#/intel" ? (intelHalf() === "activity" ? "overview" : "feed")
+    : (INTEL_KNOW_SECS.includes(intelSub) || INTEL_ACT_SECS.includes(intelSub)) ? intelSub : null;
   const intel = !!intelSec && authed;
   // Legal pages are public — readable before sign-in (linked from the login
   // splash), so they are NOT gated on `authed`. They also suppress the sign-in
@@ -27582,6 +27636,24 @@ function renderSurveyStats(d) {
 // + Market live inside #intel-view; Mapping / Hauling / Leaderboards reuse the
 // existing views as siblings below the nav), and loads that section's data.
 function renderIntel(section) {
+  const know = INTEL_KNOW_SECS.includes(section);
+  const half = know ? "intel" : "activity";
+  try { localStorage.setItem("scIntelHalf", half); } catch {}
+  document.querySelectorAll("#intel-half button").forEach(b => {
+    const on = b.dataset.half === half;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    b.onclick = () => { if (!on) location.hash = b.dataset.half === "activity" ? "#/intel/overview" : "#/intel/feed"; };
+  });
+  $("intel-know-row").hidden = !know;
+  $("intel-act-row").hidden = know;
+  $("intel-act-intro").hidden = know;
+  $("intel-know").hidden = !know;
+  document.querySelectorAll("#intel-tabs a").forEach(a => {
+    const on = a.dataset.sec === section;
+    a.classList.toggle("on", on);
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
   document.querySelectorAll("#intel-nav a").forEach(a => {
     const on = a.dataset.sec === section;
     a.classList.toggle("active", on);
@@ -27599,7 +27671,8 @@ function renderIntel(section) {
   $("leaderboard-view").hidden = !(boards && intelBoard === "mapping");
   $("cargo-leaderboard-view").hidden = !(boards && intelBoard === "hauling");
   $("ops-board-view").hidden = !(boards && intelBoard === "ops");
-  if (section === "overview") loadIntelOverview();
+  if (know) renderIntelKnow(section);
+  else if (section === "overview") loadIntelOverview();
   else if (section === "directory") loadDirectory();
   else if (section === "mapping") loadStats();
   else if (section === "hauling") loadCargoStats();
@@ -27617,6 +27690,25 @@ function renderIntel(section) {
     else if (intelBoard === "ops") loadOpsLeaderboard();
     else loadCargoLeaderboard();
   }
+}
+
+// INTELLIGENCE half (#50). Slice 0 ships the half itself: the masthead, routes
+// and each tab's empty state. Writing arrives with the Library (slice 1).
+const INTEL_KNOW_EMPTY = {
+  feed: ["FEED", "Nothing published yet.",
+    "Reports, debriefs and procedure updates will appear here, newest first, with what's new since you last looked marked."],
+  library: ["LIBRARY", "No procedures or tactics yet.",
+    "The org's how-tos, grouped by activity: escort formations, mining checklists, the way your crews actually fly. Each one shows which patch it was written for."],
+  dossiers: ["DOSSIERS", "No dossiers yet.",
+    "One page per place or rival org, filled in automatically from the reports, warnings and ops that mention it."],
+  rfi: ["RFI", "No questions yet.",
+    "Requests for information: ask the org something, and the accepted answer stays where the next person can find it."],
+};
+function renderIntelKnow(section) {
+  const [title, lead, body] = INTEL_KNOW_EMPTY[section];
+  $("intel-know").innerHTML = `<div class="panel intel-know-empty"><h2>${title}</h2>` +
+    `<p class="lead">${lead}</p><p class="muted">${body}</p>` +
+    `<p class="note">Writing and publishing aren't switched on yet.</p></div>`;
 }
 
 // Admin-only member directory: the cross-walk between each member's Discord
@@ -27804,8 +27896,10 @@ document.addEventListener("keydown", (e) => {
   if (!iv || iv.hidden) return;
   const tag = e.target && e.target.tagName;
   if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-  const links = [...$("intel-nav").querySelectorAll("a")].filter(a => !a.hidden);
-  const cur = links.findIndex(a => a.classList.contains("active"));
+  // Scoped to the visible half's row (#50): the arrows never jump between halves.
+  const row = $("intel-know-row").hidden ? $("intel-nav") : $("intel-tabs");
+  const links = [...row.querySelectorAll("a")].filter(a => !a.hidden);
+  const cur = links.findIndex(a => a.getAttribute("aria-current") === "page");
   if (cur < 0) return;
   const ni = e.key === "ArrowRight" ? Math.min(cur + 1, links.length - 1) : Math.max(cur - 1, 0);
   if (ni === cur) return;
