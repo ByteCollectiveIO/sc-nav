@@ -32,7 +32,16 @@ and members holding the Discord roles an admin picks can find it, and an
 admin can turn on **review**: new procedures and tactics (and big changes to
 them) wait in a **Review** tab until a reviewer approves them or sends them
 back with a note. Reviewers can also mark an entry **Doctrine**, the org's
-official way of doing it. Reports, dossiers and questions are still being built
+official way of doing it. The **Feed** carries **reports**: a quick SALUTE
+write-up of what you saw (where, when, how many, doing what, with what), with an
+optional source/information grade and a "valid for" time after which it drops
+out of the feed. Others can **corroborate** or **dispute** it, the author can
+fix typos for 15 minutes and then posts **updates**, and the feed marks what's
+new since you last looked. Places, zones, warnings, events, ops and other
+entries can be dropped into any entry as live chips (a place chip sets your
+destination), and each entry lists what links to it. On the danger board,
+**Write up →** starts a report pre-filled from the warning. Dossiers and
+questions are still being built
 (see [intelligence.md](../intelligence.md)). Open
 `#/intel/overview` and you get org-wide totals for mapping coverage, cargo hauling,
 trade-route profit, belt surveying, marketplace volume, per-contributor

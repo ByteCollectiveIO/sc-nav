@@ -29,6 +29,7 @@ import urllib.request
 import zipfile
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
@@ -3315,9 +3316,20 @@ class SessionHub:
         """All active danger warnings. Deadliest first, then freshest — the ordering a
         trader (avoid the worst) and a hunter (find the freshest) both want."""
         rank = {"deadly": 0, "active": 1, "sighted": 2}
-        return [self._public_warning(w) for w in sorted(
+        board = [self._public_warning(w) for w in sorted(
             self.warnings.values(),
             key=lambda w: (rank.get(w["severity"], 9), -w["created"]))]
+        # Intelligence write-ups (#50 slice 3): published, org-visible entries
+        # that cite the warning. This payload goes to every tab, so RESTRICTED
+        # entries never count here.
+        ups: dict[str, list] = {}
+        if board:
+            for b in db.intel_backlinks("warning", [w["id"] for w in board], restricted_ok=False, limit=200):
+                ups.setdefault(str(b["ref_id"]), []).append(
+                    {"id": b["id"], "slug": b["slug"], "title": b["title"], "kind": b["kind"]})
+        for w in board:
+            w["writeups"] = ups.get(str(w["id"]), [])
+        return board
 
     async def broadcast_warnings(self) -> None:
         """Push the full danger board to every tab. Sent on post / confirm / clear /
@@ -17284,7 +17296,14 @@ async def intel_render(body: IntelRenderIn, user: dict = Depends(require_session
 
 
 INTEL_LIBRARY_KINDS = ("procedure", "tactic")
+INTEL_WRITABLE_KINDS = ("procedure", "tactic", "report")   # dossiers, RFIs, debriefs: later slices
 INTEL_SYSTEMS = ("Stanton", "Nyx", "Pyro")
+# A report is a record of what someone saw at a time: its author can fix typos
+# for 15 minutes after publishing, then it only takes updates (addenda).
+INTEL_REPORT_EDIT_S = 15 * 60
+INTEL_GRADE_REL = "ABCDEF"              # source reliability (Admiralty scale)
+INTEL_GRADE_CRED = range(1, 7)          # information credibility
+_INTEL_LOC_REF_RE = re.compile(r"^(poi|zone):(\d{1,20})$")
 _INTEL_TAG_RE = re.compile(r"[^a-z0-9-]+")
 _INTEL_MAX_TAGS = 10
 
@@ -17299,6 +17318,46 @@ def _intel_tags(raw: list[str]) -> list[str]:
     return out[:_INTEL_MAX_TAGS]
 
 
+def _intel_iso(v, field: str) -> str | None:
+    """An ISO time from the client → normalized UTC (seconds), or None."""
+    if v in (None, ""):
+        return None
+    try:
+        d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(f"{field} isn't a valid time")
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return d.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+class IntelReportHeader(BaseModel):
+    """The SALUTE header (reports). Location and time are what a report must
+    have at publish; the rest is optional."""
+    size: str = Field("", max_length=120)
+    activity: str = Field("", max_length=200)
+    location_ref: str | None = Field(None, max_length=30)   # poi:<id> | zone:<id>
+    location: str = Field("", max_length=200)
+    unit: str = Field("", max_length=200)
+    time: str | None = Field(None, max_length=40)
+    equipment: str = Field("", max_length=300)
+    warning_id: int | None = None       # written up from this danger-board warning
+
+    @field_validator("location_ref")
+    @classmethod
+    def _loc_ref(cls, v):
+        if v in (None, ""):
+            return None
+        if not _INTEL_LOC_REF_RE.match(v):
+            raise ValueError("location must be a place or a survey zone")
+        return v
+
+    @field_validator("time")
+    @classmethod
+    def _time(cls, v):
+        return _intel_iso(v, "time")
+
+
 class IntelEntryFields(BaseModel):
     title: str = Field("", max_length=140)
     summary: str = Field("", max_length=300)
@@ -17307,6 +17366,32 @@ class IntelEntryFields(BaseModel):
     system: str | None = None
     tags: list[str] = Field(default_factory=list, max_length=_INTEL_MAX_TAGS * 2)
     visibility: str | None = None      # org | restricted; None = leave as is
+    # Reports only (ignored on other kinds):
+    header: IntelReportHeader | None = None
+    grade_rel: str | None = None       # A–F, or None = ungraded
+    grade_cred: int | None = None      # 1–6
+    valid_until: str | None = None
+
+    @field_validator("grade_rel")
+    @classmethod
+    def _grade_rel(cls, v):
+        if v in (None, ""):
+            return None
+        if v not in INTEL_GRADE_REL:
+            raise ValueError("source reliability is A–F")
+        return v
+
+    @field_validator("grade_cred")
+    @classmethod
+    def _grade_cred(cls, v):
+        if v is not None and v not in INTEL_GRADE_CRED:
+            raise ValueError("information credibility is 1–6")
+        return v
+
+    @field_validator("valid_until")
+    @classmethod
+    def _valid_until(cls, v):
+        return _intel_iso(v, "valid until")
 
     @field_validator("visibility")
     @classmethod
@@ -17340,7 +17425,7 @@ class IntelCreateIn(IntelEntryFields):
     @field_validator("kind")
     @classmethod
     def _kind(cls, v):
-        if v not in INTEL_LIBRARY_KINDS:
+        if v not in INTEL_WRITABLE_KINDS:
             raise ValueError("this kind can't be written yet")
         return v
 
@@ -17370,6 +17455,25 @@ class IntelDoctrineIn(BaseModel):
     on: bool
 
 
+class IntelUpdateIn(BaseModel):
+    """An update on a published report: text, a change to how long it's
+    valid, or both. validity: keep | clear (it's over) | an ISO time."""
+    body: str = Field("", max_length=2000)
+    validity: str = Field("keep", max_length=40)
+
+
+class IntelStanceIn(BaseModel):
+    stance: str                         # corroborate | dispute | none
+    note: str = Field("", max_length=500)
+
+    @field_validator("stance")
+    @classmethod
+    def _stance(cls, v):
+        if v not in ("corroborate", "dispute", "none"):
+            raise ValueError("stance is corroborate, dispute or none")
+        return v
+
+
 def _intel_patch_now() -> str | None:
     return patch_tracker.context().get("current")
 
@@ -17393,8 +17497,50 @@ def _intel_can_edit(e: dict, user: dict) -> bool:
         return e["author_id"] == uid
     if e["status"] != "published":     # in review: withdraw it first; archived: nobody
         return False
+    if e["kind"] == "report":
+        # No silent rewrites: the author's typo window, then updates only.
+        return e["author_id"] == uid and _intel_report_editable(e)
     return (bool(user.get("is_admin")) or e.get("owner_id") == uid
             or uid in (e.get("maintainers") or []))
+
+
+def _intel_report_edit_until(e: dict) -> str | None:
+    if e["kind"] != "report" or not e.get("published_at"):
+        return None
+    try:
+        t = datetime.fromisoformat(e["published_at"])
+    except ValueError:
+        return None
+    return (t + timedelta(seconds=INTEL_REPORT_EDIT_S)).isoformat(timespec="seconds")
+
+
+def _intel_report_editable(e: dict) -> bool:
+    until = _intel_report_edit_until(e)
+    return bool(until and _now_iso() < until)
+
+
+def _intel_header(e: dict) -> dict:
+    try:
+        h = json.loads(e.get("header") or "null")
+    except (TypeError, ValueError):
+        h = None
+    return h if isinstance(h, dict) else {}
+
+
+def _intel_grade(e: dict) -> str | None:
+    if e.get("grade_rel") and e.get("grade_cred"):
+        return f"{e['grade_rel']}{e['grade_cred']}"
+    return None
+
+
+def _intel_report_brief(e: dict) -> dict:
+    """What a list row shows for a report: where, when seen, grade, validity."""
+    h = _intel_header(e)
+    vu = e.get("valid_until")
+    return {"location": h.get("location_label") or h.get("location") or None,
+            "location_ref": h.get("location_ref"), "time": h.get("time"),
+            "grade": _intel_grade(e), "valid_until": vu,
+            "expired": bool(vu and vu <= _now_iso())}
 
 
 def _intel_can_manage(e: dict, user: dict) -> bool:
@@ -17459,6 +17605,7 @@ def _intel_summary(e: dict, current: str | None) -> dict:
         "visibility": e.get("visibility") or "org",
         "doctrine": bool(e.get("doctrine_at")),
         "submitted_at": e.get("submitted_at"),
+        **({"report": _intel_report_brief(e)} if e["kind"] == "report" else {}),
     }
 
 
@@ -17496,21 +17643,148 @@ def _intel_entry_view(e: dict, user: dict) -> dict:
             and not pend and e["status"] != "in_review":
         out["review_note"] = {"by": note.get("author_name"), "note": note["body_md"],
                               "created_at": note["created_at"]}
+    if e["kind"] == "report":
+        out["header"] = _intel_header(e)
+        out["grade_rel"], out["grade_cred"] = e.get("grade_rel"), e.get("grade_cred")
+        out["valid_until"] = e.get("valid_until")
+        out["edit_until"] = _intel_report_edit_until(e)
+        published = e["status"] == "published"
+        out["can_update"] = published and (e["author_id"] == uid or bool(user.get("is_admin")))
+        out["can_stance"] = published and e["author_id"] != uid
+        items, mine = [], None
+        counts = {"corroborate": 0, "dispute": 0}
+        for c in db.intel_comments_for(e["id"], ("addendum", "corroborate", "dispute")):
+            if c["kind"] in counts:
+                counts[c["kind"]] += 1
+                if c["author_id"] == uid:
+                    mine = c["kind"]
+            items.append({"kind": c["kind"], "by": c.get("author_name") or "?", "at": c["created_at"],
+                          "html": c.get("body_html") or "", "note": c.get("body_md") if c["kind"] != "addendum" else None,
+                          "mine": c["author_id"] == uid})
+        out["updates"] = items
+        out["stances"] = {**counts, "mine": mine}
+    if e["status"] == "published":
+        out["linked_from"] = [
+            {"id": b["id"], "kind": b["kind"], "title": b["title"], "slug": b["slug"]}
+            for b in db.intel_backlinks("entry", [e["id"]], intel_cleared(user), limit=20)
+            if b["id"] != e["id"]]
     return out
 
 
-def _intel_fields(body: IntelEntryFields, image_hosts=IMAGE_PREVIEW_HOSTS) -> tuple[dict, list, list]:
+# ---- references: [[kind:id]] → a live chip (slice 3) ----
+def _intel_ref_info(kind: str, rid: str, user: dict | None) -> dict:
+    """What a reference chip shows. state: ok | expired (a warning that aged
+    off) | hidden (exists, but this viewer can't open it) | missing. `user`
+    None = the org-wide view (used to record a last-known name at save, so a
+    private POI's name is never stored)."""
+    try:
+        n = int(rid)
+    except ValueError:
+        return {"state": "missing"}
+    if kind == "poi":
+        poi = nav.pois.get(n)
+        if poi is None or not nav_core.poi_active(poi):
+            return {"state": "missing"}
+        if not nav_core.poi_visible_to(poi, viewer_owner_ids(user)):
+            return {"state": "hidden", "label": "A private place"}
+        sub = " · ".join(x for x in (poi.type, poi.container_name, poi.system) if x and x != "Space")
+        return {"state": "ok", "label": poi.name, "sub": sub, "poi_id": poi.id, "system": poi.system}
+    if kind == "zone":
+        z = db.get_survey_zone(n)
+        if not z:
+            return {"state": "missing"}
+        return {"state": "ok", "label": z["name"], "sub": f"survey zone · {z['system']}",
+                "href": f"#/halo/atlas/{quote(z['system'])}/{z['id']}", "system": z["system"]}
+    if kind == "warning":
+        w = hub.warnings.get(n)
+        if not w:
+            return {"state": "expired", "href": "#/pirates"}
+        a = nav.pois.get(w.get("anchor_a_poi")) if w.get("anchor_a_poi") else None
+        where = (a.name if a else None) or w.get("location") or "Unknown place"
+        return {"state": "ok", "label": where, "sub": f"{w['severity']} warning · {'players' if w['threat'] == 'pvp' else 'NPC pirates'}",
+                "href": "#/pirates", "severity": w["severity"]}
+    if kind == "event":
+        ev = db.get_event(n)
+        if not ev:
+            return {"state": "missing"}
+        return {"state": "ok", "label": ev.get("title") or "Event", "sub": ev.get("status") or "",
+                "when": ev.get("start_at"), "href": f"#/events/{n}"}
+    if kind == "op":
+        op = db.get_op(n)
+        if not op:
+            return {"state": "missing"}
+        return {"state": "ok", "label": op["name"], "sub": f"op · {op.get('phase') or ''}",
+                "href": f"#/ops/{n}"}
+    if kind == "entry":
+        e = db.intel_get_entry(n)
+        if not e or e["status"] in ("draft", "archived"):
+            return {"state": "missing"}
+        if user is None:
+            return ({"state": "ok", "label": e["title"]} if e["visibility"] == "org" and e["status"] == "published"
+                    else {"state": "hidden"})
+        if not _intel_visible(e, user):
+            return {"state": "hidden", "label": "An entry you can't open"}
+        return {"state": "ok", "label": e["title"], "sub": e["kind"], "kind": e["kind"],
+                "href": f"#/intel/e/{e['id']}-{e['slug']}"}
+    if kind == "member":
+        name = _resolve_member_name(str(n), None)
+        return {"state": "ok", "label": name} if name else {"state": "missing"}
+    return {"state": "missing"}
+
+
+def _intel_ref_label(kind: str, rid: str) -> str | None:
+    i = _intel_ref_info(kind, str(rid), None)
+    return i.get("label") if i.get("state") == "ok" else None
+
+
+def _intel_fields(body: IntelEntryFields, kind: str,
+                  image_hosts=IMAGE_PREVIEW_HOSTS) -> tuple[dict, list, list]:
     title = body.title.strip()
     r = intel_md.render(body.body, image_hosts)
     fields = {"title": title, "slug": intel_md.section_slug(title or "untitled"),
               "summary": body.summary.strip(), "body_md": body.body, "body_html": r["html"],
               "activity": body.activity, "system": body.system}
-    return fields, _intel_tags(body.tags), r["refs"]
+    header = None
+    if kind == "report":
+        h = (body.header or IntelReportHeader()).model_dump()
+        for k in ("size", "activity", "location", "unit", "equipment"):
+            h[k] = " ".join((h.get(k) or "").split())
+        h["location_label"] = None
+        if h.get("location_ref"):
+            lk, li = h["location_ref"].split(":")
+            h["location_label"] = _intel_ref_label(lk, li)
+        header = json.dumps(h)
+        fields.update(header=header, grade_rel=body.grade_rel,
+                      grade_cred=body.grade_cred if body.grade_rel else None,
+                      valid_until=body.valid_until)
+    return fields, _intel_tags(body.tags), _intel_link_rows(r["refs"], header)
+
+
+def _intel_link_rows(body_refs, header: str | None) -> list[tuple]:
+    """Every reference an entry makes, with its target's name now: the body's
+    [[refs]] plus a report's SALUTE location and source warning. The link rows
+    are rewritten whole on each save, so every save path builds them here."""
+    rows = [(k, i, "body", _intel_ref_label(k, i)) for k, i in body_refs]
+    h = _intel_header({"header": header})
+    if h.get("location_ref"):
+        lk, li = h["location_ref"].split(":")
+        rows.append((lk, li, "salute_location", h.get("location_label") or _intel_ref_label(lk, li)))
+    if h.get("warning_id"):
+        rows.append(("warning", str(h["warning_id"]), "salute_warning", None))
+    return rows
+
+
+def _intel_report_ready(fields: dict) -> None:
+    """A report publishes with a place and a time (SALUTE's L and T)."""
+    h = json.loads(fields.get("header") or "{}")
+    if not (h.get("location_ref") or h.get("location")) or not h.get("time"):
+        raise HTTPException(status_code=422, detail="A report needs a location and a time before it's published.")
 
 
 @app.get("/api/intel/entries")
 def intel_entries(section: str = "library", kind: str = "", activity: str = "",
-                  system: str = "", tag: str = "", user: dict = Depends(require_session)):
+                  system: str = "", tag: str = "", expired: bool = False,
+                  user: dict = Depends(require_session)):
     """Lists for the Intelligence tabs: `library` (published procedures +
     tactics, by title), `feed` (everything published, newest publish or MAJOR
     revision first), `drafts` (the caller's own unpublished entries)."""
@@ -17518,10 +17792,21 @@ def intel_entries(section: str = "library", kind: str = "", activity: str = "",
     kinds = [k for k in kind.split(",") if k] or None
     kw = dict(activity=activity or None, system=system or None, tag=tag or None,
               restricted_ok=restricted_ok)
+    extra: dict = {}
     if section == "library":
         rows = db.intel_list(kinds=kinds or INTEL_LIBRARY_KINDS, order="title", **kw)
     elif section == "feed":
-        rows = db.intel_list(kinds=kinds, order="recent", limit=100, **kw)
+        # Expired reports drop off the live feed unless asked for.
+        rows = db.intel_list(kinds=kinds, order="recent", limit=150,
+                             live_at=None if expired else _now_iso(), **kw)
+        extra["seen"] = db.intel_feed_seen(user["id"])
+        current = _intel_patch_now()
+        extra["out_of_date"] = [
+            {"id": e["id"], "kind": e["kind"], "title": e["title"], "slug": e["slug"],
+             "owner": _resolve_member_name(e["owner_id"], None) if e.get("owner_id") else None,
+             "written": _intel_patch_state(e, current)["written"]}
+            for e in db.intel_list(kinds=INTEL_LIBRARY_KINDS, order="recent", restricted_ok=restricted_ok)
+            if _intel_patch_state(e, current)["stale"]][:5]
     elif section == "drafts":
         # Your own drafts and submissions; restricted ones too (they're yours).
         rows = db.intel_list(kinds=kinds, status=("draft", "in_review"), author_id=user["id"],
@@ -17529,9 +17814,14 @@ def intel_entries(section: str = "library", kind: str = "", activity: str = "",
     else:
         raise HTTPException(status_code=400, detail="Unknown section.")
     current = _intel_patch_now()
-    return {"entries": [_intel_summary(e, current) for e in rows],
-            "game_patch": current, "search": db.INTEL_SEARCH,
-            "image_hosts": list(IMAGE_PREVIEW_HOSTS)}   # the editor's image-link host check
+    out = [_intel_summary(e, current) for e in rows]
+    counts = db.intel_comment_counts(e["id"] for e in out if e["kind"] == "report")
+    for e in out:
+        if e["id"] in counts:
+            c = counts[e["id"]]
+            e["counts"] = {k: c.get(k, 0) for k in ("corroborate", "dispute", "addendum")}
+    return {"entries": out, "game_patch": current, "search": db.INTEL_SEARCH,
+            "image_hosts": list(IMAGE_PREVIEW_HOSTS), **extra}   # image_hosts: the editor's host check
 
 
 # Markdown syntax that reads as noise in a one-line snippet (headings, table
@@ -17564,7 +17854,7 @@ def intel_create(body: IntelCreateIn, user: dict = Depends(require_session)):
     a phone-started draft can be finished at the desk."""
     if not body.title.strip():
         raise HTTPException(status_code=422, detail="Give it a title first.")
-    fields, tags, refs = _intel_fields(body)
+    fields, tags, refs = _intel_fields(body, body.kind)
     uid, now = str(user["id"]), _now_iso()
     eid = db.intel_create_entry({
         **fields, "kind": body.kind, "status": "draft",
@@ -17590,11 +17880,19 @@ def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_se
     e = _intel_require(entry_id, user)
     if e["status"] == "in_review":
         raise HTTPException(status_code=409, detail="It's waiting for review. Withdraw it to keep editing.")
+    if e["kind"] == "report" and e["status"] == "published" and e["author_id"] == str(user["id"]) \
+            and not _intel_report_editable(e):
+        raise HTTPException(status_code=409, detail=(
+            "A report can only be corrected for 15 minutes after it's published. Add an update instead."))
     if not _intel_can_edit(e, user):
         raise HTTPException(status_code=403, detail="Only the owner, maintainers or an admin can edit this.")
     if not body.title.strip():
         raise HTTPException(status_code=422, detail="The title can't be empty.")
-    fields, tags, refs = _intel_fields(body)
+    if e["kind"] == "report" and e["status"] == "published":
+        body.major = False              # a report's typo window: minor fixes, never a re-publish
+    fields, tags, refs = _intel_fields(body, e["kind"])
+    if e["kind"] == "report" and (body.publish or e["status"] == "published"):
+        _intel_report_ready(fields)
     uid, now = str(user["id"]), _now_iso()
     fields["updated_at"] = now
     marking = _intel_marking(body, e, user)
@@ -17792,7 +18090,8 @@ def intel_revert(entry_id: int, body: IntelRevertIn, user: dict = Depends(requir
               "summary": old.get("summary") or "", "body_md": old["body_md"] or "",
               "body_html": r["html"], "header": old.get("header"), "updated_at": now}
     try:
-        db.intel_save_revision(entry_id, body.base_rev, fields, e["tags"], r["refs"], {
+        db.intel_save_revision(entry_id, body.base_rev, fields, e["tags"],
+                               _intel_link_rows(r["refs"], fields.get("header", e.get("header"))), {
             "editor_id": uid, "editor_name": _resolve_member_name(uid, None),
             "note": f"Reverted to rev {body.rev}", "major": False, "created_at": now})
     except db.IntelConflict as c:
@@ -17870,7 +18169,7 @@ def intel_approve(entry_id: int, user: dict = Depends(require_session)):
         db.intel_save_revision(entry_id, None, {
             "status": "published", "published_at": now, "revised_at": now, "updated_at": now,
             "submitted_at": None, "patch": _intel_patch_now(), "patch_confirmed": None,
-            "body_html": r["html"]}, e["tags"], r["refs"], {
+            "body_html": r["html"]}, e["tags"], _intel_link_rows(r["refs"], e.get("header")), {
             "editor_id": e["author_id"], "editor_name": e.get("author_name"),
             "note": "First published", "major": True, "created_at": now, **approver})
         return _intel_entry_view(db.intel_get_entry(entry_id), user)
@@ -17884,7 +18183,7 @@ def intel_approve(entry_id: int, user: dict = Depends(require_session)):
         "summary": pend.get("summary") or "", "body_md": pend["body_md"] or "", "body_html": r["html"],
         "activity": f.get("activity"), "system": f.get("system"),
         "patch": _intel_patch_now(), "patch_confirmed": None, "revised_at": now, "updated_at": now,
-    }, f.get("tags") or [], r["refs"], {
+    }, f.get("tags") or [], _intel_link_rows(r["refs"], e.get("header")), {
         "editor_id": pend["editor_id"], "editor_name": pend.get("editor_name"),
         "note": pend.get("note"), "major": True, "created_at": now, **approver})
     db.intel_set_revision_status(pend["id"], "approved")
@@ -17940,6 +18239,132 @@ def intel_doctrine(entry_id: int, body: IntelDoctrineIn, user: dict = Depends(re
     db.intel_set_fields(entry_id, {"doctrine_at": _now_iso() if body.on else None,
                                    "doctrine_by": str(user["id"]) if body.on else None})
     return _intel_entry_view(db.intel_get_entry(entry_id), user)
+
+
+@app.post("/api/intel/feed/seen")
+def intel_feed_mark_seen(user: dict = Depends(require_session)):
+    """The member has looked at the feed: what's newer than this is "new"."""
+    now = _now_iso()
+    db.set_intel_feed_seen(user["id"], now)
+    return {"seen": now}
+
+
+def _intel_published_report(entry_id: int, user: dict) -> dict:
+    e = _intel_require(entry_id, user)
+    if e["kind"] != "report" or e["status"] != "published":
+        raise HTTPException(status_code=409, detail="Only a published report takes updates.")
+    return e
+
+
+@app.post("/api/intel/entries/{entry_id}/updates")
+def intel_add_update(entry_id: int, body: IntelUpdateIn, user: dict = Depends(require_session)):
+    """Add update: a timestamped addendum on a published report (author or an
+    admin), and/or a change to how long it's valid — "it's over" ends it now,
+    a time extends or shortens it. The report's own text never changes."""
+    e = _intel_published_report(entry_id, user)
+    uid = str(user["id"])
+    if e["author_id"] != uid and not user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="Only the report's author or an admin can add an update.")
+    text = body.body.strip()
+    now = _now_iso()
+    vu = e.get("valid_until")
+    if body.validity == "keep":
+        new_vu = vu
+    elif body.validity == "clear":
+        new_vu = now[:19] + "+00:00"
+    else:
+        try:
+            new_vu = _intel_iso(body.validity, "valid until")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        if new_vu <= now:
+            raise HTTPException(status_code=422, detail="Pick a time in the future, or say it's over.")
+    changed = new_vu != vu
+    if len(text) < 3 and not changed:
+        raise HTTPException(status_code=422, detail="Write what changed, or change how long it's valid.")
+    if changed:
+        db.intel_set_fields(entry_id, {"valid_until": new_vu, "updated_at": now})
+        line = ("Marked as over." if body.validity == "clear" else
+                f"Valid until <t:{int(datetime.fromisoformat(new_vu).timestamp())}:f>.")
+        text = f"{text}\n\n{line}" if text else line
+    db.intel_add_comment(entry_id, uid, _resolve_member_name(uid, None), text, "addendum", now,
+                         body_html=intel_md.render(text, IMAGE_PREVIEW_HOSTS)["html"])
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
+
+
+@app.post("/api/intel/entries/{entry_id}/stance")
+def intel_stance(entry_id: int, body: IntelStanceIn, user: dict = Depends(require_session)):
+    """Corroborate (I saw it too) or Dispute (with a note) a report; one stance
+    per member, a new one replaces it, `none` withdraws it. Not your own."""
+    e = _intel_published_report(entry_id, user)
+    uid = str(user["id"])
+    if e["author_id"] == uid:
+        raise HTTPException(status_code=403, detail="You can't corroborate or dispute your own report. Add an update.")
+    note = " ".join(body.note.split())
+    if body.stance == "dispute" and len(note) < 3:
+        raise HTTPException(status_code=422, detail="Say why you dispute it.")
+    db.intel_set_stance(entry_id, uid, _resolve_member_name(uid, None),
+                        None if body.stance == "none" else body.stance, note, _now_iso())
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
+
+
+_INTEL_REF_KEY_RE = re.compile(r"^(" + "|".join(intel_md.REF_KINDS) + r"):(\d{1,20})$")
+
+
+@app.get("/api/intel/refs")
+def intel_refs(keys: str = "", entry: int | None = None, user: dict = Depends(require_session)):
+    """Resolve [[kind:id]] references to what their chips show, as THIS viewer
+    may see them. With `entry`, a target that's gone carries the name it had
+    when that entry was saved (a struck-out chip, never an error)."""
+    want = [k for k in dict.fromkeys(keys.split(",")) if _INTEL_REF_KEY_RE.match(k)][:80]
+    labels: dict = {}
+    if entry is not None:
+        e = db.intel_get_entry(entry)
+        if _intel_visible(e, user):
+            labels = db.intel_link_labels(entry)
+    out = {}
+    for k in want:
+        kind, rid = k.split(":")
+        info = _intel_ref_info(kind, rid, user)
+        if info["state"] in ("missing", "expired") and labels.get(k):
+            info["label"] = labels[k]
+        out[k] = info
+    return {"refs": out}
+
+
+@app.get("/api/intel/refs/search")
+def intel_ref_search(q: str = "", user: dict = Depends(require_session)):
+    """The reference inserter: places, survey zones, live warnings, events,
+    ops and entries whose name matches. Private POIs only for their owner."""
+    q = " ".join(q.split())[:80]
+    if len(q) < 2:
+        return {"results": []}
+    ql = q.lower()
+    owners = viewer_owner_ids(user)
+    res: list[dict] = []
+    pois = [poi for poi in nav.pois.values()
+            if ql in poi.name.lower() and nav_core.poi_active(poi) and nav_core.poi_visible_to(poi, owners)]
+    pois.sort(key=lambda x: (not x.name.lower().startswith(ql), not x.qt_marker, len(x.name)))
+    for poi in pois[:8]:
+        res.append({"key": f"poi:{poi.id}", "kind": "poi", "label": poi.name,
+                    "sub": " · ".join(x for x in (poi.type, poi.container_name, poi.system) if x and x != "Space")})
+    rows = db.ref_search_rows(q)
+    for z in rows["zone"]:
+        res.append({"key": f"zone:{z['id']}", "kind": "zone", "label": z["name"], "sub": f"survey zone · {z['system']}"})
+    for wid, w in list(hub.warnings.items()):
+        a = nav.pois.get(w.get("anchor_a_poi")) if w.get("anchor_a_poi") else None
+        where = (a.name if a else None) or w.get("location") or ""
+        if ql in where.lower():
+            res.append({"key": f"warning:{wid}", "kind": "warning", "label": where,
+                        "sub": f"warning · {w['severity']}"})
+    for ev in rows["event"]:
+        res.append({"key": f"event:{ev['id']}", "kind": "event", "label": ev["title"] or "Event",
+                    "sub": f"event · {(ev.get('start_at') or '')[:10]}"})
+    for op in rows["op"]:
+        res.append({"key": f"op:{op['id']}", "kind": "op", "label": op["name"], "sub": f"op · {op['phase']}"})
+    for e in db.intel_title_matches(q, intel_cleared(user)):
+        res.append({"key": f"entry:{e['id']}", "kind": "entry", "label": e["title"], "sub": e["kind"]})
+    return {"results": res[:30]}
 
 
 @app.get("/api/intel/directory")
