@@ -85,3 +85,6 @@ docs/game_log_files/
 **/game_log_files/
 **/gamelog_backups/
 Game*.log
+# vendored impeccable design-review subagents (installed alongside its skills)
+.claude/agents/
+.github/agents/
