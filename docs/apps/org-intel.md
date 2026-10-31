@@ -55,7 +55,13 @@ reply. When you publish, **📣 Announce in Discord** posts a short card (title,
 teaser, a report's SALUTE lines, the first image, an optional role ping) to the
 org's intel channel; a major revision always posts "Revised: …", into the
 entry's own thread when the channel is a Discord forum, and a RESTRICTED entry
-posts only a placeholder link (see [intelligence.md](../intelligence.md)). Open
+posts only a placeholder link (see [intelligence.md](../intelligence.md)). After
+an op ends, anyone who was on it picks **Write debrief →** on the op page: the
+debrief opens with the op's record (crew, time, contracts, money) and four
+questions, what was planned, what happened, what went well, what to change, and
+the op page lists it under DEBRIEFS. An event organizer can add **required
+reading**; the entry shows an **I've read it** bar, and the event roster puts a ✓
+next to everyone who has read it all (a major revision asks them again). Open
 `#/intel/overview` and you get org-wide totals for mapping coverage, cargo hauling,
 trade-route profit, belt surveying, marketplace volume, per-contributor
 leaderboards and an ops-attendance board, plus (if you're an admin) a member

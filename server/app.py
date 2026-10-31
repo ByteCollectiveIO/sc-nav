@@ -8882,7 +8882,70 @@ def _event_view(ev: dict, user: dict, detail: bool = False) -> dict:
              "roles": s["roles"], "status": s["status"]}
             for s in signups if s["status"] in ("going", "maybe", "waitlist")
         ]
+        view.update(_event_reading_view(ev, user, view["attendees"]))
     return view
+
+
+# ---- required reading (#50 slice 7) ----
+# An event can ask its crew to read a few entries first. A read counts at the
+# rev the member last read; only a MAJOR revision makes it stale (a typo fix
+# doesn't send forty people back to re-read). "Read and sign": a ✓ on the
+# roster, no badges, no nagging.
+EVENT_READING_MAX = 10
+EVENT_READING_KINDS = ("procedure", "tactic", "debrief", "dossier")
+_READING_LOOKAHEAD = timedelta(hours=6)     # an event that just started still asks
+
+
+def _reading_entries(entry_ids, user: dict) -> list[dict]:
+    """The required entries this viewer may see, in order (a restricted or
+    archived one silently drops out rather than leaking its title)."""
+    out = []
+    for eid in entry_ids:
+        e = db.intel_get_entry(eid)
+        if e and e["status"] == "published" and _intel_visible(e, user):
+            out.append(e)
+    return out
+
+
+def _read_is_current(read_rev: int | None, major: dict | None) -> bool:
+    return read_rev is not None and read_rev >= ((major or {}).get("rev") or 1)
+
+
+def _event_reading_view(ev: dict, user: dict, attendees: list[dict]) -> dict:
+    entries = _reading_entries(db.event_reading(ev["id"]), user)
+    ids = [e["id"] for e in entries]
+    majors = db.intel_major_revs(ids)
+    people = [a["discord_id"] for a in attendees] + [str(user["id"])]
+    reads = db.intel_reads_for(ids, people)
+    for a in attendees:
+        a["read"] = [i for i in ids if _read_is_current(reads.get((a["discord_id"], i)), majors.get(i))]
+    uid = str(user["id"])
+    return {"reading": [{"id": e["id"], "kind": e["kind"], "title": e["title"], "slug": e["slug"],
+                         "read": _read_is_current(reads.get((uid, e["id"])), majors.get(e["id"])),
+                         "stale": reads.get((uid, e["id"])) is not None
+                                  and not _read_is_current(reads.get((uid, e["id"])), majors.get(e["id"]))}
+                        for e in entries]}
+
+
+def _entry_reading_view(e: dict, user: dict) -> dict | None:
+    """The read bar on an entry page: which upcoming events require it, and
+    whether this member's read still counts (and, if a major revision reset
+    it, that revision's "What changed")."""
+    uid = str(user["id"])
+    since = (datetime.now(timezone.utc) - _READING_LOOKAHEAD).isoformat()
+    required = db.events_requiring(e["id"], since)
+    read_rev = db.intel_reads_for([e["id"]], [uid]).get((uid, e["id"]))
+    if not required and read_rev is None:
+        return None
+    major = db.intel_major_revs([e["id"]]).get(e["id"])
+    current = _read_is_current(read_rev, major)
+    return {"required_by": [{"id": r["id"], "title": r["title"], "start_at": r["start_at"]} for r in required],
+            "read_rev": read_rev, "current": current,
+            "since_note": (major or {}).get("note") if read_rev is not None and not current else None}
+
+
+class EventReadingIn(BaseModel):
+    entry_ids: list[int] = Field(default_factory=list, max_length=EVENT_READING_MAX)
 
 
 # --- Discord notifications: shared helpers + message builders ----------------
@@ -10132,6 +10195,27 @@ async def manage_attendee(event_id: int, body: AttendeeIn,
     return _event_view(db.get_event(event_id), user, detail=True)
 
 
+@app.put("/api/events/{event_id}/reading")
+async def set_event_reading(event_id: int, body: EventReadingIn, user: dict = Depends(require_session)):
+    """The organizer's REQUIRED READING list (order kept). Only published,
+    org-visible doctrine: everyone signing up must be able to open it."""
+    ev = db.get_event(event_id)
+    if ev is None:
+        raise HTTPException(status_code=404, detail="unknown event")
+    _require_event_owner(ev, user)
+    ids = list(dict.fromkeys(body.entry_ids))
+    for eid in ids:
+        e = db.intel_get_entry(eid)
+        if not e or e["status"] != "published" or not _intel_visible(e, user):
+            raise HTTPException(status_code=422, detail="Required reading must be a published entry.")
+        if e["visibility"] != "org":
+            raise HTTPException(status_code=422, detail=f"\"{e['title']}\" is RESTRICTED: not everyone on the event could open it.")
+        if e["kind"] not in EVENT_READING_KINDS:
+            raise HTTPException(status_code=422, detail="Required reading is a procedure, tactic, debrief or dossier.")
+    db.set_event_reading(event_id, ids)
+    return _event_view(db.get_event(event_id), user, detail=True)
+
+
 @app.post("/api/events/{event_id}/complete")
 async def complete_event(event_id: int, user: dict = Depends(require_session)):
     """Mark an event completed (organizer or admin) — it moves to the past tab
@@ -11299,7 +11383,62 @@ def _op_view(op: dict, user: dict) -> dict:
         r["share_reason"] = src.get("share_reason")
     view.update(_op_money(op, roster, user))
     view.update(_op_loot_view(op, roster, user))
+    view.update(_op_debriefs_view(op, user, roster))
     return view
+
+
+def _op_can_debrief(op: dict, user: dict, roster: list[dict] | None = None) -> bool:
+    """Anyone who was on the op, or runs it, can write it up (#50 slice 7)."""
+    if (op.get("kind") or "op") != "op":
+        return False                  # a loot roll has nothing to debrief
+    if _op_can_manage(op, user):
+        return True
+    if roster is None:
+        roster = db.list_op_roster(op["id"])
+    return any(r.get("discord_id") == user["id"] for r in roster)
+
+
+def _op_debriefs_view(op: dict, user: dict, roster: list[dict]) -> dict:
+    """The op page's DEBRIEFS: published ones for everyone, plus the caller's
+    own unfinished one (so a started debrief is never lost)."""
+    uid = str(user["id"])
+    rows = [{"id": d["id"], "title": d["title"], "slug": d["slug"], "status": d["status"],
+             "by": d.get("author_name"), "at": d.get("published_at") or d.get("created_at"),
+             "mine": d["author_id"] == uid}
+            for d in db.intel_op_debriefs(op["id"], intel_cleared(user))
+            if d["status"] == "published" or d["author_id"] == uid]
+    return {"debriefs": rows,
+            "can_debrief": op["phase"] in ("settle", "closed") and _op_can_debrief(op, user, roster)}
+
+
+def _op_debrief_header(op: dict) -> dict:
+    """The read-only OP RECORD a debrief opens with: when, who, how long, the
+    contracts and the money — a snapshot of the op as it stood when the
+    debrief was started (a debrief records what the crew knew then)."""
+    roster = db.list_op_roster(op["id"])
+    rules = nav_core.normalize_op_rules(op.get("rules"), base=org_default_op_rules())
+    totals = nav_core.derive_op_split(roster, db.list_op_ledger(op["id"]), rules)["totals"]
+    ev = db.get_event(op["event_id"]) if op.get("event_id") else None
+    took = {a["key"] for a in nav_core.OP_ATTENDANCE if a["took_part"]}
+    duration = None
+    try:
+        a = datetime.fromisoformat(op["started_at"].replace("Z", "+00:00"))
+        b = datetime.fromisoformat(op["ended_at"].replace("Z", "+00:00"))
+        duration = max(0, int((b - a).total_seconds()))
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return {
+        "op_id": op["id"], "op_name": op["name"],
+        "event_id": op.get("event_id"), "event_title": ev.get("title") if ev else None,
+        "organizer": _resolve_member_name(op["organizer_id"], None),
+        "started_at": op.get("started_at"), "ended_at": op.get("ended_at"), "duration_s": duration,
+        "counts": nav_core.op_attendance_counts(roster),
+        "crew": [_op_row_name(r) for r in roster if r.get("attendance") in took][:60],
+        "contracts": [{"name": c["name"], "amount": c.get("amount")}
+                      for c in db.list_op_contracts(op["id"])][:30],
+        "money": {k: totals.get(k) for k in ("income", "expenses", "pot", "per_full_share")},
+        "taken_at": _now_iso(),
+    }
 
 
 def _op_money(op: dict, roster: list[dict], user: dict) -> dict:
@@ -17316,7 +17455,7 @@ async def intel_render(body: IntelRenderIn, user: dict = Depends(require_session
 
 
 INTEL_LIBRARY_KINDS = ("procedure", "tactic")
-INTEL_WRITABLE_KINDS = ("procedure", "tactic", "report", "dossier", "rfi")   # debriefs start from an op (slice 7)
+INTEL_WRITABLE_KINDS = ("procedure", "tactic", "report", "dossier", "rfi", "debrief")   # a debrief only from its op (slice 7)
 INTEL_COMMENT_MAX = 4000
 # Org dossiers carry a stance. Each has a glyph as well as a colour in the UI.
 INTEL_STANCES = ("hostile", "neutral", "allied", "unknown")
@@ -17500,6 +17639,7 @@ class IntelEntryFields(BaseModel):
 
 class IntelCreateIn(IntelEntryFields):
     kind: str
+    op_id: int | None = None           # a debrief: the op it's written from (and only from one)
 
     @field_validator("kind")
     @classmethod
@@ -17751,6 +17891,8 @@ def _intel_summary(e: dict, current: str | None) -> dict:
         **({"report": _intel_report_brief(e)} if e["kind"] == "report" else {}),
         **({"dossier": _intel_dossier_brief(e)} if e["kind"] == "dossier" else {}),
         **({"rfi": _intel_rfi_brief(e)} if e["kind"] == "rfi" else {}),
+        **({"debrief": {k: _intel_header(e).get(k) for k in ("op_id", "op_name")}}
+           if e["kind"] == "debrief" else {}),
     }
 
 
@@ -17811,6 +17953,8 @@ def _intel_entry_view(e: dict, user: dict) -> dict:
         out["stances"] = {**counts, "mine": mine}
     if e["kind"] == "dossier":
         out.update(_intel_dossier_view(e, user))
+    if e["kind"] == "debrief":
+        out["header"] = _intel_header(e)       # the OP RECORD snapshot
     if e["kind"] == "rfi":
         out["header"] = _intel_header(e)
         out["accepted_id"] = e.get("accepted_comment_id")
@@ -17819,11 +17963,23 @@ def _intel_entry_view(e: dict, user: dict) -> dict:
         out["thread"] = _intel_thread_view(e, user)
         out["can_comment"] = True
     if e["status"] == "published":
+        out["reading"] = _entry_reading_view(e, user)
+    if e["status"] == "published":
         out["linked_from"] = [
             {"id": b["id"], "kind": b["kind"], "title": b["title"], "slug": b["slug"]}
             for b in db.intel_backlinks("entry", [e["id"]], intel_cleared(user), limit=20)
             if b["id"] != e["id"]]
     return out
+
+
+@app.post("/api/intel/entries/{entry_id}/read")
+def intel_mark_read(entry_id: int, user: dict = Depends(require_session)):
+    """"I've read it": records the current revision (slice 7, required reading)."""
+    e = _intel_require(entry_id, user)
+    if e["status"] != "published":
+        raise HTTPException(status_code=409, detail="Only a published entry can be marked read.")
+    db.intel_ack_read(str(user["id"]), entry_id, e["rev"], _now_iso())
+    return {"reading": _entry_reading_view(db.intel_get_entry(entry_id), user)}
 
 
 # ---- discussion (#50 slice 5): comments everywhere, answers on RFIs ----
@@ -17854,10 +18010,10 @@ def _intel_thread_view(e: dict, user: dict) -> list[dict]:
 # placeholder to `intel_restricted` (unset = nothing at all). A forum-channel
 # webhook opens one thread per entry and later revisions post into it.
 _INTEL_KIND_CHANNEL = {"report": "intel_report", "procedure": "intel_sop",
-                       "tactic": "intel_sop", "rfi": "intel_rfi"}
+                       "tactic": "intel_sop", "rfi": "intel_rfi", "debrief": "intel_debrief"}
 INTEL_CHANNEL_LABELS = {"intel": "Intelligence", "intel_report": "Intel · reports",
                         "intel_sop": "Intel · procedures + tactics", "intel_rfi": "Intel · questions",
-                        "intel_restricted": "Intel · restricted"}
+                        "intel_debrief": "Intel · debriefs", "intel_restricted": "Intel · restricted"}
 _INTEL_ICON = {"procedure": "📘", "tactic": "♟️", "report": "📡", "dossier": "🗂️",
                "rfi": "❓", "debrief": "📝"}
 _INTEL_KIND_WORD = {"procedure": "Procedure", "tactic": "Tactic", "report": "Report",
@@ -17886,7 +18042,8 @@ def _intel_kind_channel(kind: str) -> str | None:
 def intel_channel_options() -> list[dict]:
     """The intel channels an author can pick (the configured ones)."""
     return [{"key": c, "label": INTEL_CHANNEL_LABELS[c]}
-            for c in ("intel", "intel_report", "intel_sop", "intel_rfi") if notify.is_configured(c)]
+            for c in ("intel", "intel_report", "intel_sop", "intel_rfi", "intel_debrief")
+            if notify.is_configured(c)]
 
 
 def intel_ping_options() -> list[dict]:
@@ -18393,8 +18550,8 @@ def _intel_ref_label(kind: str, rid: str) -> str | None:
     return i.get("label") if i.get("state") == "ok" else None
 
 
-def _intel_fields(body: IntelEntryFields, kind: str,
-                  image_hosts=IMAGE_PREVIEW_HOSTS) -> tuple[dict, list, list]:
+def _intel_fields(body: IntelEntryFields, kind: str, image_hosts=IMAGE_PREVIEW_HOSTS,
+                  op_header: str | None = None) -> tuple[dict, list, list]:
     title = body.title.strip()
     r = intel_md.render(body.body, image_hosts)
     fields = {"title": title, "slug": intel_md.section_slug(title or "untitled"),
@@ -18434,6 +18591,11 @@ def _intel_fields(body: IntelEntryFields, kind: str,
             d["subject_label"] = _intel_ref_label(sk, si)
         header = json.dumps(d)
         fields["header"] = header
+    elif kind == "debrief":
+        # The op record is a snapshot taken when the debrief was started; the
+        # author never edits it (the client can't send one).
+        header = op_header
+        fields["header"] = header
     return fields, _intel_tags(body.tags), _intel_link_rows(r["refs"], header)
 
 
@@ -18453,6 +18615,8 @@ def _intel_link_rows(body_refs, header: str | None) -> list[tuple]:
     if h.get("subject_ref"):     # a place dossier points at its place
         sk, si = h["subject_ref"].split(":")
         rows.append((sk, si, "subject", h.get("subject_label") or _intel_ref_label(sk, si)))
+    if h.get("op_id"):           # a debrief points at its op (the op page lists them)
+        rows.append(("op", str(h["op_id"]), "debrief_op", h.get("op_name")))
     return rows
 
 
@@ -18542,7 +18706,17 @@ def intel_create(body: IntelCreateIn, user: dict = Depends(require_session)):
     a phone-started draft can be finished at the desk."""
     if not body.title.strip():
         raise HTTPException(status_code=422, detail="Give it a title first.")
-    fields, tags, refs = _intel_fields(body, body.kind)
+    op_header = None
+    if body.kind == "debrief":
+        if not body.op_id:
+            raise HTTPException(status_code=422, detail="A debrief starts from its op: open the op and pick Write debrief.")
+        op = _require_op(body.op_id)
+        if not _op_can_debrief(op, user):
+            raise HTTPException(status_code=403, detail="Only someone on the op, its organizer, a deputy or an admin can debrief it.")
+        if op["phase"] not in ("settle", "closed"):
+            raise HTTPException(status_code=409, detail="Debrief an op once it has ended.")
+        op_header = json.dumps(_op_debrief_header(op))
+    fields, tags, refs = _intel_fields(body, body.kind, op_header=op_header)
     _intel_subject_free(_intel_subject(body.kind, fields.get("header"), fields["title"]), None)
     uid, now = str(user["id"]), _now_iso()
     eid = db.intel_create_entry({
@@ -18584,7 +18758,7 @@ def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_se
         # A dossier stays about what it was published about (an org can be renamed).
         body.dossier = (body.dossier or IntelDossierHeader()).model_copy(update={
             "subject_kind": prev_dossier["subject_kind"], "subject_ref": prev_dossier["subject_ref"]})
-    fields, tags, refs = _intel_fields(body, e["kind"])
+    fields, tags, refs = _intel_fields(body, e["kind"], op_header=e.get("header"))
     subject = _intel_subject(e["kind"], fields.get("header"), fields["title"])
     if e["kind"] == "dossier" and (body.publish or e["status"] == "published"):
         if not subject:
@@ -19137,6 +19311,7 @@ def intel_ref_search(q: str = "", user: dict = Depends(require_session)):
         res.append({"key": f"op:{op['id']}", "kind": "op", "label": op["name"], "sub": f"op · {op['phase']}"})
     for e in db.intel_title_matches(q, intel_cleared(user)):
         res.append({"key": f"entry:{e['id']}", "kind": "entry", "label": e["title"], "sub": _intel_entry_sub(e),
+                    "entry_kind": e["kind"], "restricted": e["visibility"] == "restricted",
                     **({"org": True} if _intel_is_org(e) else {})})
     return {"results": res[:30]}
 

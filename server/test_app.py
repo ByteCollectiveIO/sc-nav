@@ -16747,6 +16747,169 @@ if __name__ == "__main__":
     unittest.main(verbosity=1)
 
 
+class IntelDebriefReadingTests(unittest.TestCase):
+    """Intelligence slice 7 (#50): debriefs written from an op (read-only op
+    record header, only from the op, linked back from it) and an event's
+    required reading with read receipts that only a MAJOR revision resets."""
+
+    CLEAR_ROLE = IntelReportTests.CLEAR_ROLE
+    AUTHOR, OTHER, ADMIN, CLEARED = (IntelReportTests.AUTHOR, IntelReportTests.OTHER,
+                                     IntelReportTests.ADMIN, IntelReportTests.CLEARED)
+    setUpClass = IntelReportTests.__dict__["setUpClass"]
+    tearDownClass = IntelReportTests.__dict__["tearDownClass"]
+    as_ = IntelReportTests.as_
+    entry = IntelDiscussionTests.entry
+
+    def setUp(self):
+        IntelReportTests.setUp(self)
+        with db._conn:
+            for t in ("operations", "op_roster", "op_ledger", "op_contracts", "events",
+                      "event_signups", "event_reading", "intel_reads"):
+                db._conn.execute(f"DELETE FROM {t}")
+
+    def make_op(self, phase="settle", kind="op", crew=("11",)):
+        now = "2026-10-31T20:00:00+00:00"
+        oid = db.create_op({"name": "Hull-C run", "organizer_id": self.ADMIN["id"], "phase": phase,
+                            "kind": kind, "started_at": now, "created_at": now})
+        db.update_op(oid, {"ended_at": "2026-10-31T21:30:00+00:00"}, now)
+        rids = [db.add_op_roster(oid, {"discord_id": d, "attendance": "present", "created_at": now})
+                for d in crew]
+        db.add_op_roster(oid, {"discord_id": "22", "attendance": "absent", "created_at": now})
+        db.add_op_contract(oid, {"name": "Escort to Area18", "amount": 90000}, self.ADMIN["id"], now)
+        db.add_op_ledger(oid, {"kind": "income", "amount": 120000, "roster_id": rids[0],
+                               "entered_by": self.ADMIN["id"], "created_at": now})
+        return oid
+
+    def debrief(self, oid, expect=200, **kw):
+        r = self.client.post("/api/intel/entries", json={"kind": "debrief", "title": "AAR", "op_id": oid, **kw})
+        self.assertEqual(r.status_code, expect, r.text)
+        return r.json()
+
+    # ---- debriefs ----
+    def test_debrief_starts_only_from_an_ended_op_someone_was_on(self):
+        oid = self.make_op()
+        r = self.client.post("/api/intel/entries", json={"kind": "debrief", "title": "AAR"})
+        self.assertEqual(r.status_code, 422)
+        self.assertIn("starts from its op", r.text)
+        self.as_(self.CLEARED)                      # never on it
+        self.debrief(oid, expect=403)
+        self.as_(self.AUTHOR)
+        self.debrief(self.make_op(phase="live"), expect=409)
+        self.debrief(self.make_op(kind="roll"), expect=403)
+        self.as_(self.ADMIN)                        # runs it, wasn't on the roster
+        self.debrief(oid)
+
+    def test_header_is_the_op_record_and_the_client_cant_change_it(self):
+        oid = self.make_op()
+        d = self.debrief(oid, header={"op_name": "forged"})
+        r = self.client.put(f"/api/intel/entries/{d['id']}", json={
+            "title": "AAR", "body": "What went well", "publish": True, "header": {"op_name": "forged"}})
+        self.assertEqual(r.status_code, 200, r.text)
+        h = json.loads(db.intel_get_entry(d["id"])["header"])
+        self.assertEqual(h["op_id"], oid)
+        self.assertEqual(h["op_name"], "Hull-C run")
+        self.assertEqual(h["duration_s"], 5400)
+        self.assertEqual(h["crew"], ["Author"])           # took part only
+        self.assertEqual(h["counts"]["absent"], 1)
+        self.assertEqual(h["contracts"], [{"name": "Escort to Area18", "amount": 90000}])
+        self.assertEqual(h["money"]["income"], 120000)
+        self.assertEqual(r.json()["header"]["op_name"], "Hull-C run")
+
+    def test_op_page_lists_its_debriefs(self):
+        oid = self.make_op()
+        d = self.debrief(oid)
+        self.as_(self.OTHER)              # someone else's draft stays private
+        v = self.client.get(f"/api/ops/{oid}").json()
+        self.assertEqual(v["debriefs"], [])
+        self.assertTrue(v["can_debrief"])  # on the roster (absent still counts as on it)
+        self.as_(self.AUTHOR)
+        v = self.client.get(f"/api/ops/{oid}").json()
+        self.assertEqual([x["status"] for x in v["debriefs"]], ["draft"])
+        self.client.put(f"/api/intel/entries/{d['id']}", json={"title": "AAR", "publish": True})
+        self.as_(self.OTHER)
+        v = self.client.get(f"/api/ops/{oid}").json()
+        self.assertEqual([x["title"] for x in v["debriefs"]], ["AAR"])
+        self.as_(self.CLEARED)
+        self.assertFalse(self.client.get(f"/api/ops/{oid}").json()["can_debrief"])
+
+    def test_debrief_routes_to_its_own_channel(self):
+        self.assertEqual(app._INTEL_KIND_CHANNEL["debrief"], "intel_debrief")
+        self.assertIn("intel_debrief", notify.CATEGORIES)
+        self.assertIn("intel_debrief", app.INTEL_CHANNEL_LABELS)
+
+    # ---- required reading ----
+    def make_event(self):
+        start = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
+        eid = db.create_event({"organizer_id": self.AUTHOR["id"], "title": "Escort night", "start_at": start,
+                               "created_at": start, "updated_at": start})
+        for d in ("11", "22"):
+            db.upsert_signup(eid, d, [], "going", None, start)
+        return eid
+
+    def test_only_the_organizer_sets_published_org_doctrine(self):
+        sop = self.entry()
+        ev = self.make_event()
+        self.as_(self.OTHER)
+        self.assertEqual(self.client.put(f"/api/events/{ev}/reading", json={"entry_ids": [sop["id"]]}).status_code, 403)
+        self.as_(self.AUTHOR)
+        rfi = self.entry(kind="rfi", title="Where do they camp?")
+        r = self.client.put(f"/api/events/{ev}/reading", json={"entry_ids": [rfi["id"]]})
+        self.assertEqual(r.status_code, 422)
+        self.as_(self.ADMIN)
+        secret = self.entry(title="Black ops", visibility="restricted")
+        self.as_(self.AUTHOR)
+        r = self.client.put(f"/api/events/{ev}/reading", json={"entry_ids": [secret["id"]]})
+        self.assertEqual(r.status_code, 422)      # can't even see it
+        r = self.client.put(f"/api/events/{ev}/reading", json={"entry_ids": [sop["id"], sop["id"]]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual([x["id"] for x in r.json()["reading"]], [sop["id"]])
+        r = self.client.put(f"/api/events/{ev}/reading", json={"entry_ids": list(range(1, 12))})
+        self.assertEqual(r.status_code, 422)      # ten at most
+
+    def test_read_receipts_reset_on_a_major_revision_only(self):
+        sop = self.entry()
+        ev = self.make_event()
+        self.client.put(f"/api/events/{ev}/reading", json={"entry_ids": [sop["id"]]})
+        self.as_(self.OTHER)
+        page = self.client.get(f"/api/intel/entries/{sop['id']}").json()
+        self.assertEqual([x["title"] for x in page["reading"]["required_by"]], ["Escort night"])
+        self.assertFalse(page["reading"]["current"])
+        r = self.client.post(f"/api/intel/entries/{sop['id']}/read")
+        self.assertTrue(r.json()["reading"]["current"])
+        roster = {a["discord_id"]: a["read"] for a in self.client.get(f"/api/events/{ev}").json()["attendees"]}
+        self.assertEqual(roster, {"11": [], "22": [sop["id"]]})
+        self.as_(self.AUTHOR)                      # a typo fix: the read still counts
+        r = self.client.put(f"/api/intel/entries/{sop['id']}", json={
+            "title": "Hull-C escort", "body": "typo", "base_rev": 1})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.as_(self.OTHER)
+        self.assertTrue(self.client.get(f"/api/intel/entries/{sop['id']}").json()["reading"]["current"])
+        self.as_(self.AUTHOR)                      # a major revision resets it
+        r = self.client.put(f"/api/intel/entries/{sop['id']}", json={
+            "title": "Hull-C escort", "body": "new formation", "base_rev": 2, "major": True,
+            "note": "Escorts now fly high cover"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.as_(self.OTHER)
+        rd = self.client.get(f"/api/intel/entries/{sop['id']}").json()["reading"]
+        self.assertFalse(rd["current"])
+        self.assertEqual(rd["since_note"], "Escorts now fly high cover")
+        ev_view = self.client.get(f"/api/events/{ev}").json()
+        self.assertTrue(ev_view["reading"][0]["stale"])
+        self.assertEqual([a["read"] for a in ev_view["attendees"]], [[], []])
+        self.client.post(f"/api/intel/entries/{sop['id']}/read")
+        self.assertTrue(self.client.get(f"/api/events/{ev}").json()["reading"][0]["read"])
+
+    def test_a_now_restricted_entry_drops_out_for_those_without_clearance(self):
+        sop = self.entry()
+        ev = self.make_event()
+        self.client.put(f"/api/events/{ev}/reading", json={"entry_ids": [sop["id"]]})
+        db.intel_set_fields(sop["id"], {"visibility": "restricted"})
+        self.as_(self.OTHER)
+        self.assertEqual(self.client.get(f"/api/events/{ev}").json()["reading"], [])
+        self.as_(self.CLEARED)
+        self.assertEqual(len(self.client.get(f"/api/events/{ev}").json()["reading"]), 1)
+
+
 class IntelDiscordTests(unittest.TestCase):
     """Intelligence slice 6 (#50): announcing entries in Discord — the author's
     📣 choice on publish, always on a major revision, Push on a minor one,

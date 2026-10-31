@@ -618,6 +618,20 @@
   .ix-banner > .ix-ico { color: var(--warn); }
   .ix-banner.returned > .ix-ico { color: var(--bad); }
   .ix-banner .ix-btn, .ix-banner .ix-primary { padding: 5px 10px; }
+  /* Required reading (#50 slice 7): a quiet "read and sign" bar, no badges. */
+  .ix-readbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 10px 22px; font-size: 12px;
+    line-height: 1.5; border-bottom: 1px solid var(--border); background: var(--accent-wash); }
+  .ix-readbar > span { flex: 1 1 260px; }
+  .ix-readbar > .ix-ico { color: var(--accent); }
+  .ix-readbar.done { background: transparent; color: var(--dim); }
+  .ix-readbar.done > .ix-ico { color: var(--good); }
+  .ix-readbar.stale { background: var(--warn-wash); }
+  .ix-readbar.stale > .ix-ico { color: var(--warn); }
+  .ix-readbar .ix-primary, .ix-readbar .ix-btn { padding: 5px 10px; }
+  .ix-readbar q { color: var(--text); }
+  .ix-opr .ix-opr-sub { display: block; font-size: 11px; }
+  .ix-opr dd a { display: inline-flex; align-items: center; gap: 5px; }
+  .ix-opr-ed .ix-salute { padding: 0; border-bottom: none; }
   .ix-banner-inline { display: flex; gap: 6px; align-items: flex-start; margin: 10px 0 0; font-size: 12px; color: var(--warn); }
   .ix-seg-row { margin-bottom: 10px; }
   .ix-seg-row .seg button { font-size: 11px; letter-spacing: .06em; padding: 5px 10px; }
@@ -2654,6 +2668,20 @@
   .ev-name { font-size: 12px; padding: 3px 9px; border-radius: 12px; background: var(--panel2);
     border: 1px solid var(--border); }
   .ev-name.maybe { opacity: .7; font-style: italic; }
+  .ev-read { margin-left: 5px; font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .ev-read.ok { color: var(--good); font-weight: 700; }
+  .ev-reading { margin: 4px 0 6px; }
+  .ev-rd-list { list-style: none; margin: 0; padding: 0; }
+  .ev-rd-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 7px 0;
+    border-top: 1px solid var(--border-soft); font-size: 13px; }
+  .ev-rd-list li:first-child { border-top: none; }
+  .ev-rd-list a { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  .ev-rd-list small { color: var(--dim); font-size: 11px; }
+  .ev-rd-st { margin-left: auto; font-size: 12px; color: var(--dim); }
+  .ev-rd-st.ok { color: var(--good); }
+  .ev-rd-st.stale { color: var(--warn); }
+  .ev-rd-add { margin-top: 8px; max-width: 520px; }
+  .ev-rd-msg { font-size: 12px; }
   .ev-name.wait { opacity: .8; border-style: dashed; border-color: var(--warn); }
   /* board bar (2026-08 review): range seg + mine toggle + category chips */
   .ev-boardbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
@@ -2864,6 +2892,11 @@
   .op-roster-head h2 { margin: 0; }
   .op-roster-head .ev-btn { margin-left: auto; font-size: 12px; padding: 4px 10px; }
   .op-roster-head + .ev-note { margin-top: 6px; }
+  .op-debriefs { list-style: none; margin: 8px 0 0; padding: 0; }
+  .op-debriefs li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 8px 0;
+    border-top: 1px solid var(--border-soft); font-size: 13px; }
+  .op-debriefs li:first-child { border-top: none; }
+  .op-debriefs .muted { font-size: 12px; margin-left: auto; }
   .op-counts { font-size: 12px; color: var(--dim); }
   .op-counts b { color: var(--text); }
   .op-unmarked { color: var(--warn); }
@@ -15019,12 +15052,21 @@ async function renderDetailBody(e) {
 
   // Roster grouped by role, each with its fill bar + the members filling it.
   const grouped = attendeesByRole(e.attendees || [], e.roles || []);
+  // "Read and sign" (#50 slice 7): ✓ = read every required entry at its
+  // current revision; a partial count otherwise. No badges.
+  const need = (e.reading || []).length;
+  const nm = (a, cls = "") => {
+    const n = (a.read || []).length;
+    const mark = !need ? "" : n === need ? `<span class="ev-read ok" title="Read the required reading">✓</span>`
+      : n ? `<span class="ev-read" title="Read ${n} of ${need}">${n}/${need}</span>` : "";
+    return `<span class="ev-name${cls ? " " + cls : ""}">${esc(a.display_name)}${mark}</span>`;
+  };
   const fillByRole = {}; (f.roster || []).forEach(r => fillByRole[r.role] = r);
   let roster = (f.roster || []).map(r => {
     const names = (grouped.ordered.find(o => o[0] === r.role) || [null, []])[1];
     return `<div class="ev-roster-role">${roleBar(r)}` +
       `<div class="ev-roster-names">${names.length
-        ? names.map(a => `<span class="ev-name">${esc(a.display_name)}</span>`).join("")
+        ? names.map(a => nm(a)).join("")
         : `<span class="muted" style="font-size:12px;">— open —</span>`}</div></div>`;
   }).join("");
   // Any extra roles members claimed that aren't in the target roster.
@@ -15032,15 +15074,15 @@ async function renderDetailBody(e) {
     roster += `<div class="ev-roster-role"><div class="ev-role"><span class="ev-role-n">${esc(role)}</span>` +
       `<span class="ev-role-bar"><span style="width:100%"></span></span>` +
       `<span class="ev-role-ct">${names.length}</span></div>` +
-      `<div class="ev-roster-names">${names.map(a => `<span class="ev-name">${esc(a.display_name)}</span>`).join("")}</div></div>`;
+      `<div class="ev-roster-names">${names.map(a => nm(a)).join("")}</div></div>`;
   });
   if (grouped.noRole.length) {
     roster += `<div class="ev-roster-role"><div class="ev-section-h" style="margin:4px 0">No role yet</div>` +
-      `<div class="ev-roster-names">${grouped.noRole.map(a => `<span class="ev-name">${esc(a.display_name)}</span>`).join("")}</div></div>`;
+      `<div class="ev-roster-names">${grouped.noRole.map(a => nm(a)).join("")}</div></div>`;
   }
   const maybeRow = grouped.maybe.length
     ? `<div class="ev-section-h">Tentative (${grouped.maybe.length})</div>` +
-      `<div class="ev-roster-names">${grouped.maybe.map(a => `<span class="ev-name maybe">${esc(a.display_name)}</span>`).join("")}</div>`
+      `<div class="ev-roster-names">${grouped.maybe.map(a => nm(a, "maybe")).join("")}</div>`
     : "";
   // First-come waitlist: shown in join order (the promote order), so everyone
   // can see where they stand.
@@ -15082,6 +15124,7 @@ async function renderDetailBody(e) {
         : `Mission ${opPhaseBadge(e.op.phase)} <a href="#/ops/${e.op.id}">Open the op →</a>`}</div>` : "") +
     // Same formatting Discord shows (masked links left as typed, like there).
     (e.description ? `<div class="ev-desc">${discordMd(e.description, { links: false, br: false })}</div>` : "") +
+    eventReadingHtml(e, cancelled) +
     `<div class="ev-section-h">Roster</div>${roster || '<p class="stat-empty">No signups yet.</p>'}` +
     maybeRow + waitRow +
     (e.can_edit && !cancelled ? organizerAttendeePanel(e) : "") +
@@ -15100,6 +15143,7 @@ async function renderDetailBody(e) {
   };
   if (!cancelled) bindSignup(e);
   if (!cancelled) renderFleetSection(e);
+  if (e.can_edit && !cancelled) bindEventReading(e);
   if (e.can_edit && !cancelled) bindAttendeePanel(e);
   if (e.can_edit) {
     const ed = $("ev-edit"); if (ed) ed.onclick = () => renderEditForm(e);
@@ -15133,6 +15177,47 @@ async function renderDetailBody(e) {
       if (r.ok) renderEventDetail(e.id);
     };
   }
+}
+
+// REQUIRED READING (#50 slice 7): what the organizer asks the crew to read
+// first. Each row says where you stand: read, revised since, or not yet. The
+// organizer edits the list in place (published, org-visible doctrine only).
+const EVENT_READING_KINDS = ["procedure", "tactic", "debrief", "dossier"];
+function eventReadingHtml(e, cancelled) {
+  const list = e.reading || [];
+  if (!list.length && !(e.can_edit && !cancelled)) return "";
+  const going = (e.attendees || []).filter(a => a.status === "going");
+  const done = list.length ? going.filter(a => (a.read || []).length === list.length).length : 0;
+  const row = (x) => `<li><a href="#/intel/e/${+x.id}-${encodeURIComponent(x.slug || "entry")}">${intelIco(x.kind, "ix-ico sm")}${esc(x.title)}</a>` +
+    `<small>${esc((INTEL_KIND[x.kind] || x.kind).toLowerCase())}</small>` +
+    `<span class="ev-rd-st ${x.read ? "ok" : x.stale ? "stale" : ""}">${x.read ? "✓ You've read it" : x.stale ? "Revised since you read it" : "Not read yet"}</span>` +
+    (e.can_edit ? `<button type="button" class="op-x" data-rd-rm="${+x.id}" aria-label="Remove ${esc(x.title)} from required reading">✕</button>` : "") + `</li>`;
+  return `<div class="ev-reading" id="ev-reading"><div class="ev-section-h">Required reading` +
+    (list.length && going.length ? ` <span class="muted">· ${done} of ${going.length} going have read it all</span>` : "") + `</div>` +
+    (list.length ? `<ul class="ev-rd-list">${list.map(row).join("")}</ul>`
+      : `<p class="ev-note">Nothing yet. Add the procedures, tactics, debriefs or dossiers the crew should read before this; a ✓ on the roster shows who has.</p>`) +
+    (e.can_edit && !cancelled && list.length < 10 ? `<div class="ev-field ix-pick ev-rd-add"><input class="ti" id="ev-rd-q" autocomplete="off" ` +
+      `placeholder="Add required reading: find an entry…" aria-label="Add required reading">` +
+      `<ul id="ev-rd-res" hidden></ul></div><span class="muted ev-rd-msg" id="ev-rd-msg" role="status"></span>` : "") + `</div>`;
+}
+function bindEventReading(e) {
+  const save = async (ids) => {
+    const msg = $("ev-rd-msg");
+    try {
+      const r = await fetch(`/api/events/${e.id}/reading`, { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entry_ids: ids }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { if (msg) msg.textContent = (typeof d.detail === "string" && d.detail) || "Couldn't save the list."; return; }
+      await renderDetailBody(d);
+      const q = $("ev-rd-q"); if (q) q.focus();
+    } catch { if (msg) msg.textContent = "Couldn't save the list. Try again."; }
+  };
+  const ids = (e.reading || []).map(x => x.id);
+  document.querySelectorAll("[data-rd-rm]").forEach(b => b.onclick = () => save(ids.filter(i => i !== +b.dataset.rdRm)));
+  const q = $("ev-rd-q");
+  if (q) intelRefPicker(q, $("ev-rd-res"),
+    (x) => x.kind === "entry" && EVENT_READING_KINDS.includes(x.entry_kind) && !x.restricted && !ids.includes(+x.key.split(":")[1]),
+    (it) => save([...ids, +it.key.split(":")[1]]));
 }
 
 // The event's Discord announcement art, when the app can show it: a link on
@@ -16942,7 +17027,7 @@ function drawOp(op) {
       (op.roster.length ? `<div class="op-grid">${op.roster.map(r => opRowHtml(op, r)).join("")}</div>`
         : `<p class="stat-empty">No one on the roster yet.</p>`) +
       addPanel + deputyPanel + `</div>`,
-    }) +
+    }) + opDebriefsPanel(op) +
     `<div class="panel"><details class="op-log-d"><summary><h2>LOG <span class="muted">(${op.log.length})</span></h2></summary>` +
       `<p class="ev-note">Every change to this op, who made it and when. Nothing here can be edited or removed.</p>` +
       `<ol class="op-log">${op.log.slice().reverse().map(e =>
@@ -16952,6 +17037,25 @@ function drawOp(op) {
   bindOp(op);
   bindOpMoney(op);
   bindOpLoot(op);
+}
+
+// DEBRIEFS (#50 slice 7): the after-action write-ups of this op, in
+// Intelligence. Write debrief → once the op has ended, for anyone on it or
+// running it; a debrief you started and haven't published comes back here.
+function opDebriefsPanel(op) {
+  const list = op.debriefs || [];
+  if (!list.length && !op.can_debrief) return "";
+  const draft = list.find(d => d.mine && d.status !== "published");
+  const go = op.can_debrief
+    ? (draft ? `<a class="ev-btn primary" href="${intelHref(draft)}/edit">Continue your debrief →</a>`
+      : `<a class="ev-btn primary" href="#/intel/new/debrief?op=${op.id}">Write debrief →</a>`) : "";
+  return `<div class="panel"><div class="op-roster-head"><h2>DEBRIEFS${list.length ? ` <span class="muted">(${list.length})</span>` : ""}</h2>` +
+    `${go}</div>` +
+    (list.length ? `<ul class="op-debriefs">${list.map(d => `<li><a href="${intelHref(d)}${d.status === "draft" ? "/edit" : ""}">${esc(d.title)}</a>` +
+      (d.status !== "published" ? ` <span class="ev-tpl-badge">${d.status === "in_review" ? "in review" : "draft"}</span>` : "") +
+      `<span class="muted">${esc(d.by || "")}${d.at ? ` · ${esc(fmtEventTime(d.at))}` : ""}</span></li>`).join("")}</ul>`
+      : `<p class="ev-note">Nobody has written this one up yet. A debrief answers four questions: what was planned, what happened, ` +
+        `what went well, what to change. It opens with this op's record (crew, time, contracts, money) filled in.</p>`) + `</div>`;
 }
 
 // ---- standalone loot roll (kind "roll") ----
@@ -27522,7 +27626,7 @@ function intelParseRoute(sub) {
       from: m[3] && m[2] === "edit" ? { q: +m[3], a: +m[4] } : null };
     return m[2] === "history" || m[2] === "edit" ? m[2] : m[2] === "review" ? "reviewing" : "entry";
   }
-  m = /^new\/(procedure|tactic|report|dossier|rfi)(?:\?(.*))?$/.exec(sub);
+  m = /^new\/(procedure|tactic|report|dossier|rfi|debrief)(?:\?(.*))?$/.exec(sub);
   if (m) {
     // ?w=<warning> (Write up →) · ?loc=<poi|zone:id> / ?unit=<org dossier id>
     // (a report from a dossier) · ?subject=<poi|zone:id> / ?org=1 (a new dossier)
@@ -27531,6 +27635,8 @@ function intelParseRoute(sub) {
     intelRoute = { kind: m[1], warning: /^\d+$/.test(q.get("w") || "") ? +q.get("w") : null,
       loc: ref("loc"), subject: ref("subject"), unit: /^\d+$/.test(q.get("unit") || "") ? +q.get("unit") : null,
       org: q.get("org") === "1",
+      // ?op=<op id>: a debrief only ever starts from its op's page
+      op: /^\d+$/.test(q.get("op") || "") ? +q.get("op") : null,
       // ?about=<entry id> (Ask about an org) · ?from=<rfi>.<answer> (Promote →)
       about: /^\d+$/.test(q.get("about") || "") ? +q.get("about") : null,
       from: /^\d+\.\d+$/.test(q.get("from") || "") ? { q: +q.get("from").split(".")[0], a: +q.get("from").split(".")[1] } : null };
@@ -28369,6 +28475,9 @@ const INTEL_TEMPLATE = {
   dossier: "## Overview\nWhat this place is, and what crews should know before they go.\n\n## Approach\n- \n\n" +
     "## Who uses it\n\n## Nearest help\n",
   rfi: "What you already know, and what would help.\n",
+  // The after-action review's four questions (#50 slice 7).
+  debrief: "## What was planned\nThe objective and the plan, as briefed.\n\n## What happened\nWhat actually went on, in order.\n\n" +
+    "## What went well\n- \n\n## What to change\n- \n",
   org: "## Who they are\nWhat kind of outfit this is, and where they operate.\n\n## How they operate\n- \n\n" +
     "## What works against them\n",
 };
@@ -28504,6 +28613,7 @@ function intelFeedRow(e, seen) {
     r && r.location ? `<span class="ix-loc">${intelIco("pin")}${esc(r.location)}</span>` : "",
     q ? (q.answered ? `<span class="ix-tag ok">Answered</span>` : `<span class="ix-tag draft">Open</span>`) : "",
     q && q.location ? `<span class="ix-loc">${intelIco((q.location_ref || "").startsWith("zone:") ? "zone" : "pin")}${esc(q.location)}</span>` : "",
+    e.debrief && e.debrief.op_name ? `<span class="ix-loc">${intelIco("op")}${esc(e.debrief.op_name)}</span>` : "",
     intelMarkTags(e),
     e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "",
     e.activity ? `<span class="ix-tag">${esc(e.activity)}</span>` : "",
@@ -28540,10 +28650,10 @@ async function intelFeed(box) {
   const opt = (list, cur, none) => `<option value="">${none}</option>` +
     list.map(x => `<option value="${esc(x)}"${x === cur ? " selected" : ""}>${esc(x)}</option>`).join("");
   box.innerHTML = `<div class="ix-grid" id="ix-feed-grid"><div class="panel"><div class="ix-panel-h"><h2>FEED</h2>` +
-    `<span class="muted">Reports and questions, plus procedures, tactics and dossiers when they're published or revised</span></div>` +
+    `<span class="muted">Reports, questions and debriefs, plus procedures, tactics and dossiers when they're published or revised</span></div>` +
     `<div class="ix-filters" role="group" aria-label="Filter the feed">` +
     chip("", "All") + chip("report", "Reports", "report") + chip("procedure", "Procedures", "procedure") + chip("tactic", "Tactics", "tactic") +
-    chip("dossier", "Dossiers", "dossier") + chip("rfi", "Questions", "rfi") + `<span class="sp"></span>` +
+    chip("dossier", "Dossiers", "dossier") + chip("rfi", "Questions", "rfi") + chip("debrief", "Debriefs", "debrief") + `<span class="sp"></span>` +
     `<select class="ti" id="ix-f-sys" aria-label="System">${opt(INTEL_SYSTEM_OPTS, f.system, "Every system")}</select>` +
     `<select class="ti" id="ix-f-act" aria-label="Activity">${opt(tags, f.activity, "Every activity")}</select>` +
     `<label class="ix-chip ix-check"><input type="checkbox" id="ix-f-exp"${f.expired ? " checked" : ""}> Show expired</label></div>` +
@@ -28857,12 +28967,13 @@ function intelDossierView(box, e) {
     `<div class="ix-kindline">${intelIco("dossier")}Dossier · ${kindWord}${intelMarkTags(e)}${isOrg ? intelStanceChip(d.stance) : ""}` +
     (e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "") + `</div>` +
     `<h1 class="ix-title">${esc(e.title)}</h1>` + (sub ? `<p class="ix-dx-sub">${sub}</p>` : "") +
-    (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") + `${actions}</div>${live}` +
+    (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") + `${actions}</div>${intelReadBar(e)}${live}` +
     `<div class="ix-prose" id="ix-prose">${e.body_html || `<p class="muted">Nobody has written anything here yet. <a href="${intelHref(e)}/edit">Add what you know</a>.</p>`}</div>` +
     `${edited}</article>${rollPanel}${e.thread ? `<div class="panel ix-article">${intelThreadHtml(e)}</div>` : ""}</div><aside class="ix-rail">${rail}</aside></div>`;
   intelHydrate($("ix-prose"), e);
   const rp = box.querySelector(".ix-dx-roll"); if (rp) intelHydrate(rp, null);
   intelSetTab("dossiers");
+  intelBindReadBar(box, e);
   if (intelRoute.anchor) { const t = document.getElementById(intelRoute.anchor); if (t) t.scrollIntoView({ block: "start" }); }
   else window.scrollTo(0, 0);
   const fail = (err) => intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000);
@@ -29305,6 +29416,7 @@ async function intelEntryView(box) {
       `<p class="ix-save-err" id="ix-upd-err" role="alert" hidden></p></form>` : "") + `</section>` : "";
   const crumb = isReport ? `<a href="#/intel/feed">Feed</a><span>/</span><span>Report</span>`
     : e.kind === "dossier" ? `<a href="#/intel/dossiers">Dossiers</a><span>/</span><span>${(e.dossier || {}).subject_kind === "org" ? "Orgs" : "Places"}</span>`
+    : e.kind === "debrief" ? `<a href="#/intel/feed">Feed</a><span>/</span><span>Debrief</span>`
     : `<a href="#/intel/library">Library</a><span>/</span><span>${esc(e.activity || "General")}</span>`;
   const linked = (e.linked_from || []).length ? `<div class="panel"><div class="ix-panel-h"><h2>LINKED FROM</h2><span class="muted">${e.linked_from.length}</span></div>` +
     `<ul class="ix-rl">${e.linked_from.map(b => `<li>${intelIco(b.kind)}<span><a href="${intelHref(b)}">${esc(b.title)}</a>` +
@@ -29320,7 +29432,7 @@ async function intelEntryView(box) {
     (isReport ? intelGradeChip(r.grade) + (r.expired ? `<span class="ix-tag">Expired</span>` : "") : "") + `</div>` +
     `<h1 class="ix-title">${esc(e.title)}</h1>` +
     (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") +
-    `<div class="ix-by">${by}</div>${actions}</div>${salute}` +
+    `<div class="ix-by">${by}</div>${actions}</div>${salute}${e.kind === "debrief" ? intelOpRecordHtml(e.header) : ""}${intelReadBar(e)}` +
     `<div class="ix-prose" id="ix-prose">${e.body_html || `<p class="muted">This entry has no body yet.</p>`}</div>${updates}${e.thread ? intelThreadHtml(e) : ""}</article>` +
     `<aside class="ix-rail">${repRail}<div class="panel" id="ix-toc-p" hidden><h2>ON THIS PAGE</h2><ul class="ix-toc" id="ix-toc"></ul></div>${linked}${intelDiscordPanel(e)}` +
     `<div class="panel"><h2>DETAILS</h2><dl class="ix-dl">` +
@@ -29351,6 +29463,8 @@ async function intelEntryView(box) {
   if (intelRoute.anchor) { const t = document.getElementById(intelRoute.anchor); if (t) t.scrollIntoView({ block: "start" }); }
   else window.scrollTo(0, 0);
   if (isReport) { intelReportRail(e); intelSetTab("feed"); }
+  if (e.kind === "debrief") intelSetTab("feed");
+  intelBindReadBar(box, e);
   const fail = (err) => intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000);
   $("ix-copy").onclick = () => intelCopy(location.origin + location.pathname + intelHref(e), "Link copied");
   if ($("ix-confirm")) $("ix-confirm").onclick = async () => {
@@ -29727,13 +29841,64 @@ async function intelPromoteSource(from) {
 }
 const INTEL_TITLE_PH = { procedure: "e.g. Hull-C escort formation", tactic: "e.g. Countering a gate camp at Pyro Gateway",
   report: "e.g. Gate camp on the Pyro side of the jump point", dossier: "e.g. Pyro Gateway, or Red Wake Syndicate",
-  rfi: "e.g. Anyone mapped the caves at Aberdeen?" };
+  rfi: "e.g. Anyone mapped the caves at Aberdeen?", debrief: "e.g. Hull-C escort to Area18" };
 // ISO → the value a datetime-local input wants (local time, minutes).
 function intelLocalInput(iso) {
   const d = iso ? new Date(iso) : null;
   if (!d || !Number.isFinite(d.getTime())) return "";
   const z = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}T${z(d.getHours())}:${z(d.getMinutes())}`;
+}
+// A debrief's OP RECORD (#50 slice 7): the read-only snapshot of its op taken
+// when the debrief was started. Same row grid as SALUTE, no letters.
+function intelOpRecordHtml(h) {
+  if (!h || !h.op_id) return "";
+  const row = (l, v) => v ? `<dt><span class="l">${l}</span></dt><dd>${v}</dd>` : "";
+  const when = h.started_at ? new Date(h.started_at).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+  const c = h.counts || {}, m = h.money || {};
+  const crew = (h.crew || []);
+  const tally = [c.took_part ? `${c.took_part} took part` : "", c.late ? `${c.late} late` : "", c.left_early ? `${c.left_early} left early` : "",
+    c.excused ? `${c.excused} excused` : "", c.absent ? `${c.absent} absent` : "", c.guests ? `${c.guests} guest${c.guests === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
+  const money = m.income || m.expenses ? [`${esc(fmtAuec(m.income))} in`, m.expenses ? `${esc(fmtAuec(m.expenses))} out` : "",
+    m.per_full_share ? `${esc(fmtAuec(m.per_full_share))} a full share` : ""].filter(Boolean).join(" · ") : "";
+  return `<dl class="ix-salute ix-opr" aria-label="Op record">` +
+    row("OP", `<a href="#/ops/${+h.op_id}">${intelIco("op", "ix-ico sm")}${esc(h.op_name || "Op")}</a>` +
+      (h.event_title && h.event_title !== h.op_name ? ` <span class="muted">· ${esc(h.event_title)}</span>` : "")) +
+    row("WHEN", esc(when) + (h.duration_s != null ? ` <span class="muted">· ${esc(fmtDur(h.duration_s))}</span>` : "")) +
+    row("LED BY", esc(h.organizer || "")) +
+    row("CREW", (crew.length ? crew.map(esc).join(", ") : "Nobody marked present") + (tally ? `<small class="muted ix-opr-sub">${esc(tally)}</small>` : "")) +
+    row("CONTRACTS", (h.contracts || []).map(x => `${esc(x.name)}${x.amount ? ` <span class="muted">${esc(fmtAuec(x.amount))}</span>` : ""}`).join("<br>")) +
+    row("MONEY", money) + `</dl>`;
+}
+// "Read and sign" (#50 slice 7): shown when an upcoming event requires this
+// entry, or once you've read it. Only a major revision resets a read, and then
+// its "What changed" note says why you're being asked again.
+function intelReadBar(e) {
+  const r = e.reading;
+  if (!r) return "";
+  const evs = (r.required_by || []).map(x => `<a href="#/events/${+x.id}">${esc(x.title || "an event")}</a>`);
+  const req = evs.length ? `Required reading for ${evs.join(", ")}.` : "";
+  if (r.current)
+    return `<div class="ix-readbar done" id="ix-readbar">${intelIco("check")}<span>You've read this${req ? `. ${req}` : "."}</span></div>`;
+  if (r.read_rev != null)
+    return `<div class="ix-readbar stale" id="ix-readbar">${intelIco("history")}<span><b>Revised since you read it.</b> ` +
+      `${r.since_note ? `What changed: <q>${esc(r.since_note)}</q> ` : ""}${req}</span>` +
+      `<button type="button" class="ix-primary" id="ix-read-go">${intelIco("check")}I've read it again</button></div>`;
+  return `<div class="ix-readbar" id="ix-readbar">${intelIco("task")}<span>${req}</span>` +
+    `<button type="button" class="ix-primary" id="ix-read-go">${intelIco("check")}I've read it</button></div>`;
+}
+function intelBindReadBar(box, e) {
+  const go = box.querySelector("#ix-read-go");
+  if (!go) return;
+  go.onclick = async () => {
+    go.disabled = true;
+    try {
+      const d = await intelApi(`/api/intel/entries/${e.id}/read`, { method: "POST" });
+      e.reading = d.reading;
+      const bar = box.querySelector("#ix-readbar");
+      if (bar) { bar.outerHTML = intelReadBar(e); intelBindReadBar(box, e); }
+    } catch (err) { go.disabled = false; intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
+  };
 }
 // The SALUTE header + grade + valid-until block (reports). Re-mounted whole
 // when a local backup is restored.
@@ -29925,6 +30090,24 @@ function intelEdLeave() {
   if (intelEd && intelEd.timer && intelEd.status === "draft") { clearTimeout(intelEd.timer); intelEdAutosave(true); }
   intelEd = null;
 }
+// Write debrief → (#50 slice 7): a debrief only starts from its op. The draft
+// is created at once, so the op record is snapshotted server-side and the op
+// page can offer "Continue your debrief" from then on.
+async function intelStartDebrief(box, opId) {
+  const back = (msg) => { box.innerHTML = `<div class="panel">${intelStatus(msg, true)}` +
+    `<p style="padding:0 16px 16px"><a class="ix-btn" href="${opId ? `#/ops/${opId}` : "#/ops"}">${intelIco("op")}${opId ? "Back to the op" : "Open Ops"}</a></p></div>`; };
+  if (!opId) { back("A debrief starts from its op. Open the op and pick Write debrief."); return; }
+  let op;
+  try { op = await intelApi(`/api/ops/${opId}`); } catch (err) { back(err.message); return; }
+  const mine = (op.debriefs || []).find(d => d.mine && d.status !== "published");
+  if (mine) { location.replace(`${intelHref(mine)}/edit`); return; }
+  try {
+    const d = await intelApi("/api/intel/entries", { method: "POST", body: {
+      kind: "debrief", op_id: opId, title: `${op.name} debrief`.slice(0, 140), summary: "", body: INTEL_TEMPLATE.debrief, tags: [] } });
+    if (intelCurSec !== "new") return;
+    location.replace(`${intelHref(d)}/edit`);
+  } catch (err) { back(err.message); }
+}
 async function intelEditor(box) {
   const isNew = intelCurSec === "new";
   const id = isNew ? null : intelRoute.id;
@@ -29944,7 +30127,8 @@ async function intelEditor(box) {
     if (!e.can_edit) { box.innerHTML = `<div class="panel">${intelStatus("Only the owner, maintainers or an admin can edit this entry.", true)}</div>`; return; }
   }
   if (intelCurSec !== (isNew ? "new" : "edit") || (!isNew && intelRoute.id !== id)) return;
-  if (e && e.kind === "report") intelSetTab("feed");
+  if (isNew && kind === "debrief") { intelStartDebrief(box, intelRoute.op); return; }
+  if (e && (e.kind === "report" || e.kind === "debrief")) intelSetTab("feed");
   if (e && e.kind === "dossier") intelSetTab("dossiers");
   if (e && e.kind === "rfi") intelSetTab("rfi");
   // "Write up →" from a danger-board warning: a report pre-filled with where,
@@ -30036,7 +30220,7 @@ async function intelEditor(box) {
   const tb = (md, label, inner, kbd) => `<button type="button" class="ix-tb" data-md="${md}" title="${label}${kbd ? ` (${kbd})` : ""}" aria-label="${label}">${inner}</button>`;
   const crumbTail = e ? `<a href="${published ? intelHref(e) : "#/intel/library"}">${esc(e.title)}</a><span>/</span><span>${e.kind === "report" && published ? "Correct" : "Edit"}</span>`
     : `<span id="ix-crumb-t">${kind === "rfi" ? "New question" : `New ${esc(INTEL_KIND[kind].toLowerCase())}`}</span>`;
-  const home = (k) => k === "report" ? `<a href="#/intel/feed" id="ix-crumb-home">Feed</a>`
+  const home = (k) => k === "report" || k === "debrief" ? `<a href="#/intel/feed" id="ix-crumb-home">Feed</a>`
     : k === "rfi" ? `<a href="#/intel/rfi" id="ix-crumb-home">RFI</a>`
     : k === "dossier" ? `<a href="#/intel/dossiers" id="ix-crumb-home">Dossiers</a>` : `<a href="#/intel/library" id="ix-crumb-home">Library</a>`;
   box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb">${home(intelEd.kind)}<span>/</span>${crumbTail}</nav>` +
@@ -30060,7 +30244,10 @@ async function intelEditor(box) {
     `<label class="ix-lbl"><span>TAGS</span><input class="ti" id="ix-ed-tags" autocomplete="off" placeholder="escort, hull-c" value="${esc(v.tags.join(", "))}"></label>` +
     `</div><div class="ix-rep" id="ix-rep"${intelEd.kind === "report" ? "" : " hidden"}></div>` +
     `<div class="ix-rep ix-dos" id="ix-dos"${intelEd.kind === "dossier" ? "" : " hidden"}></div>` +
-    `<div class="ix-rep ix-rfi" id="ix-rfi"${intelEd.kind === "rfi" ? "" : " hidden"}></div></div>` +
+    `<div class="ix-rep ix-rfi" id="ix-rfi"${intelEd.kind === "rfi" ? "" : " hidden"}></div>` +
+    (intelEd.kind === "debrief" ? `<div class="ix-rep ix-opr-ed"><div class="ix-rep-h"><span>OP RECORD</span>` +
+      `<small>Taken from the op when you started. It isn't editable: the debrief says what happened, the op says who and how much.</small></div>` +
+      (intelOpRecordHtml(e && e.header) || `<p class="muted">The op record is missing.</p>`) + `</div>` : "") + `</div>` +
     `<div class="ix-tools" role="toolbar" aria-label="Formatting">` +
     tb("h", "Heading", "<b>H</b>") + tb("b", "Bold", "<b>B</b>", "Ctrl+B") + tb("i", "Italic", "<i>I</i>", "Ctrl+I") +
     tb("u", "Underline", "<u>U</u>") + tb("s", "Strikethrough", "<s>S</s>") + `<span class="sep"></span>` +
@@ -30374,7 +30561,7 @@ function intelEdBindAnnounce() {
   cnt();
 }
 const INTEL_CHANNEL_LABEL = { intel: "Intelligence", intel_report: "Intel · reports", intel_sop: "Intel · procedures + tactics",
-  intel_rfi: "Intel · questions", intel_restricted: "Intel · restricted" };
+  intel_rfi: "Intel · questions", intel_debrief: "Intel · debriefs", intel_restricted: "Intel · restricted" };
 function intelEdRenderSave(keepNote) {
   const p = $("ix-save-p"); if (!p || !intelEd) return;
   const ed = intelEd, published = ed.status === "published";
@@ -30400,6 +30587,7 @@ function intelEdRenderSave(keepNote) {
         : isReport ? `Only you can see a draft. A report is a record of what you saw: once it's published you can correct it for 15 minutes, then you add updates.`
         : ed.kind === "dossier" ? `Only you can see a draft. Once it's published any member can edit it, and every change is kept.`
         : ed.kind === "rfi" ? `Only you can see a draft. Posting puts the question in RFI and the Feed. Anyone can answer; you mark the answer that did it.`
+        : ed.kind === "debrief" ? `Only you can see a draft. Publishing puts it in the Feed and search, and on its op's page under DEBRIEFS.`
         : `Only you can see a draft. Publishing puts it in the Library, the Feed and search, stamped with the game patch.`) + `</p>` +
       intelEdAnnounceHtml("publish") +
       `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-publish">${gated ? "Submit for review" : isReport ? "Publish report" : ed.kind === "rfi" ? "Post question" : "Publish"}</button>` +
@@ -31256,6 +31444,7 @@ const DISCORD_CATS = [
   { key: "intel_report", label: "Intel · reports", desc: "reports only. Unset = Intelligence" },
   { key: "intel_sop",   label: "Intel · procedures + tactics", desc: "procedures and tactics only. Unset = Intelligence" },
   { key: "intel_rfi",   label: "Intel · questions", desc: "RFIs, plus one nudge when a question goes 24 h unanswered. Unset = Intelligence" },
+  { key: "intel_debrief", label: "Intel · debriefs", desc: "After-action debriefs written from an op (an #after-action channel). Unset = Intelligence" },
   { key: "intel_restricted", label: "Intel · restricted", desc: "RESTRICTED entries as a placeholder: no title or text, just a link. Unset = they post nothing" },
 ];
 const WEBHOOK_RE = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/webhooks\//;

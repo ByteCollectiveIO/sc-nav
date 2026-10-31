@@ -900,6 +900,14 @@ CREATE TABLE IF NOT EXISTS intel_links (
 );
 CREATE INDEX IF NOT EXISTS intel_links_target ON intel_links(ref_kind, ref_id);
 
+-- Required reading (#50 slice 7): entries an event asks its crew to read,
+-- in the organizer's order. A row per (event, entry), not a JSON column on
+-- events, so "which events require this entry" is one indexed query.
+CREATE TABLE IF NOT EXISTS event_reading (
+    event_id INTEGER NOT NULL, entry_id INTEGER NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (event_id, entry_id)
+);
+CREATE INDEX IF NOT EXISTS event_reading_entry ON event_reading(entry_id);
 CREATE TABLE IF NOT EXISTS intel_reads (       -- required reading + unread markers
     member_id TEXT NOT NULL, entry_id INTEGER NOT NULL, rev INTEGER, read_at TEXT,
     PRIMARY KEY (member_id, entry_id)
@@ -5544,6 +5552,82 @@ def intel_thread(entry_id: int) -> list[dict]:
     return [dict(r) for r in _conn.execute(
         "SELECT * FROM intel_comments WHERE entry_id=? AND kind IN (?,?) ORDER BY created_at, id",
         (entry_id,) + INTEL_THREAD_KINDS)]
+
+
+# ---- Required reading + read receipts (#50 slice 7) ----
+@_intel_read
+def event_reading(event_id: int) -> list[int]:
+    return [r[0] for r in _conn.execute(
+        "SELECT entry_id FROM event_reading WHERE event_id=? ORDER BY position, entry_id", (event_id,))]
+
+
+def set_event_reading(event_id: int, entry_ids: list[int]) -> None:
+    with _lock, _conn:
+        _conn.execute("DELETE FROM event_reading WHERE event_id=?", (event_id,))
+        _conn.executemany("INSERT INTO event_reading (event_id, entry_id, position) VALUES (?,?,?)",
+                          [(event_id, eid, n) for n, eid in enumerate(entry_ids)])
+
+
+@_intel_read
+def events_requiring(entry_id: int, since_iso: str) -> list[dict]:
+    """Scheduled events starting after `since_iso` that require this entry."""
+    return [dict(r) for r in _conn.execute(
+        "SELECT ev.id, ev.title, ev.start_at FROM event_reading er JOIN events ev ON ev.id = er.event_id "
+        "WHERE er.entry_id=? AND ev.status='scheduled' AND ev.start_at > ? ORDER BY ev.start_at",
+        (entry_id, since_iso))]
+
+
+def intel_ack_read(member_id: str, entry_id: int, rev: int, at: str) -> None:
+    with _lock, _conn:
+        _conn.execute("INSERT INTO intel_reads (member_id, entry_id, rev, read_at) VALUES (?,?,?,?) "
+                      "ON CONFLICT(member_id, entry_id) DO UPDATE SET rev=excluded.rev, read_at=excluded.read_at",
+                      (str(member_id), entry_id, rev, at))
+
+
+@_intel_read
+def intel_reads_for(entry_ids, member_ids=None) -> dict:
+    """{(member_id, entry_id): rev read} for these entries (and members)."""
+    entry_ids = list(entry_ids)
+    if not entry_ids:
+        return {}
+    q = f"SELECT member_id, entry_id, rev FROM intel_reads WHERE entry_id IN ({','.join('?' * len(entry_ids))})"
+    args = list(entry_ids)
+    if member_ids is not None:
+        member_ids = [str(m) for m in member_ids]
+        if not member_ids:
+            return {}
+        q += f" AND member_id IN ({','.join('?' * len(member_ids))})"
+        args += member_ids
+    return {(r[0], r[1]): r[2] for r in _conn.execute(q, args)}
+
+
+@_intel_read
+def intel_major_revs(entry_ids) -> dict:
+    """{entry_id: {"rev", "note"}} — each entry's latest LIVE major revision:
+    the one a read receipt must be at or past (a minor edit doesn't reset it)."""
+    entry_ids = list(entry_ids)
+    if not entry_ids:
+        return {}
+    out = {}
+    for r in _conn.execute(
+            "SELECT entry_id, rev, note FROM intel_revisions r WHERE major=1 AND status='live' "
+            f"AND entry_id IN ({','.join('?' * len(entry_ids))}) "
+            "AND rev = (SELECT MAX(rev) FROM intel_revisions x WHERE x.entry_id=r.entry_id AND x.major=1 "
+            "AND x.status='live')", entry_ids):
+        out[r[0]] = {"rev": r[1], "note": r[2]}
+    return out
+
+
+@_intel_read
+def intel_op_debriefs(op_id: int, restricted_ok: bool) -> list[dict]:
+    """Every debrief written from this op, any status (the caller filters:
+    published for everyone, unpublished only for its author), newest first."""
+    return [dict(r) for r in _conn.execute(
+        "SELECT e.id, e.title, e.slug, e.status, e.author_id, e.author_name, e.created_at, e.published_at "
+        "FROM intel_links l JOIN intel_entries e ON e.id = l.entry_id "
+        "WHERE l.ref_kind='op' AND l.ref_id=? AND l.field='debrief_op' AND e.kind='debrief' "
+        f"AND e.status != 'archived'{_intel_vis_sql(restricted_ok)} "
+        "ORDER BY COALESCE(e.published_at, e.created_at) DESC", (str(op_id),))]
 
 
 # ---- Discord posts (#50 slice 6) ----

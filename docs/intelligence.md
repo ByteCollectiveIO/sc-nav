@@ -8,7 +8,9 @@ chips + backlinks, danger board **Write up →**), built 2026-10-31; slice 4, do
 (place + org, open edit, stance revisions, rollups, the navigator's ◆ chip), built
 2026-10-31; slice 5, RFIs + comments (answers, accept, promote), built 2026-10-31; slice 6,
 Discord publishing (channels, 📣 panel, pings, templates, forum threads, RESTRICTED
-placeholders, the 24 h RFI nudge), built 2026-10-31 (as-built detail in
+placeholders, the 24 h RFI nudge), built 2026-10-31; slice 7, debriefs + required
+reading (op **Write debrief →** with a read-only OP RECORD, event required reading,
+read receipts that only a major revision resets), built 2026-10-31 (as-built detail in
 [implementation-notes.md](implementation-notes.md#intelligence-50)). Settled
 calls are marked **(user)**. Everything else is a recommendation open to change.
 
@@ -256,11 +258,14 @@ Every reference is indexed (`intel_links`). That gives two things for free:
   review" after N days.
 - **Supersede.** "Superseded by [[entry:…]]" archives the old one and redirects
   readers to the new one.
-- **Required reading** (later slice). An event can list procedures as required
+- **Required reading** (slice 7, built). An event can list procedures, tactics,
+  debriefs and dossiers (published, org-visible, ten at most) as required
   reading. Signups show who has read the current revision (`intel_reads`
   stores the revision each member last read, so an edit resets it). This is
   "read and sign" from real-world SOP practice. No achievements, no badges,
-  just a ✓ on the roster.
+  just a ✓ on the roster. As built, only a MAJOR revision resets a read (a
+  typo fix doesn't send the crew back), and the entry's read bar then quotes
+  that revision's "What changed" note.
 
 ### Reports
 
