@@ -992,6 +992,9 @@ def init(db_path) -> None:
         _ensure_column("members", "appear_offline", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column("members", "playstyle_tags", "TEXT")   # JSON list, member profile (#30)
         _ensure_column("members", "notify_opt_out", "INTEGER NOT NULL DEFAULT 0")  # no Discord @-pings
+        # Discord role ids as of the member's last sign-in (JSON list): what
+        # Intelligence clearance + reviewer roles are checked against (#50).
+        _ensure_column("members", "discord_roles", "TEXT")
         _ensure_column("members", "availability_note", "TEXT")   # "usually on: weekday evenings CET"
         _ensure_column("members", "crafter_note", "TEXT")        # storefront blurb; presence = storefront on
         _ensure_column("members", "active_survey_zone", "INTEGER")   # #36.1 active zone id
@@ -1144,6 +1147,16 @@ def init(db_path) -> None:
         # in each revision so revert restores it too.
         _ensure_column("intel_entries", "revised_at", "TEXT")
         _ensure_column("intel_revisions", "summary", "TEXT")
+        # Slice 2 (access + review). status gains 'in_review' (entries) and
+        # 'pending' | 'approved' | 'rejected' | 'withdrawn' (revisions): a major
+        # revision waiting for review is a revision row that isn't live yet.
+        _ensure_column("intel_entries", "submitted_at", "TEXT")
+        _ensure_column("intel_entries", "doctrine_at", "TEXT")
+        _ensure_column("intel_entries", "doctrine_by", "TEXT")
+        _ensure_column("intel_revisions", "approved_by", "TEXT")
+        _ensure_column("intel_revisions", "approved_at", "TEXT")
+        _ensure_column("intel_revisions", "base_rev", "INTEGER")     # pending: the rev it was written on
+        _ensure_column("intel_revisions", "fields", "TEXT")          # pending: JSON activity/system/tags
         _init_intel_search()
 
 
@@ -1813,14 +1826,14 @@ def upsert_member(profile: dict) -> None:
     with _lock, _conn:
         _conn.execute(
             "INSERT INTO members (discord_id, username, display_name, guild_nick, "
-            "first_login, last_login) VALUES (?,?,?,?,?,?) "
+            "first_login, last_login, discord_roles) VALUES (?,?,?,?,?,?,?) "
             "ON CONFLICT(discord_id) DO UPDATE SET "
             "  username=excluded.username, display_name=excluded.display_name, "
             "  guild_nick=excluded.guild_nick, "
             "  first_login=COALESCE(members.first_login, excluded.first_login), "
-            "  last_login=excluded.last_login",
+            "  last_login=excluded.last_login, discord_roles=excluded.discord_roles",
             (did, profile.get("username"), profile.get("display_name"),
-             profile.get("guild_nick"), now, now),
+             profile.get("guild_nick"), now, now, json.dumps(sorted(profile.get("roles") or []))),
         )
 
 
@@ -5259,7 +5272,24 @@ class IntelConflict(Exception):
 _INTEL_ENTRY_COLS = ("kind", "title", "slug", "summary", "body_md", "body_html",
                      "status", "visibility", "author_id", "author_name", "owner_id",
                      "maintainers", "system", "patch", "patch_confirmed", "activity",
-                     "header", "created_at", "updated_at", "published_at", "revised_at")
+                     "header", "created_at", "updated_at", "published_at", "revised_at",
+                     "submitted_at", "doctrine_at", "doctrine_by")
+
+
+def _intel_read(fn):
+    """Hold _lock for a whole Intelligence read. FastAPI runs sync routes on a
+    thread pool and they all share one connection; an unlocked read racing
+    another thread's statement came back as None (a 500 on the review page,
+    which loads an entry and its review in parallel). Public readers only:
+    the private helpers below run inside writers that already hold the
+    (non-reentrant) lock."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*a, **kw):
+        with _lock:
+            return fn(*a, **kw)
+    return wrapper
 
 
 def _intel_row(r) -> dict:
@@ -5316,6 +5346,7 @@ def intel_create_entry(d: dict, tags, refs) -> int:
     return cur.lastrowid
 
 
+@_intel_read
 def intel_get_entry(entry_id: int) -> dict | None:
     r = _conn.execute("SELECT * FROM intel_entries WHERE id=?", (entry_id,)).fetchone()
     if not r:
@@ -5327,12 +5358,15 @@ def intel_get_entry(entry_id: int) -> dict | None:
 
 
 def intel_update_draft(entry_id: int, fields: dict, tags, refs) -> None:
+    """Overwrite a draft in place (autosave; also submit-for-review, which sets
+    status='in_review' in the same write). Only ever touches a draft."""
     sets = ", ".join(f"{c}=?" for c in fields)
     vals = [json.dumps(v) if c == "maintainers" else v for c, v in fields.items()]
     with _lock, _conn:
-        _conn.execute(f"UPDATE intel_entries SET {sets} WHERE id=? AND status='draft'",
-                      vals + [entry_id])
-        _intel_write_side_tables(entry_id, tags, refs)
+        cur = _conn.execute(f"UPDATE intel_entries SET {sets} WHERE id=? AND status='draft'",
+                            vals + [entry_id])
+        if cur.rowcount:
+            _intel_write_side_tables(entry_id, tags, refs)
 
 
 def intel_save_revision(entry_id: int, base_rev: int | None, fields: dict, tags, refs,
@@ -5353,11 +5387,12 @@ def intel_save_revision(entry_id: int, base_rev: int | None, fields: dict, tags,
                           (entry_id,)).fetchone()
         _conn.execute(
             "INSERT INTO intel_revisions (entry_id, rev, title, summary, body_md, header, "
-            "editor_id, editor_name, note, major, status, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,'live',?)",
+            "editor_id, editor_name, note, major, status, created_at, approved_by, approved_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,'live',?,?,?)",
             (entry_id, new_rev, e["title"], e["summary"], e["body_md"], e["header"],
              rev_meta["editor_id"], rev_meta.get("editor_name"), rev_meta.get("note") or None,
-             1 if rev_meta.get("major") else 0, rev_meta["created_at"]))
+             1 if rev_meta.get("major") else 0, rev_meta["created_at"],
+             rev_meta.get("approved_by"), rev_meta.get("approved_at")))
         _intel_write_side_tables(entry_id, tags, refs)
     return new_rev
 
@@ -5381,13 +5416,15 @@ def intel_delete_draft(entry_id: int) -> bool:
     return bool(cur.rowcount)
 
 
+@_intel_read
 def intel_revisions(entry_id: int) -> list[dict]:
     rows = _conn.execute(
-        "SELECT rev, title, editor_id, editor_name, note, major, created_at FROM intel_revisions "
+        "SELECT rev, title, editor_id, editor_name, note, major, created_at, approved_by FROM intel_revisions "
         "WHERE entry_id=? AND status='live' ORDER BY rev DESC", (entry_id,)).fetchall()
     return [dict(r) for r in rows]
 
 
+@_intel_read
 def intel_revision(entry_id: int, rev: int) -> dict | None:
     r = _conn.execute("SELECT * FROM intel_revisions WHERE entry_id=? AND rev=? AND status='live'",
                       (entry_id, rev)).fetchone()
@@ -5395,16 +5432,100 @@ def intel_revision(entry_id: int, rev: int) -> dict | None:
 
 
 def _intel_vis_sql(restricted_ok: bool) -> str:
-    # The RESTRICTED marking arrives in slice 2; the filter is already in SQL so
-    # no list or search can ever leak a restricted row once it exists.
+    # The RESTRICTED filter lives in SQL, so no list, queue or search can leak
+    # a restricted row to a member without clearance (#50 slice 2).
     return "" if restricted_ok else " AND e.visibility='org'"
 
 
+# ---- review (slice 2) ----
+@_intel_read
+def intel_pending(entry_id: int) -> dict | None:
+    """The major revision waiting for review on a published entry, if any.
+    Its `rev` is a negative placeholder: the real number is given at approval
+    (minor edits may land in between)."""
+    r = _conn.execute("SELECT * FROM intel_revisions WHERE entry_id=? AND status='pending' "
+                      "ORDER BY id DESC LIMIT 1", (entry_id,)).fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    try:
+        d["fields"] = json.loads(d.get("fields") or "{}")
+    except ValueError:
+        d["fields"] = {}
+    return d
+
+
+def intel_submit_pending(entry_id: int, d: dict) -> int:
+    """Park a major revision for review, replacing the same editor's earlier
+    pending one (re-submitting after more edits)."""
+    with _lock, _conn:
+        _conn.execute("UPDATE intel_revisions SET status='withdrawn' WHERE entry_id=? "
+                      "AND status='pending' AND editor_id=?", (entry_id, d["editor_id"]))
+        nxt = _conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM intel_revisions").fetchone()[0]
+        cur = _conn.execute(
+            "INSERT INTO intel_revisions (entry_id, rev, title, summary, body_md, header, editor_id, "
+            "editor_name, note, major, status, created_at, base_rev, fields) "
+            "VALUES (?,?,?,?,?,?,?,?,?,1,'pending',?,?,?)",
+            (entry_id, -nxt, d["title"], d.get("summary"), d["body_md"], d.get("header"),
+             d["editor_id"], d.get("editor_name"), d.get("note"), d["created_at"],
+             d.get("base_rev"), json.dumps(d.get("fields") or {})))
+    return cur.lastrowid
+
+
+def intel_set_revision_status(rev_id: int, status: str) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE intel_revisions SET status=? WHERE id=?", (status, rev_id))
+
+
+@_intel_read
+def intel_review_queue(restricted_ok: bool) -> list[dict]:
+    """Everything a reviewer can act on: drafts submitted for review, and
+    published entries with a major revision waiting. Oldest first."""
+    vis = _intel_vis_sql(restricted_ok)
+    rows = _conn.execute(
+        "SELECT e.*, p.id AS p_id, p.editor_id AS p_editor_id, p.editor_name AS p_editor_name, "
+        "p.note AS p_note, p.created_at AS p_created_at, p.base_rev AS p_base_rev, "
+        "(SELECT MAX(rev) FROM intel_revisions r WHERE r.entry_id=e.id AND r.status='live') AS rev "
+        "FROM intel_entries e LEFT JOIN intel_revisions p ON p.entry_id=e.id AND p.status='pending' "
+        f"WHERE (e.status='in_review' OR (e.status='published' AND p.id IS NOT NULL)){vis} "
+        "ORDER BY COALESCE(p.created_at, e.submitted_at)").fetchall()
+    out = [_intel_row(r) for r in rows]
+    tags = _intel_tags_for(d["id"] for d in out)
+    for d in out:
+        d["tags"] = tags.get(d["id"], [])
+    return out
+
+
+def intel_add_comment(entry_id: int, author_id: str, author_name: str | None, body: str,
+                      kind: str, created_at: str) -> int:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO intel_comments (entry_id, author_id, author_name, body_md, kind, created_at) "
+            "VALUES (?,?,?,?,?,?)", (entry_id, author_id, author_name, body, kind, created_at))
+    return cur.lastrowid
+
+
+@_intel_read
+def intel_latest_comment(entry_id: int, kind: str) -> dict | None:
+    r = _conn.execute("SELECT * FROM intel_comments WHERE entry_id=? AND kind=? AND deleted_at IS NULL "
+                      "ORDER BY id DESC LIMIT 1", (entry_id, kind)).fetchone()
+    return dict(r) if r else None
+
+
+@_intel_read
+def intel_live_rev_created(entry_id: int) -> str | None:
+    r = _conn.execute("SELECT created_at FROM intel_revisions WHERE entry_id=? AND status='live' "
+                      "ORDER BY rev DESC LIMIT 1", (entry_id,)).fetchone()
+    return r[0] if r else None
+
+
+@_intel_read
 def intel_list(*, kinds=None, status="published", author_id=None, activity=None,
                system=None, tag=None, order="title", restricted_ok=False,
                limit=500) -> list[dict]:
-    where = ["e.status=?"]
-    args: list = [status]
+    statuses = [status] if isinstance(status, str) else list(status)
+    where = [f"e.status IN ({','.join('?' * len(statuses))})"]
+    args: list = statuses
     if kinds:
         where.append(f"e.kind IN ({','.join('?' * len(kinds))})")
         args += list(kinds)
@@ -5427,6 +5548,7 @@ def intel_list(*, kinds=None, status="published", author_id=None, activity=None,
         "SELECT e.id, e.kind, e.title, e.slug, e.summary, e.status, e.visibility, e.author_id, "
         "e.author_name, e.owner_id, e.maintainers, e.system, e.patch, e.patch_confirmed, "
         "e.activity, e.created_at, e.updated_at, e.published_at, e.revised_at, "
+        "e.submitted_at, e.doctrine_at, "
         "(SELECT MAX(rev) FROM intel_revisions r WHERE r.entry_id=e.id AND r.status='live') AS rev "
         f"FROM intel_entries e WHERE {' AND '.join(where)}{_intel_vis_sql(restricted_ok)} "
         f"ORDER BY {order_sql} LIMIT ?", args + [limit]).fetchall()
@@ -5438,6 +5560,7 @@ def intel_list(*, kinds=None, status="published", author_id=None, activity=None,
 
 
 
+@_intel_read
 def intel_search(q: str, *, kinds=None, restricted_ok=False, limit=40) -> list[dict]:
     """Published entries matching `q`, best first, each with a short `snippet`
     whose matches are wrapped in \\x02…\\x03 (the caller escapes, then marks).
@@ -5455,7 +5578,7 @@ def intel_search(q: str, *, kinds=None, restricted_ok=False, limit=40) -> list[d
         match = " ".join(f'"{t}"*' for t in terms)
         rows = _conn.execute(
             "SELECT e.id, e.kind, e.title, e.slug, e.summary, e.activity, e.system, "
-            "e.owner_id, e.author_name, e.patch, e.patch_confirmed, "
+            "e.owner_id, e.author_name, e.patch, e.patch_confirmed, e.visibility, e.doctrine_at, "
             "snippet(intel_fts, 2, char(2), char(3), '…', 14) AS snippet "
             "FROM intel_fts JOIN intel_entries e ON e.id = intel_fts.rowid "
             f"WHERE intel_fts MATCH ? AND e.status='published'{kind_sql}{vis} "
@@ -5470,7 +5593,8 @@ def intel_search(q: str, *, kinds=None, restricted_ok=False, limit=40) -> list[d
             like_args += [pat, pat, pat]
         rows = _conn.execute(
             "SELECT e.id, e.kind, e.title, e.slug, e.summary, e.activity, e.system, "
-            "e.owner_id, e.author_name, e.patch, e.patch_confirmed, e.summary AS snippet "
+            "e.owner_id, e.author_name, e.patch, e.patch_confirmed, e.visibility, e.doctrine_at, "
+            "e.summary AS snippet "
             f"FROM intel_entries e WHERE e.status='published' AND {' AND '.join(like_where)}"
             f"{kind_sql}{vis} ORDER BY e.title COLLATE NOCASE LIMIT ?",
             like_args + kind_args + [limit]).fetchall()

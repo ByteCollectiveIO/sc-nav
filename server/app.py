@@ -1370,6 +1370,7 @@ class MemberDirectory:
         cur.update({"username": profile.get("username"),
                     "display_name": profile.get("display_name"),
                     "guild_nick": profile.get("guild_nick"),
+                    "discord_roles": json.dumps(sorted(profile.get("roles") or [])),
                     "last_login": rec["now"]})
         cur.setdefault("first_login", rec["now"])
         cur.setdefault("primary_handle", None)
@@ -10534,6 +10535,109 @@ class RoleAliasIn(BaseModel):
     label: str = Field(default="", max_length=_ROLE_ALIAS_LABEL_MAX)
 
 
+# ---- Intelligence access + review (#50 slice 2, docs/intelligence.md "Access") ----
+# Two Discord role lists, stored exactly like the event ping aliases: CLEARANCE
+# (who reads RESTRICTED entries) and REVIEWERS (who approve under the review
+# gate and mark Doctrine). Admins hold both implicitly. A member's roles are
+# the snapshot from their last sign-in (members.discord_roles), so a role
+# change applies at their next login — the same lag as the member gate.
+_INTEL_ROLE_KEYS = ("intel_clearance_roles", "intel_reviewer_roles")
+_INTEL_ROLES_MAX = 10
+INTEL_REVIEWABLE_KINDS = ("procedure", "tactic", "report", "dossier", "debrief")
+# Reports are exempt by default: a gate-camp report that waits for approval is
+# worthless by the time it's approved (user decision 2026-10-31).
+INTEL_REVIEW_KINDS_DEFAULT = ("procedure", "tactic", "debrief")
+
+
+def intel_role_list(key: str) -> list[dict]:
+    try:
+        raw = json.loads(db.get_setting(key, "") or "[]")
+    except ValueError:
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [a for a in raw if isinstance(a, dict) and str(a.get("id", "")).isdigit()]
+
+
+def _clean_role_list(items: list["RoleAliasIn"]) -> list[dict]:
+    if len(items) > _INTEL_ROLES_MAX:
+        raise HTTPException(status_code=400, detail=f"at most {_INTEL_ROLES_MAX} Discord roles")
+    rows, seen = [], set()
+    for a in items:
+        m = _ROLE_ID_RE.match(a.id.strip())
+        if not m:
+            raise HTTPException(status_code=400,
+                                detail=f"not a Discord role id: {a.id.strip()!r} "
+                                       "(copy it from Server Settings › Roles)")
+        if m.group(1) not in seen:
+            seen.add(m.group(1))
+            rows.append({"id": m.group(1), "label": a.label.strip().lstrip("@")})
+    return rows
+
+
+def intel_review_required() -> bool:
+    return db.get_setting("intel_review_required", "0") == "1"
+
+
+def intel_review_kinds() -> list[str]:
+    try:
+        raw = json.loads(db.get_setting("intel_review_kinds", "") or "null")
+    except ValueError:
+        raw = None
+    if not isinstance(raw, list):
+        return list(INTEL_REVIEW_KINDS_DEFAULT)
+    return [k for k in INTEL_REVIEWABLE_KINDS if k in raw]
+
+
+def member_roles(discord_id: str) -> set[str]:
+    raw = (members_dir.get(discord_id) or {}).get("discord_roles")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return set()
+    return {str(r) for r in raw or []}
+
+
+def _holds_intel_role(discord_id: str, key: str) -> bool:
+    ids = {a["id"] for a in intel_role_list(key)}
+    return bool(ids and ids & member_roles(discord_id))
+
+
+def intel_cleared_id(discord_id: str) -> bool:
+    did = str(discord_id)
+    return did in admin_ids() or _holds_intel_role(did, "intel_clearance_roles")
+
+
+def intel_reviewer_id(discord_id: str) -> bool:
+    did = str(discord_id)
+    return did in admin_ids() or _holds_intel_role(did, "intel_reviewer_roles")
+
+
+def intel_cleared(user: dict) -> bool:
+    return bool(user.get("is_admin")) or intel_cleared_id(user["id"])
+
+
+def intel_reviewer(user: dict) -> bool:
+    return bool(user.get("is_admin")) or intel_reviewer_id(user["id"])
+
+
+def intel_settings() -> dict:
+    """The admin view (GET and POST /api/settings both carry it, so the
+    Settings panel re-renders from either)."""
+    return {"intel_clearance_roles": intel_role_list("intel_clearance_roles"),
+            "intel_reviewer_roles": intel_role_list("intel_reviewer_roles"),
+            "intel_review_required": intel_review_required(),
+            "intel_review_kinds": intel_review_kinds()}
+
+
+def intel_access(user: dict) -> dict:
+    """What the SPA needs to label buttons: never the authority (every route
+    re-checks), only the copy."""
+    return {"cleared": intel_cleared(user), "reviewer": intel_reviewer(user),
+            "review_kinds": intel_review_kinds() if intel_review_required() else []}
+
+
 def _clean_role_aliases(body: dict[str, list[RoleAliasIn]]) -> dict[str, list[dict]]:
     out, total = {}, set()
     for role, aliases in body.items():
@@ -15864,6 +15968,7 @@ async def get_settings(user: dict = Depends(require_session)):
         "calendar_feed_enabled": calendar_feed_enabled(),   # members may subscribe
         "calendar_feed_count": db.count_calendar_feeds(),
         "discord_role_aliases": role_aliases(),       # event role → Discord role ids
+        **intel_settings(),                           # Intelligence access + review (#50)
         "op_default_rules": org_default_op_rules(),   # ops payout defaults (§4.1)
         "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),  # ⛏ mined-out lifetime (#37)
         "feed_refresh_h": feed_refresh_h(),          # auto price-refresh interval (#33, 0 = off)
@@ -15916,6 +16021,12 @@ class SettingsIn(BaseModel):
     calendar_feed_enabled: bool | None = None
     # Event role → Discord roles it @-pings ({} clears). Validated in the handler.
     discord_role_aliases: dict[str, list[RoleAliasIn]] | None = Field(default=None, max_length=40)
+    # Intelligence (#50 slice 2): RESTRICTED clearance + reviewer role lists, the
+    # review gate and the kinds it covers.
+    intel_clearance_roles: list[RoleAliasIn] | None = Field(default=None, max_length=_INTEL_ROLES_MAX * 2)
+    intel_reviewer_roles: list[RoleAliasIn] | None = Field(default=None, max_length=_INTEL_ROLES_MAX * 2)
+    intel_review_required: bool | None = None
+    intel_review_kinds: list[str] | None = Field(default=None, max_length=10)
     # Preview linked announcement images from IMAGE_PREVIEW_HOSTS in the app.
     notify_external_preview: bool | None = None
     op_default_rules: OpRulesIn | None = None
@@ -16013,6 +16124,18 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             print(f"[sc-nav] calendar feeds disabled; {n} member link(s) deleted")
     if body.discord_role_aliases is not None:
         db.set_setting(_ROLE_ALIAS_KEY, json.dumps(_clean_role_aliases(body.discord_role_aliases)))
+    for key in _INTEL_ROLE_KEYS:
+        val = getattr(body, key)
+        if val is not None:
+            db.set_setting(key, json.dumps(_clean_role_list(val)))
+    if body.intel_review_required is not None:
+        db.set_setting("intel_review_required", "1" if body.intel_review_required else "0")
+    if body.intel_review_kinds is not None:
+        bad = [k for k in body.intel_review_kinds if k not in INTEL_REVIEWABLE_KINDS]
+        if bad:
+            raise HTTPException(status_code=400, detail=f"unknown kind: {bad[0]}")
+        db.set_setting("intel_review_kinds", json.dumps(
+            [k for k in INTEL_REVIEWABLE_KINDS if k in body.intel_review_kinds]))
     if body.notify_external_preview is not None:
         db.set_setting("notify_external_preview",
                        "1" if body.notify_external_preview else "0")
@@ -16075,6 +16198,7 @@ async def update_settings(body: SettingsIn, admin: dict = Depends(require_admin)
             "calendar_feed_enabled": calendar_feed_enabled(),
             "calendar_feed_count": db.count_calendar_feeds(),
             "discord_role_aliases": role_aliases(),
+            **intel_settings(),
             "op_default_rules": org_default_op_rules(),
             "survey_depletion_ageoff_min": survey_depletion_ageoff_min(),
             "feed_refresh_h": feed_refresh_h(),
@@ -17046,6 +17170,7 @@ async def api_me(user: dict = Depends(require_session)):
             "image_preview_hosts": image_preview_hosts(),   # [] = no linked-image previews
             "events_admin_only": events_admin_only(),       # hides "Create event" for non-admins
             "calendar_feed_enabled": calendar_feed_enabled(),   # Settings → Calendar
+            "intel_access": intel_access(user),             # Intelligence labels (#50)
             **_member_identity(user["id"])}
 
 
@@ -17181,6 +17306,14 @@ class IntelEntryFields(BaseModel):
     activity: str | None = None
     system: str | None = None
     tags: list[str] = Field(default_factory=list, max_length=_INTEL_MAX_TAGS * 2)
+    visibility: str | None = None      # org | restricted; None = leave as is
+
+    @field_validator("visibility")
+    @classmethod
+    def _visibility(cls, v):
+        if v not in (None, "org", "restricted"):
+            raise ValueError("visibility is org or restricted")
+        return v
 
     @field_validator("activity")
     @classmethod
@@ -17229,6 +17362,14 @@ class IntelRevertIn(BaseModel):
     base_rev: int
 
 
+class IntelReturnIn(BaseModel):
+    note: str = Field(min_length=3, max_length=1000)
+
+
+class IntelDoctrineIn(BaseModel):
+    on: bool
+
+
 def _intel_patch_now() -> str | None:
     return patch_tracker.context().get("current")
 
@@ -17250,6 +17391,8 @@ def _intel_can_edit(e: dict, user: dict) -> bool:
     uid = str(user["id"])
     if e["status"] == "draft":
         return e["author_id"] == uid
+    if e["status"] != "published":     # in review: withdraw it first; archived: nobody
+        return False
     return (bool(user.get("is_admin")) or e.get("owner_id") == uid
             or uid in (e.get("maintainers") or []))
 
@@ -17260,11 +17403,45 @@ def _intel_can_manage(e: dict, user: dict) -> bool:
 
 
 def _intel_visible(e: dict | None, user: dict) -> bool:
+    """Who may see an entry at all (every route goes through _intel_require).
+    A draft is its author's alone. RESTRICTED needs clearance (admins + the
+    clearance roles), including for reviewers. The author of a submission can
+    always see their own submission."""
     if not e or (e["status"] == "archived" and not user.get("is_admin")):
         return False
+    uid = str(user["id"])
     if e["status"] == "draft":
-        return e["author_id"] == str(user["id"])
-    return e.get("visibility") == "org" or bool(user.get("is_admin"))
+        return e["author_id"] == uid
+    if e["status"] == "in_review" and e["author_id"] == uid:
+        return True
+    if e.get("visibility") == "restricted" and not intel_cleared(user):
+        return False
+    if e["status"] == "in_review":
+        return intel_reviewer(user)
+    return True
+
+
+def _intel_gated(e: dict, user: dict) -> bool:
+    """Does a publish / major revision by this member go to review?"""
+    return (intel_review_required() and e["kind"] in intel_review_kinds()
+            and not intel_reviewer(user))
+
+
+def _intel_marking(body: "IntelEntryFields", e: dict | None, user: dict) -> str | None:
+    """The visibility change this save asks for (None = no change), or 403.
+    Marking RESTRICTED needs clearance (or the author locks themselves out);
+    lifting it from a published entry is the owner's or an admin's call."""
+    want = body.visibility
+    cur = e["visibility"] if e else "org"
+    if want is None or want == cur:
+        return None
+    if want == "restricted" and not intel_cleared(user):
+        raise HTTPException(status_code=403,
+                            detail="Only members with Intelligence clearance can mark an entry RESTRICTED.")
+    if want == "org" and e and e["status"] == "published" and not _intel_can_manage(e, user):
+        raise HTTPException(status_code=403,
+                            detail="Only the owner or an admin can lift the RESTRICTED marking.")
+    return want
 
 
 def _intel_summary(e: dict, current: str | None) -> dict:
@@ -17279,6 +17456,9 @@ def _intel_summary(e: dict, current: str | None) -> dict:
         "patch": _intel_patch_state(e, current),
         "published_at": e.get("published_at"), "revised_at": e.get("revised_at"),
         "updated_at": e.get("updated_at"),
+        "visibility": e.get("visibility") or "org",
+        "doctrine": bool(e.get("doctrine_at")),
+        "submitted_at": e.get("submitted_at"),
     }
 
 
@@ -17298,7 +17478,24 @@ def _intel_entry_view(e: dict, user: dict) -> dict:
                         for m in e.get("maintainers") or []],
         "can_edit": _intel_can_edit(e, user), "can_manage": _intel_can_manage(e, user),
         "created_at": e.get("created_at"),
+        "doctrine_by": _resolve_member_name(e["doctrine_by"], None) if e.get("doctrine_by") else None,
+        "is_reviewer": intel_reviewer(user),
+        # Would this member's publish / major revision go to review?
+        "review_gate": _intel_gated(e, user),
     })
+    uid = str(user["id"])
+    pend = db.intel_pending(e["id"]) if e["status"] == "published" else None
+    if pend and (out["can_edit"] or out["is_reviewer"]):
+        out["pending"] = {"editor_name": pend.get("editor_name"), "note": pend.get("note"),
+                          "created_at": pend.get("created_at"), "mine": pend["editor_id"] == uid}
+    # The latest "returned with a note", while it still applies: newer than
+    # the live text (a draft has none), shown to whoever can act on it.
+    note = db.intel_latest_comment(e["id"], "review")
+    live = db.intel_live_rev_created(e["id"])
+    if note and (out["can_edit"] or e["author_id"] == uid) and (not live or note["created_at"] > live) \
+            and not pend and e["status"] != "in_review":
+        out["review_note"] = {"by": note.get("author_name"), "note": note["body_md"],
+                              "created_at": note["created_at"]}
     return out
 
 
@@ -17317,7 +17514,7 @@ def intel_entries(section: str = "library", kind: str = "", activity: str = "",
     """Lists for the Intelligence tabs: `library` (published procedures +
     tactics, by title), `feed` (everything published, newest publish or MAJOR
     revision first), `drafts` (the caller's own unpublished entries)."""
-    restricted_ok = bool(user.get("is_admin"))
+    restricted_ok = intel_cleared(user)
     kinds = [k for k in kind.split(",") if k] or None
     kw = dict(activity=activity or None, system=system or None, tag=tag or None,
               restricted_ok=restricted_ok)
@@ -17326,7 +17523,9 @@ def intel_entries(section: str = "library", kind: str = "", activity: str = "",
     elif section == "feed":
         rows = db.intel_list(kinds=kinds, order="recent", limit=100, **kw)
     elif section == "drafts":
-        rows = db.intel_list(kinds=kinds, status="draft", author_id=user["id"], order="updated", **kw)
+        # Your own drafts and submissions; restricted ones too (they're yours).
+        rows = db.intel_list(kinds=kinds, status=("draft", "in_review"), author_id=user["id"],
+                             order="updated", **{**kw, "restricted_ok": True})
     else:
         raise HTTPException(status_code=400, detail="Unknown section.")
     current = _intel_patch_now()
@@ -17347,7 +17546,7 @@ def intel_search(q: str = "", kind: str = "", user: dict = Depends(require_sessi
     <mark>; everything else in the snippet is escaped here."""
     q = q[:200]
     kinds = [k for k in kind.split(",") if k] or None
-    rows = db.intel_search(q, kinds=kinds, restricted_ok=bool(user.get("is_admin")))
+    rows = db.intel_search(q, kinds=kinds, restricted_ok=intel_cleared(user))
     current = _intel_patch_now()
     out = []
     for e in rows:
@@ -17368,7 +17567,8 @@ def intel_create(body: IntelCreateIn, user: dict = Depends(require_session)):
     fields, tags, refs = _intel_fields(body)
     uid, now = str(user["id"]), _now_iso()
     eid = db.intel_create_entry({
-        **fields, "kind": body.kind, "status": "draft", "visibility": "org",
+        **fields, "kind": body.kind, "status": "draft",
+        "visibility": _intel_marking(body, None, user) or "org",
         "author_id": uid, "author_name": _resolve_member_name(uid, None),
         "owner_id": uid, "maintainers": [], "created_at": now, "updated_at": now,
     }, tags, refs)
@@ -17388,6 +17588,8 @@ def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_se
     needs a "What changed" note and re-stamps the patch (clearing staleness);
     a minor one changes neither."""
     e = _intel_require(entry_id, user)
+    if e["status"] == "in_review":
+        raise HTTPException(status_code=409, detail="It's waiting for review. Withdraw it to keep editing.")
     if not _intel_can_edit(e, user):
         raise HTTPException(status_code=403, detail="Only the owner, maintainers or an admin can edit this.")
     if not body.title.strip():
@@ -17395,14 +17597,48 @@ def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_se
     fields, tags, refs = _intel_fields(body)
     uid, now = str(user["id"]), _now_iso()
     fields["updated_at"] = now
+    marking = _intel_marking(body, e, user)
+    if marking:
+        fields["visibility"] = marking
+    gated = _intel_gated(e, user)
     if e["status"] == "draft" and not body.publish:
         db.intel_update_draft(entry_id, fields, tags, refs)
+        return _intel_entry_view(db.intel_get_entry(entry_id), user)
+    if e["status"] == "draft" and gated:
+        # Submit for review: the draft is frozen as it stands and goes to the
+        # queue; a reviewer's Approve writes rev 1.
+        db.intel_update_draft(entry_id, {**fields, "status": "in_review", "submitted_at": now}, tags, refs)
         return _intel_entry_view(db.intel_get_entry(entry_id), user)
     first = e["status"] == "draft"
     major = first or body.major
     note = body.note.strip()
     if major and not first and len(note) < 3:
         raise HTTPException(status_code=422, detail="Say what changed: a major revision needs a note.")
+    if major and not first and gated:
+        # A major revision waits for review; the live entry keeps showing the
+        # last approved text. Only the marking applies now (marking something
+        # RESTRICTED must never wait on a reviewer).
+        if (body.base_rev or 0) != e["rev"]:
+            raise HTTPException(status_code=409, detail={
+                "message": f"Someone saved rev {e['rev']} since you opened this. "
+                           "Review their changes, then save again.", "current_rev": e["rev"]})
+        pend = db.intel_pending(entry_id)
+        if pend and pend["editor_id"] != uid:
+            raise HTTPException(status_code=409, detail=(
+                f"{pend.get('editor_name') or 'Someone'}'s major revision is already waiting for "
+                "review. Save a minor edit, or wait until it's approved or returned."))
+        if marking:
+            db.intel_set_fields(entry_id, {"visibility": marking})
+        db.intel_submit_pending(entry_id, {
+            "title": fields["title"], "summary": fields["summary"], "body_md": fields["body_md"],
+            "header": e.get("header"), "editor_id": uid, "editor_name": _resolve_member_name(uid, None),
+            "note": note, "created_at": now, "base_rev": e["rev"],
+            "fields": {"activity": fields["activity"], "system": fields["system"], "tags": tags}})
+        return _intel_entry_view(db.intel_get_entry(entry_id), user)
+    if major and not first and e.get("doctrine_at") and not intel_reviewer(user):
+        # Doctrine is a reviewer's judgement of THIS text; an unreviewed major
+        # change un-marks it until a reviewer looks again.
+        fields.update(doctrine_at=None, doctrine_by=None)
     if first:
         fields.update(status="published", published_at=now)
         note = note or "First published"
@@ -17425,6 +17661,8 @@ def intel_delete(entry_id: int, user: dict = Depends(require_session)):
     """A draft is deleted outright by its author. A published entry is
     ARCHIVED (kept, out of every list) by its owner or an admin."""
     e = _intel_require(entry_id, user)
+    if e["status"] == "in_review":
+        raise HTTPException(status_code=409, detail="It's waiting for review. Withdraw it first.")
     if e["status"] == "draft":
         if not db.intel_delete_draft(entry_id):
             raise HTTPException(status_code=404, detail="Entry not found.")
@@ -17465,6 +17703,14 @@ def intel_people(entry_id: int, body: IntelPeopleIn, user: dict = Depends(requir
         if any(not members_dir.get(m) for m in ms):
             raise HTTPException(status_code=422, detail="Unknown member.")
     owner = fields.get("owner_id", e["owner_id"])
+    if e.get("visibility") == "restricted":
+        new_people = ([fields["owner_id"]] if "owner_id" in fields else []) + \
+            ([m for m in ms if m not in (e.get("maintainers") or [])] if body.maintainers is not None else [])
+        blocked = [p for p in new_people if not intel_cleared_id(p)]
+        if blocked:
+            raise HTTPException(status_code=422, detail=(
+                f"{_resolve_member_name(blocked[0], None)} doesn't hold an Intelligence clearance "
+                "role, so they can't see this RESTRICTED entry."))
     if body.maintainers is not None or owner in ms:
         fields["maintainers"] = [m for m in ms if m != owner]   # the owner isn't also a maintainer
     if fields:
@@ -17482,8 +17728,11 @@ def intel_member_search(q: str = "", user: dict = Depends(require_session)):
 @app.get("/api/intel/entries/{entry_id}/revisions")
 def intel_revisions(entry_id: int, user: dict = Depends(require_session)):
     e = _intel_require(entry_id, user)
-    return {"revisions": db.intel_revisions(entry_id), "current": e["rev"],
-            "can_edit": _intel_can_edit(e, user)}
+    revs = db.intel_revisions(entry_id)
+    for r in revs:  # who let a gated revision through (slice 2); the id stays server-side
+        by = r.pop("approved_by", None)
+        r["approved_by_name"] = (members_dir.display_name(by) or "a reviewer") if by else None
+    return {"revisions": revs, "current": e["rev"], "can_edit": _intel_can_edit(e, user)}
 
 
 _DIFF_TOKEN_RE = re.compile(r"\s+|[^\s]+")
@@ -17550,6 +17799,146 @@ def intel_revert(entry_id: int, body: IntelRevertIn, user: dict = Depends(requir
         raise HTTPException(status_code=409, detail={
             "message": f"Someone saved rev {c.current_rev} since you opened the history. Reload it first.",
             "current_rev": c.current_rev})
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
+
+
+# ---- review gate (#50 slice 2) ----
+def _intel_review_item(e: dict, current: str | None) -> dict:
+    d = _intel_summary(e, current)
+    if e.get("p_id"):
+        d.update(review_type="revision", submitted_by=e.get("p_editor_name"),
+                 submitted_at=e.get("p_created_at"), note=e.get("p_note"),
+                 moved_on=(e.get("p_base_rev") or 0) != (e.get("rev") or 0))
+    else:
+        d.update(review_type="new", submitted_by=e.get("author_name"),
+                 submitted_at=e.get("submitted_at"), note=None, moved_on=False)
+    return d
+
+
+@app.get("/api/intel/review")
+def intel_review_queue(user: dict = Depends(require_session)):
+    """The review queue: reviewers only; RESTRICTED items only with clearance."""
+    if not intel_reviewer(user):
+        raise HTTPException(status_code=403, detail="Only reviewers can see the review queue.")
+    current = _intel_patch_now()
+    return {"items": [_intel_review_item(e, current)
+                      for e in db.intel_review_queue(restricted_ok=intel_cleared(user))],
+            "required": intel_review_required(), "kinds": intel_review_kinds()}
+
+
+@app.get("/api/intel/entries/{entry_id}/review")
+def intel_review_detail(entry_id: int, user: dict = Depends(require_session)):
+    """What's waiting: a new entry (rendered whole) or a major revision (diff
+    against the live text). For reviewers and the submitter."""
+    e = _intel_require(entry_id, user)
+    uid = str(user["id"])
+    if e["status"] == "in_review":
+        if not (intel_reviewer(user) or e["author_id"] == uid):
+            raise HTTPException(status_code=403, detail="Only reviewers can see this.")
+        return {"review_type": "new", "submitted_by": e.get("author_name"),
+                "submitted_at": e.get("submitted_at"), "note": None,
+                "title": e["title"], "summary": e.get("summary") or "", "html": e["body_html"],
+                "can_review": intel_reviewer(user)}
+    pend = db.intel_pending(entry_id) if e["status"] == "published" else None
+    if not pend:
+        raise HTTPException(status_code=404, detail="Nothing is waiting for review.")
+    if not (intel_reviewer(user) or _intel_can_edit(e, user)):
+        raise HTTPException(status_code=403, detail="Only reviewers can see this.")
+    body, added, removed = _intel_word_diff(e["body_md"] or "", pend["body_md"] or "")
+    return {"review_type": "revision", "submitted_by": pend.get("editor_name"),
+            "submitted_at": pend.get("created_at"), "note": pend.get("note"),
+            "title": {"from": e["title"], "to": pend["title"]},
+            "summary": {"from": e.get("summary") or "", "to": pend.get("summary") or ""},
+            "diff": body, "added": added, "removed": removed,
+            "html": intel_md.render(pend["body_md"] or "", IMAGE_PREVIEW_HOSTS)["html"],
+            "base_rev": pend.get("base_rev"), "current_rev": e["rev"],
+            "mine": pend["editor_id"] == uid, "can_review": intel_reviewer(user)}
+
+
+@app.post("/api/intel/entries/{entry_id}/approve")
+def intel_approve(entry_id: int, user: dict = Depends(require_session)):
+    """A reviewer publishes a submission (rev 1) or a pending major revision
+    (the next rev). The revision keeps its writer as editor and records the
+    approver."""
+    e = _intel_require(entry_id, user)
+    if not intel_reviewer(user):
+        raise HTTPException(status_code=403, detail="Only reviewers can approve.")
+    uid, now = str(user["id"]), _now_iso()
+    approver = {"approved_by": uid, "approved_at": now}
+    if e["status"] == "in_review":
+        r = intel_md.render(e["body_md"] or "", IMAGE_PREVIEW_HOSTS)
+        db.intel_save_revision(entry_id, None, {
+            "status": "published", "published_at": now, "revised_at": now, "updated_at": now,
+            "submitted_at": None, "patch": _intel_patch_now(), "patch_confirmed": None,
+            "body_html": r["html"]}, e["tags"], r["refs"], {
+            "editor_id": e["author_id"], "editor_name": e.get("author_name"),
+            "note": "First published", "major": True, "created_at": now, **approver})
+        return _intel_entry_view(db.intel_get_entry(entry_id), user)
+    pend = db.intel_pending(entry_id) if e["status"] == "published" else None
+    if not pend:
+        raise HTTPException(status_code=409, detail="Nothing is waiting for review.")
+    r = intel_md.render(pend["body_md"] or "", IMAGE_PREVIEW_HOSTS)
+    f = pend["fields"]
+    db.intel_save_revision(entry_id, e["rev"], {
+        "title": pend["title"], "slug": intel_md.section_slug(pend["title"] or "untitled"),
+        "summary": pend.get("summary") or "", "body_md": pend["body_md"] or "", "body_html": r["html"],
+        "activity": f.get("activity"), "system": f.get("system"),
+        "patch": _intel_patch_now(), "patch_confirmed": None, "revised_at": now, "updated_at": now,
+    }, f.get("tags") or [], r["refs"], {
+        "editor_id": pend["editor_id"], "editor_name": pend.get("editor_name"),
+        "note": pend.get("note"), "major": True, "created_at": now, **approver})
+    db.intel_set_revision_status(pend["id"], "approved")
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
+
+
+@app.post("/api/intel/entries/{entry_id}/return")
+def intel_return(entry_id: int, body: IntelReturnIn, user: dict = Depends(require_session)):
+    """Send a submission back with a note: a new entry returns to draft, a
+    pending revision is dropped. The writer sees the note in the editor."""
+    e = _intel_require(entry_id, user)
+    if not intel_reviewer(user):
+        raise HTTPException(status_code=403, detail="Only reviewers can return a submission.")
+    uid, now = str(user["id"]), _now_iso()
+    if e["status"] == "in_review":
+        db.intel_set_fields(entry_id, {"status": "draft", "submitted_at": None, "updated_at": now})
+    else:
+        pend = db.intel_pending(entry_id) if e["status"] == "published" else None
+        if not pend:
+            raise HTTPException(status_code=409, detail="Nothing is waiting for review.")
+        db.intel_set_revision_status(pend["id"], "rejected")
+    db.intel_add_comment(entry_id, uid, _resolve_member_name(uid, None), body.note.strip(), "review", now)
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
+
+
+@app.post("/api/intel/entries/{entry_id}/withdraw")
+def intel_withdraw(entry_id: int, user: dict = Depends(require_session)):
+    """The writer takes their submission back: a new entry returns to draft,
+    their pending revision is dropped."""
+    e = _intel_require(entry_id, user)
+    uid = str(user["id"])
+    if e["status"] == "in_review":
+        if e["author_id"] != uid:
+            raise HTTPException(status_code=403, detail="Only its author can withdraw this.")
+        db.intel_set_fields(entry_id, {"status": "draft", "submitted_at": None, "updated_at": _now_iso()})
+        return _intel_entry_view(db.intel_get_entry(entry_id), user)
+    pend = db.intel_pending(entry_id) if e["status"] == "published" else None
+    if not pend or pend["editor_id"] != uid:
+        raise HTTPException(status_code=409, detail="You have nothing waiting for review here.")
+    db.intel_set_revision_status(pend["id"], "withdrawn")
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
+
+
+@app.post("/api/intel/entries/{entry_id}/doctrine")
+def intel_doctrine(entry_id: int, body: IntelDoctrineIn, user: dict = Depends(require_session)):
+    """Mark (or unmark) a published procedure or tactic as Doctrine: the org's
+    vetted way. Reviewers and admins only; the Library lists Doctrine first."""
+    e = _intel_require(entry_id, user)
+    if not intel_reviewer(user):
+        raise HTTPException(status_code=403, detail="Only reviewers and admins can mark Doctrine.")
+    if e["status"] != "published" or e["kind"] not in INTEL_LIBRARY_KINDS:
+        raise HTTPException(status_code=409, detail="Only a published procedure or tactic can be Doctrine.")
+    db.intel_set_fields(entry_id, {"doctrine_at": _now_iso() if body.on else None,
+                                   "doctrine_by": str(user["id"]) if body.on else None})
     return _intel_entry_view(db.intel_get_entry(entry_id), user)
 
 

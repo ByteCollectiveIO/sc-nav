@@ -120,6 +120,9 @@ def fetch_member_profile(access_token: str, required_role_id: str = "",
         "guild_nick": member.get("nick"),   # per-org nickname, if the member set one
         "avatar": me.get("avatar"),
         "is_admin": is_admin,
+        # Snapshotted at sign-in: Intelligence clearance + reviewer roles (#50)
+        # are checked against this, so a role change applies at next login.
+        "roles": sorted(roles),
     }, None
 
 
