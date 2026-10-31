@@ -23,7 +23,9 @@ The dialect (the doc's "Formatting" table):
     are linked too. Every <a> gets rel="noopener noreferrer nofollow".
   * Images: only from the caller's host list, and NEVER an <img>. They render
     as a click-to-load placeholder (a span carrying the URL); any other host
-    renders as a plain link.
+    renders as a plain link. With `own_files`, `/api/intel/files/<id>` (an
+    image an admin import stored, slice 8) is a placeholder too, class
+    `intel-file`: the SPA loads those inline (same origin, no consent).
   * `[[kind:id]]` suite references → a placeholder the SPA hydrates into a live
     chip per viewer (names, state and visibility stay current).
   * `<t:unix:fmt>` Discord timestamps → <time>, shown in the reader's zone.
@@ -244,10 +246,20 @@ def _render_link_close(self, tokens, idx, options, env) -> str:
     return f'</a> <span class="ext-host">({escapeHtml(host)})</span>' if host else "</a>"
 
 
+_OWN_FILE_RE = re.compile(r"^/api/intel/files/(\d{1,12})$")
+
+
 def _render_image(self, tokens, idx, options, env) -> str:
     tok = tokens[idx]
     src = tok.attrGet("src") or ""
     alt = self.renderInlineAsText(tok.children or [], options, env)
+    m = _OWN_FILE_RE.match(src)
+    if m and not env.get("own_files"):
+        return escapeHtml(alt or "image")      # a comment: stored images only show in entries
+    if m:
+        env.setdefault("files", []).append(int(m.group(1)))
+        return (f'<span class="intel-file" data-src="/api/intel/files/{int(m.group(1))}" '
+                f'data-alt="{escapeHtml(alt)}">{escapeHtml(alt or "image")}</span>')
     host = _host(src)
     if src.lower().startswith("https://") and host in env.get("image_hosts", ()):
         env["images"] = env.get("images", 0) + 1
@@ -262,7 +274,8 @@ def _render_image(self, tokens, idx, options, env) -> str:
 def _build() -> MarkdownIt:
     md = MarkdownIt("commonmark", {"html": False, "linkify": False, "typographer": False})
     md.enable(["table", "strikethrough"])
-    md.validateLink = _http_url
+    # http(s), plus the one same-origin path a stored image lives at (slice 8).
+    md.validateLink = lambda u: _http_url(u) or bool(_OWN_FILE_RE.match(u.strip()))
     md.inline.ruler.before("link", "intel_ref", _inline_ref)
     md.inline.ruler.before("autolink", "intel_ts", _inline_ts)
     md.core.ruler.push("intel_headings", _rule_headings)
@@ -292,7 +305,7 @@ _ATTRS = {
              "role", "aria-label"},
     "time": {"datetime", "data-fmt"},
 }
-_CLASSES = {"span": {"intel-ref", "intel-img", "intel-task", "ext-host"},
+_CLASSES = {"span": {"intel-ref", "intel-img", "intel-file", "intel-task", "ext-host"},
             "li": {"task-item"}}
 
 
@@ -306,12 +319,15 @@ def sanitize(html: str) -> str:
     )
 
 
-def render(src: str, image_hosts=()) -> dict:
-    """Render one Markdown body. Returns {html, refs, images}:
-    html   — sanitized HTML, safe to insert as-is;
+def render(src: str, image_hosts=(), own_files: bool = False) -> dict:
+    """Render one Markdown body. Returns {html, refs, images, files}:
+    html   — sanitized HTML, safe to insert as-is (never an <img>);
     refs   — [(kind, id), …] in order, de-duplicated (feeds intel_links);
-    images — how many allowed-host image placeholders it holds."""
-    env = {"image_hosts": tuple(h.lower() for h in image_hosts)}
+    images — how many allowed-host image placeholders it holds;
+    files  — stored image ids it shows (only with `own_files`: entry bodies,
+             never comments), de-duplicated (feeds intel_file_refs)."""
+    env = {"image_hosts": tuple(h.lower() for h in image_hosts), "own_files": own_files}
     html = _MD.render(src[:MAX_BODY_CHARS], env)
     refs = list(dict.fromkeys(env.get("refs", [])))
-    return {"html": sanitize(html), "refs": refs, "images": env.get("images", 0)}
+    return {"html": sanitize(html), "refs": refs, "images": env.get("images", 0),
+            "files": list(dict.fromkeys(env.get("files", [])))}

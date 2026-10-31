@@ -5351,6 +5351,13 @@ def _intel_write_side_tables(entry_id: int, tags, refs) -> None:
     rows = []
     for r in refs:
         k, i = r[0], str(r[1])
+        if k == "file":
+            # A stored image (slice 8). Refs only ever ADD on a save: a file
+            # stays while any revision of the entry used it, so History and
+            # revert never show a hole. Deleting the entry drops them.
+            _conn.execute("INSERT OR IGNORE INTO intel_file_refs (file_id, entry_id) VALUES (?,?)",
+                          (int(i), entry_id))
+            continue
         field = r[2] if len(r) > 2 else "body"
         label = r[3] if len(r) > 3 else None
         rows.append((entry_id, k, i, field, label))
@@ -5443,7 +5450,7 @@ def intel_delete_draft(entry_id: int) -> bool:
     with _lock, _conn:
         cur = _conn.execute("DELETE FROM intel_entries WHERE id=? AND status='draft'", (entry_id,))
         if cur.rowcount:
-            for t in ("intel_tags", "intel_links"):
+            for t in ("intel_tags", "intel_links", "intel_file_refs"):
                 _conn.execute(f"DELETE FROM {t} WHERE entry_id=?", (entry_id,))
             if INTEL_SEARCH == "fts5":
                 _conn.execute("DELETE FROM intel_fts WHERE rowid=?", (entry_id,))
@@ -5628,6 +5635,109 @@ def intel_op_debriefs(op_id: int, restricted_ok: bool) -> list[dict]:
         "WHERE l.ref_kind='op' AND l.ref_id=? AND l.field='debrief_op' AND e.kind='debrief' "
         f"AND e.status != 'archived'{_intel_vis_sql(restricted_ok)} "
         "ORDER BY COALESCE(e.published_at, e.created_at) DESC", (str(op_id),))]
+
+
+# ---- stored images + import + export (#50 slice 8) ----
+@_intel_read
+def intel_file_get(file_id: int) -> dict | None:
+    r = _conn.execute("SELECT * FROM intel_files WHERE id=?", (file_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def intel_file_add(sha: str, mime: str, size: int, w: int, h: int, import_id: int | None, at: str) -> tuple[int, bool]:
+    """(id, created). The same bytes are stored once (dedup by hash)."""
+    with _lock, _conn:
+        r = _conn.execute("SELECT id FROM intel_files WHERE sha256=?", (sha,)).fetchone()
+        if r:
+            return r[0], False
+        cur = _conn.execute("INSERT INTO intel_files (sha256, mime, bytes, width, height, import_id, created_at) "
+                            "VALUES (?,?,?,?,?,?,?)", (sha, mime, size, w, h, import_id, at))
+        return cur.lastrowid, True
+
+
+@_intel_read
+def intel_files_used() -> int:
+    return _conn.execute("SELECT COALESCE(SUM(bytes), 0) FROM intel_files").fetchone()[0]
+
+
+@_intel_read
+def intel_files_count() -> int:
+    return _conn.execute("SELECT COUNT(*) FROM intel_files").fetchone()[0]
+
+
+@_intel_read
+def intel_file_entry_ids(file_id: int, limit: int = 200) -> list[int]:
+    return [r[0] for r in _conn.execute(
+        "SELECT entry_id FROM intel_file_refs WHERE file_id=? LIMIT ?", (file_id, limit))]
+
+
+@_intel_read
+def intel_files_for(entry_ids) -> dict[int, list[dict]]:
+    """{entry_id: [file rows]} — what an export packs next to each entry."""
+    entry_ids = list(entry_ids)
+    if not entry_ids:
+        return {}
+    out: dict[int, list[dict]] = {}
+    for r in _conn.execute(
+            "SELECT r.entry_id, f.* FROM intel_file_refs r JOIN intel_files f ON f.id = r.file_id "
+            f"WHERE r.entry_id IN ({','.join('?' * len(entry_ids))})", entry_ids):
+        d = dict(r)
+        out.setdefault(d.pop("entry_id"), []).append(d)
+    return out
+
+
+def intel_files_take_orphans(before_iso: str) -> list[dict]:
+    """Delete the rows of stored images nothing references any more (older
+    than `before_iso`, so an import's fresh files aren't raced) and return
+    them, so the caller removes the bytes from disk."""
+    with _lock, _conn:
+        rows = [dict(r) for r in _conn.execute(
+            "SELECT * FROM intel_files f WHERE created_at < ? "
+            "AND NOT EXISTS (SELECT 1 FROM intel_file_refs r WHERE r.file_id = f.id)", (before_iso,))]
+        _conn.executemany("DELETE FROM intel_files WHERE id=?", [(r["id"],) for r in rows])
+    return rows
+
+
+@_intel_read
+def intel_file_shas() -> set[str]:
+    return {r[0] for r in _conn.execute("SELECT sha256 FROM intel_files")}
+
+
+def intel_import_create(admin_id: str, at: str) -> int:
+    with _lock, _conn:
+        return _conn.execute("INSERT INTO intel_imports (admin_id, status, created_at) VALUES (?, 'uploading', ?)",
+                             (str(admin_id), at)).lastrowid
+
+
+def intel_import_update(import_id: int, fields: dict) -> None:
+    sets = ", ".join(f"{c}=?" for c in fields)
+    with _lock, _conn:
+        _conn.execute(f"UPDATE intel_imports SET {sets} WHERE id=?", list(fields.values()) + [import_id])
+
+
+@_intel_read
+def intel_import_get(import_id: int) -> dict | None:
+    r = _conn.execute("SELECT * FROM intel_imports WHERE id=?", (import_id,)).fetchone()
+    return dict(r) if r else None
+
+
+@_intel_read
+def intel_imports_recent(limit: int = 5) -> list[dict]:
+    return [dict(r) for r in _conn.execute(
+        "SELECT * FROM intel_imports WHERE status != 'uploading' ORDER BY id DESC LIMIT ?", (limit,))]
+
+
+@_intel_read
+def intel_export_rows(restricted_ok: bool) -> list[dict]:
+    """Every published entry (an admin's export includes RESTRICTED ones)."""
+    rows = [_intel_row(r) for r in _conn.execute(
+        "SELECT e.* FROM intel_entries e WHERE e.status='published'"
+        f"{_intel_vis_sql(restricted_ok)} ORDER BY e.kind, e.id")]
+    tags = _intel_tags_for([r["id"] for r in rows])
+    for r in rows:
+        r["tags"] = tags.get(r["id"], [])
+        r["rev"] = _intel_current_rev(r["id"])
+    return rows
 
 
 # ---- Discord posts (#50 slice 6) ----

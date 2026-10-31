@@ -13,3 +13,7 @@ markdown-it-py>=4.0
 # The sanitizer that is the trust boundary for entry HTML (Rust ammonia
 # binding, prebuilt wheels). 0.3 is the API intel_md.sanitize uses.
 nh3>=0.3
+# Intelligence import images (#50 slice 8, server/intel_files.py): sniffed,
+# pixel-capped, re-encoded to WebP. 11.3.0 fixed CVE-2025-48379 (a heap buffer
+# overflow writing large DDS images); decoding is attack surface, keep current.
+pillow>=11.3

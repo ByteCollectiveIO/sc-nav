@@ -16747,6 +16747,302 @@ if __name__ == "__main__":
     unittest.main(verbosity=1)
 
 
+def _png(w=64, h=48, color=(30, 120, 200), exif=False) -> bytes:
+    from PIL import Image
+    b = io.BytesIO()
+    img = Image.new("RGB", (w, h), color)
+    if exif:
+        ex = Image.Exif(); ex[0x010F] = "SecretCam"
+        img.save(b, "JPEG", exif=ex.tobytes())
+    else:
+        img.save(b, "PNG")
+    return b.getvalue()
+
+
+def _zip(files: dict) -> bytes:
+    import zipfile
+    b = io.BytesIO()
+    with zipfile.ZipFile(b, "w") as zf:
+        for name, data in files.items():
+            zf.writestr(name, data)
+    return b.getvalue()
+
+
+class IntelFilesUnitTests(unittest.TestCase):
+    """intel_files (#50 slice 8): the only path an image takes onto disk, the
+    defensive zip reader, and the front matter Export writes / Import reads."""
+
+    def test_reencode_shrinks_to_webp_and_drops_exif(self):
+        import intel_files
+        out, mime, w, h = intel_files.reencode(_png(4000, 3000))
+        self.assertEqual((mime, w, h), ("image/webp", 2560, 1920))
+        self.assertEqual(intel_files.sniff(out), "webp")
+        jpg = _png(800, 600, exif=True)
+        self.assertIn(b"SecretCam", jpg)
+        out, *_ = intel_files.reencode(jpg)
+        self.assertNotIn(b"SecretCam", out)
+
+    def test_refuses_svg_garbage_and_pixel_bombs(self):
+        import intel_files
+        from PIL import Image
+        for bad in (b"<svg onload=alert(1)></svg>", b"\x89PNG\r\n\x1a\nnot really"):
+            with self.assertRaises(intel_files.ImageError):
+                intel_files.reencode(bad)
+        b = io.BytesIO(); Image.new("1", (8000, 6000)).save(b, "PNG")      # 48 MP, tiny file
+        with self.assertRaises(intel_files.ImageError) as cm:
+            intel_files.reencode(b.getvalue())
+        self.assertIn("megapixels", str(cm.exception))
+
+    def test_zip_reader_refuses_unsafe_paths_and_skips_the_rest(self):
+        import intel_files
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "bad.zip").write_bytes(_zip({"../../etc/cron.d/x.md": "# x"}))
+            with self.assertRaises(ValueError):
+                intel_files.scan_zip(d / "bad.zip")
+            (d / "ok.zip").write_bytes(_zip({"a.md": "# A", "img/a.png": _png(), "inner.zip": b"PK",
+                                             "notes.pdf": b"%PDF", "__MACOSX/._a.md": b"x"}))
+            sc = intel_files.scan_zip(d / "ok.zip")
+            sc["zip"].close()
+            self.assertEqual(list(sc["md"]), ["a.md"])
+            self.assertEqual(list(sc["images"]), ["img/a.png"])
+            self.assertEqual(sorted(n for n, _ in sc["skipped"]), ["inner.zip", "notes.pdf"])
+            (d / "many.zip").write_bytes(_zip({f"{i}.md": "x" for i in range(5)}))
+            with self.assertRaises(ValueError):
+                intel_files.scan_zip(d / "many.zip", max_files=4)
+        finally:
+            shutil.rmtree(d)
+
+    def test_front_matter_round_trips_and_reads_hand_written(self):
+        import intel_files
+        fm = intel_files.dump_front_matter({"title": 'Gate: "camp"', "kind": "tactic", "tags": ["pyro", "gate"]})
+        meta, body = intel_files.parse_front_matter(fm + "\nBody\n")
+        self.assertEqual((meta["title"], meta["kind"], meta["tags"]), ('Gate: "camp"', "tactic", ["pyro", "gate"]))
+        self.assertEqual(body.strip(), "Body")
+        meta, _ = intel_files.parse_front_matter("---\ntitle: Escort SOP\ntags: escort, hull-c\n---\nx")
+        self.assertEqual(meta, {"title": "Escort SOP", "tags": ["escort", "hull-c"]})
+
+    def test_image_targets_and_rewrite(self):
+        import intel_files
+        md = "![a](img/Shot%201.png) ![w](https://i.imgur.com/x.png)\n![g][i1]\n\n[i1]: <data:image/png;base64,AAAA>\n"
+        self.assertEqual(intel_files.image_targets(md),
+                         ["img/Shot%201.png", "https://i.imgur.com/x.png", "data:image/png;base64,AAAA"])
+        self.assertEqual(intel_files.resolve("Book/Escort.md", "img/Shot%201.png"), "Book/img/Shot 1.png")
+        self.assertIsNone(intel_files.resolve("x.md", "https://i.imgur.com/x.png"))
+        out = intel_files.rewrite_images(md, {"img/Shot%201.png": "/api/intel/files/4",
+                                              "data:image/png;base64,AAAA": "/api/intel/files/5"})
+        self.assertIn("![a](/api/intel/files/4)", out)
+        self.assertIn("[i1]: /api/intel/files/5", out)
+        self.assertNotIn("data:", intel_files.drop_data_uris("![x](data:image/png;base64,AAAA)"))
+
+
+class IntelImportExportTests(unittest.TestCase):
+    """Slice 8 (#50): Import Markdown (.zip) storing its images (chunked
+    upload, quota, disk floor, dedup), who can see a stored image, Export →
+    Markdown (.zip), the one-click image rule, and the orphan sweep."""
+
+    CLEAR_ROLE = IntelReportTests.CLEAR_ROLE
+    AUTHOR, OTHER, ADMIN, CLEARED = (IntelReportTests.AUTHOR, IntelReportTests.OTHER,
+                                     IntelReportTests.ADMIN, IntelReportTests.CLEARED)
+    as_ = IntelReportTests.as_
+    entry = IntelDiscussionTests.entry
+
+    @classmethod
+    def setUpClass(cls):
+        IntelReportTests.__dict__["setUpClass"].__func__(cls)
+
+        def admin_dep():
+            if not cls.user.get("is_admin"):
+                raise HTTPException(status_code=403, detail="admin only")
+            return cls.user
+        app.app.dependency_overrides[app.require_admin] = admin_dep
+        cls._files_dir, cls._import_dir = app.INTEL_FILES_DIR, app.INTEL_IMPORT_DIR
+        cls._tmpd = Path(tempfile.mkdtemp())
+        app.INTEL_FILES_DIR, app.INTEL_IMPORT_DIR = cls._tmpd / "files", cls._tmpd / "tmp"
+
+    @classmethod
+    def tearDownClass(cls):
+        app.INTEL_FILES_DIR, app.INTEL_IMPORT_DIR = cls._files_dir, cls._import_dir
+        shutil.rmtree(cls._tmpd, ignore_errors=True)
+        IntelReportTests.__dict__["tearDownClass"].__func__(cls)
+
+    def setUp(self):
+        IntelReportTests.setUp(self)
+        with db._conn:
+            for t in ("intel_files", "intel_file_refs", "intel_imports"):
+                db._conn.execute(f"DELETE FROM {t}")
+        db.set_setting(app.INTEL_QUOTA_KEY, "")
+        shutil.rmtree(app.INTEL_FILES_DIR, ignore_errors=True)
+        self.as_(self.ADMIN)
+
+    def upload(self, data: bytes, publish=True, chunk=None, expect="done"):
+        r = self.client.post("/api/admin/intel/import", json={"size": len(data), "name": "handbook.zip"})
+        self.assertEqual(r.status_code, 200, r.text)
+        iid, step = r.json()["id"], chunk or len(data)
+        for off in range(0, len(data), step):
+            r = self.client.put(f"/api/admin/intel/import/{iid}/chunk?offset={off}", content=data[off:off + step])
+            self.assertEqual(r.status_code, 200, r.text)
+        r = self.client.post(f"/api/admin/intel/import/{iid}/finish", json={"publish": publish})
+        self.assertEqual(r.status_code, 202, r.text)
+        for _ in range(200):
+            st = self.client.get(f"/api/admin/intel/import/{iid}").json()
+            if st["status"] not in ("processing", "uploading"):
+                break
+            time.sleep(0.05)
+        self.assertEqual(st["status"], expect, st)
+        return st["report"]
+
+    def handbook(self):
+        import base64
+        shot = _png(3000, 2000)
+        return _zip({
+            "Handbook/Escort SOP 0123456789abcdef0123456789abcdef.md":
+                "# Escort SOP\n\n![formation](img/Shot%201.png)\n\n![again](img/Shot%201.png) ![web](https://i.imgur.com/x.png)\n",
+            "Handbook/img/Shot 1.png": shot,
+            "Handbook/Gate counter.md": "---\ntitle: \"Countering a gate camp\"\nkind: \"tactic\"\n"
+                                        "tags: [\"pyro\"]\nvisibility: \"restricted\"\n---\n![g][i1]\n\n"
+                                        f"[i1]: <data:image/png;base64,{base64.b64encode(shot).decode()}>\n",
+            "Handbook/Camp.md": "---\nkind: \"report\"\n---\nseen",
+            "Handbook/manual.pdf": b"%PDF",
+        })
+
+    def test_import_stores_images_once_and_rewrites_the_markdown(self):
+        rep = self.upload(self.handbook(), chunk=4096)
+        self.assertEqual(sorted(e["title"] for e in rep["entries"]), ["Countering a gate camp", "Escort SOP"])
+        self.assertEqual(rep["images_stored"], 1)            # same screenshot, twice + as a data URI
+        self.assertEqual(rep["images_reused"], 1)
+        self.assertEqual(sorted(n for n, _ in rep["skipped"]), ["Handbook/Camp.md", "Handbook/manual.pdf"])
+        sop = next(e for e in rep["entries"] if e["kind"] == "procedure")
+        e = db.intel_get_entry(sop["id"])
+        self.assertEqual(e["status"], "published")
+        self.assertRegex(e["body_md"], r"!\[formation\]\(/api/intel/files/\d+\)")
+        self.assertIn("https://i.imgur.com/x.png", e["body_md"])
+        self.assertNotIn("<img", e["body_html"])              # never a bare <img>: placeholders only
+        self.assertIn('class="intel-file"', e["body_html"])
+        tac = db.intel_get_entry(next(x["id"] for x in rep["entries"] if x["kind"] == "tactic"))
+        self.assertEqual((tac["visibility"], tac["tags"]), ("restricted", ["pyro"]))
+        self.assertNotIn("data:", tac["body_md"])
+        f = db.intel_file_get(int(re.search(r"files/(\d+)", e["body_md"]).group(1)))
+        self.assertEqual((f["mime"], f["width"]), ("image/webp", 2560))
+        self.assertTrue((app.INTEL_FILES_DIR / f"{f['sha256']}.webp").is_file())
+        st = self.client.get("/api/admin/intel/storage").json()
+        self.assertEqual((st["files"], st["used"]), (1, f["bytes"]))
+
+    def test_a_stored_image_shows_to_whoever_can_read_an_entry_using_it(self):
+        rep = self.upload(self.handbook())
+        fid = int(re.search(r"files/(\d+)", db.intel_get_entry(rep["entries"][0]["id"])["body_md"]).group(1))
+        self.as_(self.OTHER)
+        r = self.client.get(f"/api/intel/files/{fid}")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["content-type"], "image/webp")
+        self.assertIn("private", r.headers["cache-control"])
+        # Only in the RESTRICTED tactic: a member without clearance can't load it,
+        # and can't borrow it by typing its URL into their own entry.
+        with db._conn:
+            db._conn.execute("DELETE FROM intel_file_refs WHERE entry_id=?",
+                             (next(e["id"] for e in rep["entries"] if e["kind"] == "procedure"),))
+        self.assertEqual(self.client.get(f"/api/intel/files/{fid}").status_code, 404)
+        r = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": "Borrowed",
+                                                         "body": f"![x](/api/intel/files/{fid})"})
+        self.assertEqual(r.status_code, 422)
+        self.as_(self.CLEARED)
+        self.assertEqual(self.client.get(f"/api/intel/files/{fid}").status_code, 200)
+        r = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": "Reused",
+                                                         "body": f"![x](/api/intel/files/{fid})"})
+        self.assertEqual(r.status_code, 200, r.text)
+
+    def test_chunks_must_follow_on_and_the_quota_and_floor_hold(self):
+        data = self.handbook()
+        r = self.client.post("/api/admin/intel/import", json={"size": len(data)})
+        iid = r.json()["id"]
+        r = self.client.put(f"/api/admin/intel/import/{iid}/chunk?offset=100", content=data[:10])
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.json()["detail"]["received"], 0)
+        r = self.client.put(f"/api/admin/intel/import/{iid}/chunk?offset=0", content=data + b"extra")
+        self.assertEqual(r.status_code, 413)
+        self.assertEqual(self.client.post(f"/api/admin/intel/import/{iid}/finish", json={}).status_code, 409)
+        self.client.delete(f"/api/admin/intel/import/{iid}")
+        with mock.patch.object(app, "_intel_disk_free", return_value=app.INTEL_DISK_FLOOR + 10):
+            r = self.client.post("/api/admin/intel/import", json={"size": len(data)})
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("1 GB", r.text)
+        # A quota too small for the screenshot: the entries still import, the image doesn't.
+        self.client.put("/api/admin/intel/storage", json={"quota_mb": 0})
+        r = self.client.post("/api/admin/intel/import", json={"size": len(data)})
+        self.assertEqual(r.status_code, 409)                  # 0 MB = nothing more may be stored
+        db.set_setting(app.INTEL_QUOTA_KEY, "1")
+        with mock.patch.object(app, "_intel_quota_left", return_value=100):
+            rep = self.upload(data)
+        self.assertEqual(rep["images_stored"], 0)
+        self.assertTrue(any("quota" in why for _, why in rep["images_failed"]))
+        self.assertEqual(len(rep["entries"]), 2)
+        # Lowering the quota below use deletes nothing; it reads as over quota.
+        db.set_setting(app.INTEL_QUOTA_KEY, "")
+        self.upload(data)
+        n = db.intel_files_count()
+        self.client.put("/api/admin/intel/storage", json={"quota_mb": 0})
+        st = self.client.get("/api/admin/intel/storage").json()
+        self.assertTrue(st["over_quota"])
+        self.assertEqual(st["files"], n)
+        self.assertIsNone(self.client.put("/api/admin/intel/storage", json={"quota_mb": None}).json()["quota"])
+
+    def test_bad_zips_fail_cleanly_and_members_cant_import(self):
+        rep = self.upload(_zip({"../x.md": "# x"}), expect="failed")
+        self.assertIn("Unsafe path", rep["error"])
+        rep = self.upload(b"not a zip at all", expect="failed")
+        self.assertIn("isn't a zip", rep["error"])
+        self.assertEqual(list(app.INTEL_IMPORT_DIR.iterdir()), [])   # temp files gone either way
+        self.as_(self.AUTHOR)
+        self.assertEqual(self.client.post("/api/admin/intel/import", json={"size": 10}).status_code, 403)
+
+    def test_export_round_trips_through_import(self):
+        self.upload(self.handbook())
+        self.as_(self.AUTHOR)
+        self.entry(title="Hull-C escort", body="Fly high.", tags=["escort"])
+        import zipfile
+        r = self.client.get("/api/intel/export")
+        self.assertEqual(r.status_code, 200)
+        names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
+        self.assertTrue(any(n.startswith("procedures/") and "escort-sop" in n for n in names), names)
+        self.assertFalse(any(n.startswith("tactics/") for n in names))   # RESTRICTED: not in a member's export
+        self.assertTrue(any(n.startswith("files/") for n in names))
+        self.as_(self.ADMIN)
+        r = self.client.get("/api/intel/export")
+        zf = zipfile.ZipFile(io.BytesIO(r.content))
+        sop = next(n for n in zf.namelist() if "escort-sop" in n)
+        text = zf.read(sop).decode()
+        self.assertIn('kind: "procedure"', text)
+        self.assertRegex(text, r"!\[formation\]\(\.\./files/\d+\.webp\)")
+        self.assertTrue(any(n.startswith("tactics/") for n in zf.namelist()))
+        before = db.intel_files_count()
+        rep = self.upload(r.content)
+        self.assertEqual(sorted(e["title"] for e in rep["entries"]),
+                         ["Countering a gate camp", "Escort SOP", "Hull-C escort"])
+        self.assertEqual((rep["images_stored"], db.intel_files_count()), (0, before))   # same bytes: reused
+        hull = db.intel_get_entry(next(e["id"] for e in rep["entries"] if e["title"] == "Hull-C escort"))
+        self.assertEqual(hull["tags"], ["escort"])
+
+    def test_sweep_removes_images_nothing_uses(self):
+        rep = self.upload(self.handbook(), publish=False)        # drafts
+        fid = int(re.search(r"files/(\d+)", db.intel_get_entry(rep["entries"][0]["id"])["body_md"]).group(1))
+        path = app.INTEL_FILES_DIR / f"{db.intel_file_get(fid)['sha256']}.webp"
+        later = datetime.now(timezone.utc) + timedelta(hours=2)
+        self.assertEqual(app.intel_files_sweep(later)["orphans"], 0)      # still used
+        for e in rep["entries"]:
+            self.assertTrue(db.intel_delete_draft(e["id"]))
+        self.assertEqual(app.intel_files_sweep()["orphans"], 0)           # grace period
+        self.assertEqual(app.intel_files_sweep(later)["orphans"], 1)
+        self.assertIsNone(db.intel_file_get(fid))
+        self.assertFalse(path.exists())
+
+    def test_rendered_entries_never_carry_an_img_tag(self):
+        import intel_md
+        html = intel_md.render("![a](https://i.imgur.com/a.png) ![b](/api/intel/files/3)",
+                               app.IMAGE_PREVIEW_HOSTS, own_files=True)["html"]
+        self.assertNotIn("<img", html)
+        self.assertEqual(intel_md.render("![b](/api/intel/files/3)")["html"], "<p>b</p>\n")  # comments: text
+
+
 class IntelDebriefReadingTests(unittest.TestCase):
     """Intelligence slice 7 (#50): debriefs written from an op (read-only op
     record header, only from the op, linked back from it) and an event's

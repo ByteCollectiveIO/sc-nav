@@ -61,7 +61,12 @@ debrief opens with the op's record (crew, time, contracts, money) and four
 questions, what was planned, what happened, what went well, what to change, and
 the op page lists it under DEBRIEFS. An event organizer can add **required
 reading**; the entry shows an **I've read it** bar, and the event roster puts a ✓
-next to everyone who has read it all (a major revision asks them again). Open
+next to everyone who has read it all (a major revision asks them again). Images
+in an entry load with one click (**Load N images**), or always if you tick that
+box. An admin can move a handbook in with **Settings → Data → Import Markdown
+(.zip)** (a Notion or Google Docs export; its screenshots are stored on the
+server, within a quota the admin sets), and anyone can take the knowledge base
+out with **Export (.zip)** on the Library. Open
 `#/intel/overview` and you get org-wide totals for mapping coverage, cargo hauling,
 trade-route profit, belt surveying, marketplace volume, per-contributor
 leaderboards and an ops-attendance board, plus (if you're an admin) a member

@@ -344,6 +344,18 @@
   /* The one panel that wipes org-wide data is fenced in red so it can't be
      mistaken for an everyday setting. */
   .danger-zone { border-color: var(--bad); }
+  .idp-read { font-size: 13px; margin: 0 0 10px; }
+  .idp-over { color: var(--warn); }
+  .idp-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .idp-lbl { font-size: 13px; }
+  .idp-chk { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+  .idp-note { font-size: 12px; margin: 6px 0 10px; line-height: 1.5; max-width: 72ch; }
+  .idp-h { margin: 18px 0 4px; font-size: 13px; letter-spacing: .04em; }
+  .idp-msg { font-size: 12px; margin-top: 6px; }
+  #idp-prog { width: 100%; max-width: 420px; margin-top: 8px; accent-color: var(--accent); }
+  .idp-rep { margin-top: 10px; font-size: 13px; }
+  .idp-rep ul, .idp-recent ul { margin: 6px 0; padding-left: 18px; font-size: 12px; }
+  .idp-rep details, .idp-recent { margin-top: 6px; font-size: 12px; }
   .danger-zone h2 { color: var(--bad); }
   /* admin ID chips: neutral raised pills (gold is reserved for selection/armed) */
   .admin-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px;
@@ -706,6 +718,20 @@
   .ix-imglink { display: inline-flex; align-items: center; gap: 6px; border: 1px dashed var(--border); border-radius: 6px;
     padding: 4px 10px; font-size: 12px; text-decoration: none; }
   .ix-imglink .ix-ico { color: var(--accent); }
+  /* Images (#50 slice 8): a fixed frame so nothing jumps when they load. */
+  .ix-fig { position: relative; margin: 12px 0; display: grid; gap: 6px; max-width: 100%; }
+  .ix-fig img { max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--border); background: var(--panel2); }
+  .ix-fig figcaption { font-size: 12px; color: var(--dim); }
+  .ix-fig.ext.pending .ix-fig-ph, .ix-fig.gone .ix-fig-gone, .ix-fig.ext.gone .ix-fig-ph { display: flex; align-items: center; justify-content: center;
+    gap: 6px; aspect-ratio: 16 / 9; max-width: 640px; border: 1px dashed var(--border); border-radius: 6px; font-size: 12px; color: var(--dim);
+    background: var(--panel2); }
+  .ix-fig.ext.pending img { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .ix-imgbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 10px 22px; font-size: 12px;
+    border-bottom: 1px solid var(--border); background: var(--panel2); }
+  .ix-imgbar > span { flex: 1 1 200px; }
+  .ix-imgbar > .ix-ico { color: var(--accent); }
+  .ix-imgbar-auto { display: inline-flex; gap: 6px; align-items: center; color: var(--dim); }
+  .ix-imgbar .ix-btn { padding: 5px 10px; }
   .ix-rail { display: grid; gap: 14px; position: sticky; top: 14px; }
   .ix-toc { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 12px; }
   .ix-toc a { color: var(--dim); text-decoration: none; display: block; padding: 3px 0; line-height: 1.4; }
@@ -914,7 +940,7 @@
     .ix-upd { grid-template-columns: minmax(0, 1fr); gap: 2px; }
     .ix-rep-grid { grid-template-columns: minmax(0, 1fr); }
     .ix-row .ix-body { grid-column: 1 / 3; grid-row: 2; }
-    .ix-head, .ix-prose, .ix-banner { padding-left: 14px; padding-right: 14px; }
+    .ix-head, .ix-prose, .ix-banner, .ix-imgbar, .ix-readbar { padding-left: 14px; padding-right: 14px; }
     .ix-title { font-size: 20px; }
     .ix-ed-head { padding: 14px 12px; }
     .ix-ed-meta { grid-template-columns: minmax(0, 1fr); }
@@ -5548,6 +5574,10 @@
             <b>0</b> turns auto-refresh off. <b>Refresh now</b> also re-pulls the starmap dataset.
           </div>
           <div class="muted" id="feed-refresh-status" role="status" aria-live="polite" style="font-size:12px; margin-top:4px;"></div>
+        </div>
+        <div class="panel admin-grp" id="intel-data-panel">
+          <h2>INTELLIGENCE: IMAGES, IMPORT, EXPORT</h2>
+          <div id="intel-data-body"><p class="muted" style="font-size:12px">Loading…</p></div>
         </div>
         <div class="panel admin-grp danger-zone" id="danger-panel">
           <h2>CLEAR STATISTICS <span class="muted">(danger)</span></h2>
@@ -27852,7 +27882,126 @@ function applySettingsSection(h) {
     const cur = document.querySelector('#set-nav a[aria-current="page"]');
     if (cur) cur.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
+  if (sec === "data" && sec !== settingsSec) renderIntelDataPanel();
   settingsSec = sec;
+}
+
+// ---- Intelligence: stored images, Import / Export Markdown (.zip) (#50 slice 8) ----
+// The editor stays link-only; an admin's import is the one way images land on
+// the server. The quota is the org admin's call (any size, or none); the 1 GB
+// free-disk floor always holds, because SQLite shares the volume.
+function fmtBytes(n) {
+  n = Number(n) || 0;
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return `${n >= 100 || i === 0 ? Math.round(n) : n.toFixed(1).replace(/\.0$/, "")} ${u[i]}`;
+}
+let intelImportBusy = false;
+async function renderIntelDataPanel() {
+  const box = $("intel-data-body");
+  if (!box || intelImportBusy) return;
+  let st;
+  try { const r = await fetch("/api/admin/intel/storage"); if (!r.ok) throw new Error(r.status); st = await r.json(); }
+  catch { box.innerHTML = `<p class="muted" style="font-size:12px">Couldn't load Intelligence storage. Reopen this section to retry.</p>`; return; }
+  const presets = st.presets_mb.map(mb => `<option value="${mb}"${st.quota_mb === mb ? " selected" : ""}>${fmtBytes(mb * 1048576)}${mb === st.default_mb ? " (default)" : ""}</option>`).join("");
+  const custom = st.quota_mb != null && !st.presets_mb.includes(st.quota_mb);
+  box.innerHTML =
+    `<p class="idp-read"><b>${fmtBytes(st.used)}</b> used${st.quota == null ? " · no limit" : ` of <b>${fmtBytes(st.quota)}</b>`}` +
+    ` · ${st.files} image${st.files === 1 ? "" : "s"} · ${fmtBytes(st.free)} free on the data volume` +
+    (st.over_quota ? ` · <span class="idp-over">over quota: new imports are refused until it's back under</span>` : "") + `</p>` +
+    `<div class="idp-row"><label class="idp-lbl" for="idp-quota">Image quota</label>` +
+    `<select class="ti" id="idp-quota">${presets}<option value="custom"${custom ? " selected" : ""}>Custom…</option>` +
+    `<option value="none"${st.quota == null ? " selected" : ""}>No limit</option></select>` +
+    `<input class="ti" id="idp-quota-mb" type="number" min="0" step="1" style="width:110px" aria-label="Custom quota in MB"` +
+    ` value="${custom ? st.quota_mb : ""}"${custom ? "" : " hidden"} placeholder="MB">` +
+    `<button id="idp-quota-save">Save</button><span class="muted idp-msg" id="idp-quota-msg" role="status"></span></div>` +
+    `<p class="muted idp-note">Images only reach the server through an import below; the editor takes image links. Lowering the quota deletes nothing. ` +
+    `Whatever the quota, an import stops before the disk would drop under 1 GB free.</p>` +
+    `<h3 class="idp-h">IMPORT MARKDOWN (.ZIP)</h3>` +
+    `<p class="muted idp-note">A Notion or Google Docs Markdown export, or an export from here. Each <b>.md</b> file becomes a procedure ` +
+    `(or a tactic, if its front matter says <code>kind: tactic</code>); the zip's images are stored, re-encoded to WebP and counted once. ` +
+    `Reports, dossiers, debriefs and questions are records of your org's activity: they export, but don't import.</p>` +
+    `<div class="idp-row"><input type="file" id="idp-file" accept=".zip,application/zip" aria-label="Zip to import">` +
+    `<label class="idp-chk"><input type="checkbox" id="idp-publish" checked> Publish them (unticked: they're your drafts)</label>` +
+    `<button id="idp-go" disabled>Import</button></div>` +
+    `<progress id="idp-prog" max="1" value="0" hidden></progress><div class="muted idp-msg" id="idp-msg" role="status" aria-live="polite"></div>` +
+    `<div id="idp-report"></div>` +
+    (st.imports.length ? `<details class="idp-recent"><summary>Recent imports (${st.imports.length})</summary><ul>` +
+      st.imports.map(i => `<li>${esc(fmtEventTime(i.created_at))} · ${esc(i.status)}${i.report && i.report.name ? ` · ${esc(i.report.name)}` : ""}` +
+        `${i.status === "done" ? ` · ${i.files_total} entr${i.files_total === 1 ? "y" : "ies"}, ${fmtBytes(i.bytes_stored)} stored` : ""}</li>`).join("") + `</ul></details>` : "") +
+    `<h3 class="idp-h">EXPORT</h3><p class="muted idp-note">Every published entry as Markdown with its fields as front matter, ` +
+    `plus the stored images, linked relatively. Your export includes RESTRICTED entries; a member's doesn't.</p>` +
+    `<a class="ev-btn" href="/api/intel/export" download>Export Markdown (.zip)</a>`;
+  const q = $("idp-quota"), qmb = $("idp-quota-mb");
+  q.onchange = () => { qmb.hidden = q.value !== "custom"; if (!qmb.hidden) qmb.focus(); };
+  $("idp-quota-save").onclick = async () => {
+    const v = q.value === "none" ? null : q.value === "custom" ? parseInt(qmb.value, 10) : +q.value;
+    const msg = $("idp-quota-msg");
+    if (v !== null && !(v >= 0)) { msg.textContent = "Type a size in MB."; return; }
+    const r = await fetch("/api/admin/intel/storage", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ quota_mb: v }) });
+    if (!r.ok) { msg.textContent = "Couldn't save."; return; }
+    await renderIntelDataPanel(); const m = $("idp-quota-msg"); if (m) m.textContent = "Saved.";
+  };
+  $("idp-file").onchange = (ev) => { $("idp-go").disabled = !ev.target.files.length; };
+  $("idp-go").onclick = () => intelImportZip($("idp-file").files[0], $("idp-publish").checked);
+}
+async function intelImportZip(file, publish) {
+  if (!file || intelImportBusy) return;
+  const msg = $("idp-msg"), prog = $("idp-prog"), go = $("idp-go");
+  const say = (t) => { if (msg) msg.textContent = t; };
+  const api = async (url, opts = {}) => {
+    const r = await fetch(url, opts);
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error(typeof d.detail === "string" ? d.detail : (d.detail && d.detail.message) || `Error ${r.status}`); e.status = r.status; e.detail = d.detail; throw e; }
+    return d;
+  };
+  intelImportBusy = true; go.disabled = true; prog.hidden = false; prog.value = 0; $("idp-report").innerHTML = "";
+  try {
+    const start = await api("/api/admin/intel/import", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ size: file.size, name: file.name }) });
+    let off = 0, tries = 0;
+    while (off < file.size) {
+      say(`Uploading ${fmtBytes(off)} of ${fmtBytes(file.size)}…`);
+      try {
+        const d = await api(`/api/admin/intel/import/${start.id}/chunk?offset=${off}`, { method: "PUT",
+          headers: { "Content-Type": "application/octet-stream" }, body: file.slice(off, off + start.chunk) });
+        off = d.received; tries = 0; prog.value = off / file.size;
+      } catch (err) {
+        // Resume from what the server actually has (a dropped piece, a retry).
+        if (++tries > 4 || (err.status && err.status !== 409 && err.status < 500)) throw err;
+        await new Promise(r => setTimeout(r, 1000 * tries));
+        try { off = (await api(`/api/admin/intel/import/${start.id}`)).received || 0; } catch {}
+      }
+    }
+    say("Unpacking and storing images… this can take a minute for a big handbook.");
+    prog.removeAttribute("value");
+    await api(`/api/admin/intel/import/${start.id}/finish`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ publish }) });
+    let st;
+    for (;;) {
+      await new Promise(r => setTimeout(r, 1000));
+      st = await api(`/api/admin/intel/import/${start.id}`);
+      if (st.status !== "processing") break;
+    }
+    intelImportBusy = false;
+    await renderIntelDataPanel();
+    $("idp-report").innerHTML = intelImportReportHtml(st);
+  } catch (err) {
+    intelImportBusy = false;
+    say(`Import stopped: ${err.message}`); prog.hidden = true; go.disabled = false;
+  }
+}
+function intelImportReportHtml(st) {
+  const r = st.report || {};
+  if (st.status !== "done") return `<p class="idp-over">The import failed: ${esc(r.error || st.status)}</p>`;
+  const list = (rows) => `<ul>${rows.map(([n, why]) => `<li><code>${esc(n)}</code>: ${esc(why)}</li>`).join("")}</ul>`;
+  return `<div class="idp-rep"><p><b>${r.entries.length}</b> entr${r.entries.length === 1 ? "y" : "ies"} imported · ` +
+    `${r.images_stored} image${r.images_stored === 1 ? "" : "s"} stored (${fmtBytes(r.bytes_stored)})` +
+    (r.images_reused ? ` · ${r.images_reused} already stored` : "") + `</p>` +
+    (r.entries.length ? `<ul class="idp-ents">${r.entries.slice(0, 50).map(e => `<li><a href="#/intel/e/${+e.id}-${encodeURIComponent(e.slug || "entry")}">` +
+      `${esc(e.title)}</a> <span class="muted">${esc(e.kind)}${e.images ? ` · ${e.images} image${e.images === 1 ? "" : "s"}` : ""}</span></li>`).join("")}</ul>` : "") +
+    (r.images_failed.length ? `<details><summary>${r.images_failed.length} image${r.images_failed.length === 1 ? "" : "s"} not stored</summary>${list(r.images_failed)}</details>` : "") +
+    (r.skipped.length ? `<details><summary>${r.skipped.length} file${r.skipped.length === 1 ? "" : "s"} skipped</summary>${list(r.skipped)}</details>` : "") + `</div>`;
 }
 
 // ---------- leaderboard ----------
@@ -28726,7 +28875,8 @@ async function intelLibrary(box) {
     `${ico ? intelIco(ico) : ""}${label}</button>`;
   box.innerHTML = `<div class="panel" id="ix-drafts" hidden></div>` +
     `<div class="panel"><div class="ix-panel-h"><h2>LIBRARY</h2>` +
-    `<span class="muted">The org's procedures and tactics, by activity</span></div>` +
+    `<span class="muted">The org's procedures and tactics, by activity · ` +
+    `<a href="/api/intel/export" download title="Every published entry you can open, as Markdown with its images (a .zip)">Export (.zip)</a></span></div>` +
     `<div class="ix-filters" role="group" aria-label="Filter the library">` +
     chip("", "All") + chip("procedure", "Procedures", "procedure") + chip("tactic", "Tactics", "tactic") +
     `<span class="sp"></span><select class="ti" id="ix-act" aria-label="Activity">` +
@@ -29236,18 +29386,7 @@ function intelHydrate(root, e) {
     el.append(INTEL_REF_NOUN[kind] || kind);
     s.replaceWith(el);
   });
-  // Images are links until one-click loading ships (slice 8): nothing loads
-  // from a third-party host without a reader's click.
-  root.querySelectorAll("span.intel-img").forEach(s => {
-    const src = s.dataset.src || "";
-    let host = ""; try { host = new URL(src).host; } catch {}
-    const a = document.createElement("a");
-    a.className = "ix-imglink"; a.href = src; a.target = "_blank"; a.rel = "noopener noreferrer nofollow";
-    a.referrerPolicy = "no-referrer";
-    a.innerHTML = intelIco("image");
-    a.append(`${s.dataset.alt || "Image"} · ${host}`);
-    s.replaceWith(a);
-  });
+  intelHydrateImages(root, e);
   root.querySelectorAll("time[datetime]").forEach(t => {
     const sec = Date.parse(t.getAttribute("datetime")) / 1000;
     if (Number.isFinite(sec)) t.textContent = discordTime(sec, t.dataset.fmt || "f");
@@ -29260,6 +29399,82 @@ function intelHydrate(root, e) {
     a.onclick = (ev) => { ev.preventDefault(); intelCopy(location.origin + location.pathname + a.getAttribute("href"), "Section link copied"); };
     h.appendChild(a);
   });
+}
+// Images (#50 slice 8). Our own stored images (an admin import) load inline:
+// same origin, no consent needed. A linked image from an allowed host is a
+// fixed-size frame until the reader clicks ONE "Load N images" bar for the
+// entry (or has ticked "always load from these hosts"); with the admin's
+// in-app preview off (CSP closed) it stays a link. Comments: links only.
+const INTEL_IMG_AUTO = "scIntelImgAuto";
+function intelImgAuto() { try { return localStorage.getItem(INTEL_IMG_AUTO) === "1"; } catch { return false; } }
+function intelImgEl(src, alt) {
+  const img = document.createElement("img");
+  img.src = src; img.alt = alt || ""; img.loading = "lazy"; img.decoding = "async";
+  img.referrerPolicy = "no-referrer";
+  return img;
+}
+function intelFigure(alt, cls) {
+  const f = document.createElement("figure");
+  f.className = `ix-fig ${cls || ""}`;
+  if (alt) { const c = document.createElement("figcaption"); c.textContent = alt; f.appendChild(c); }
+  return f;
+}
+function intelHydrateImages(root, e) {
+  root.querySelectorAll("span.intel-file").forEach(s => {
+    const src = s.dataset.src || "";
+    // An entry page, or a root marked for it (the editor's Preview, the review diff).
+    if (!/^\/api\/intel\/files\/\d+$/.test(src) || !(e || root.dataset.ownImages)) { s.replaceWith(document.createTextNode(s.dataset.alt || "image")); return; }
+    const f = intelFigure(s.dataset.alt, "own");
+    const img = intelImgEl(src, s.dataset.alt);
+    img.onerror = () => { f.classList.add("gone"); img.remove(); f.insertAdjacentHTML("afterbegin", `<span class="ix-fig-gone">${intelIco("image")}Image unavailable</span>`); };
+    f.prepend(img);
+    s.replaceWith(f);
+  });
+  const hosts = (e && e.image_load) || [];
+  const pending = [];
+  root.querySelectorAll("span.intel-img").forEach(s => {
+    const src = s.dataset.src || "", alt = s.dataset.alt || "";
+    let host = ""; try { const u = new URL(src); host = u.protocol === "https:" ? u.host : ""; } catch {}
+    if (!host || !hosts.includes(host)) {
+      const a = document.createElement("a");
+      a.className = "ix-imglink"; a.href = src; a.target = "_blank"; a.rel = "noopener noreferrer nofollow";
+      a.referrerPolicy = "no-referrer";
+      a.innerHTML = intelIco("image");
+      a.append(`${alt || "Image"} · ${host || src}`);
+      s.replaceWith(a);
+      return;
+    }
+    const f = intelFigure(alt, "ext pending");
+    const ph = document.createElement("span"); ph.className = "ix-fig-ph";
+    ph.innerHTML = intelIco("image"); ph.append(host);
+    f.prepend(ph);
+    f.dataset.src = src; f.dataset.alt = alt;
+    s.replaceWith(f);
+    pending.push({ f, host });
+  });
+  if (!pending.length) return;
+  const load = () => {
+    pending.forEach(({ f }) => {
+      const img = intelImgEl(f.dataset.src, f.dataset.alt);
+      img.onerror = () => { f.classList.add("gone"); const ph = f.querySelector(".ix-fig-ph"); if (ph) ph.lastChild.textContent = `Couldn't load from ${new URL(f.dataset.src).host}`; };
+      img.onload = () => { f.classList.remove("pending"); const ph = f.querySelector(".ix-fig-ph"); if (ph) ph.remove(); };
+      f.prepend(img);
+    });
+    const bar = root.parentElement && root.parentElement.querySelector(":scope > .ix-imgbar");
+    if (bar) bar.remove();
+  };
+  if (intelImgAuto()) { load(); return; }
+  const used = [...new Set(pending.map(p => p.host))];
+  const bar = document.createElement("div");
+  bar.className = "ix-imgbar";
+  bar.innerHTML = `${intelIco("image")}<span>${pending.length} image${pending.length === 1 ? "" : "s"} from ${used.map(esc).join(", ")}</span>` +
+    `<label class="ix-imgbar-auto"><input type="checkbox"> Always load images from these hosts</label>` +
+    `<button type="button" class="ix-btn">Load ${pending.length === 1 ? "image" : `${pending.length} images`}</button>`;
+  bar.querySelector("button").onclick = () => {
+    if (bar.querySelector("input").checked) { try { localStorage.setItem(INTEL_IMG_AUTO, "1"); } catch {} }
+    load();
+  };
+  root.before(bar);
 }
 // Reference chips (#50 slice 3): what each kind shows, resolved as THIS member
 // may see it. A target that's gone keeps its last name, struck out.
@@ -29613,6 +29828,7 @@ async function intelReviewView(box) {
         `<pre class="ix-diff" id="ix-rv-d">${r.diff}</pre>` +   // server-escaped; <ins>/<del> only
         `<div id="ix-rv-body" hidden>${r.html}</div></div>`) +
     `</div><aside class="ix-rail"><div class="panel" id="ix-rv-act"></div></aside></div>`;
+  $("ix-rv-body").dataset.ownImages = "1";
   intelHydrate($("ix-rv-body"), null);
   if (!isNew) {
     const show = (diff) => {
@@ -30383,6 +30599,7 @@ async function intelEditor(box) {
     try {
       const r = await intelApi("/api/intel/render", { method: "POST", body: { body: ta.value } });
       pv.innerHTML = r.html || `<p class="muted">Nothing to preview yet.</p>`;
+      pv.dataset.ownImages = "1";
       intelHydrate(pv, null);
     } catch (err) { pv.innerHTML = intelStatus(err.message, true); }
   };
