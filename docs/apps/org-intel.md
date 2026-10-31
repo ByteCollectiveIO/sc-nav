@@ -74,7 +74,11 @@ comments on it; **Watching · N updated** shows just those. **Flag** an entry or
 a comment (out of date, inaccurate, inappropriate, names a player) and it goes
 to the admins, who work a flag queue on the Review tab and can **hide** an
 entry: it's kept, out of every list, and only admins can open it until it's
-unhidden. Open
+unhidden. New to writing? **Writing guide** (on the Library, in the
+editor's footer and in every empty state, or `#/intel/guide`) walks through
+writing a procedure and a report, the formatting you can use with a live
+"you type / readers see" example of each, and how to get an image link in.
+Open
 `#/intel/overview` and you get org-wide totals for mapping coverage, cargo hauling,
 trade-route profit, belt surveying, marketplace volume, per-contributor
 leaderboards and an ops-attendance board, plus (if you're an admin) a member

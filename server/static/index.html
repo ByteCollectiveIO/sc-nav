@@ -968,6 +968,44 @@
     .ix-ol > .ix-row > .ix-read-st { grid-column: 3; grid-row: 1; }
     .ix-ol > .ix-row > .ix-body { grid-column: 2 / 4; grid-row: 2; }
   }
+  /* Writing guide (#/intel/guide) */
+  .ix-gd-sec { scroll-margin-top: 16px; padding-top: 6px; }
+  .ix-gd-sec + .ix-gd-sec { border-top: 1px solid var(--border-soft); margin-top: 26px; padding-top: 22px; }
+  .ix-gd-sec > h2:first-child { margin-top: 0; }
+  .ix-prose.ix-gd > * { max-width: none; }
+  .ix-gd-sec > p, .ix-gd-sec > ul, .ix-gd-sec > ol, .ix-gd-sec > h3 { max-width: 72ch; }
+  .ix-gd-steps { counter-reset: gd; list-style: none; padding-left: 0 !important; }
+  .ix-gd-steps > li { counter-increment: gd; display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 8px; margin: .55em 0; }
+  .ix-gd-steps > li::before { content: counter(gd); font-size: 11px; color: var(--accent); border: 1px solid var(--accent);
+    border-radius: 50%; width: 20px; height: 20px; display: grid; place-items: center; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .ix-gd-kind { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+  .ix-gd-table td { vertical-align: top; }
+  .ix-gd-salute { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 6px 14px; margin: 14px 0 18px; max-width: 72ch; font-size: 13px; }
+  .ix-gd-salute dt { display: flex; gap: 8px; align-items: baseline; color: var(--text); }
+  .ix-gd-salute dt .k { color: var(--accent); font-weight: 600; width: 12px; }
+  .ix-gd-salute dd { margin: 0; color: var(--dim); }
+  .ix-gd-tip { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: 6px; margin: 14px 0;
+    background: var(--accent-wash); font-size: 13px; line-height: 1.55; max-width: 72ch; }
+  .ix-gd-tip > .ix-ico { color: var(--accent); margin-top: 2px; }
+  .ix-gd-tip.warn { background: var(--warn-wash); }
+  .ix-gd-tip.warn > .ix-ico { color: var(--warn); }
+  .ix-gd-md { display: grid; gap: 0; margin: 14px 0; border: 1px solid var(--border); border-radius: 6px; }
+  .ix-gd-ex { padding: 12px 14px; border-top: 1px solid var(--border-soft); }
+  .ix-gd-ex:first-child { border-top: none; }
+  .ix-gd-ex-h { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; font-size: 13px; margin-bottom: 8px; }
+  .ix-gd-ex-h .muted { font-size: 12px; }
+  .ix-gd-ex-b { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .ix-gd-lbl { display: block; font-size: 10px; letter-spacing: 1px; color: var(--dim); margin-bottom: 4px; }
+  .ix-gd-ex pre, .ix-gd-pre { margin: 0; padding: 8px 10px; border-radius: 4px; background: var(--inset-tint); border: 1px solid var(--border-soft);
+    font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ix-gd-pre { margin: 6px 0 14px; max-width: 72ch; }
+  .ix-prose.ix-gd-out { padding: 0; font-size: 13px; line-height: 1.6; }
+  .ix-prose.ix-gd-out > :last-child { margin-bottom: 0; }
+  @media (max-width: 600px) {
+    .ix-gd-ex-b { grid-template-columns: minmax(0, 1fr); }
+    .ix-gd-salute { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+    .ix-gd-salute dd { margin-bottom: 8px; }
+  }
   .ix-rl { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 2px; font-size: 12px; }
   .ix-rl li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; padding: 6px 0; border-top: 1px solid var(--border-soft); }
   .ix-rl li:first-child { border-top: none; }
@@ -27750,7 +27788,7 @@ let intelBoard = "mapping";   // which leaderboard the Boards section shows
 const INTEL_KNOW_SECS = ["feed", "library", "dossiers", "rfi", "review"];
 // Intelligence's deeper routes (#50 slice 1): an entry, its history, its
 // editor, a new entry, search results. All sit under the Library tab.
-const INTEL_KNOW_VIEWS = ["entry", "history", "edit", "new", "search", "reviewing", "collection", "colledit"];
+const INTEL_KNOW_VIEWS = ["entry", "history", "edit", "new", "search", "reviewing", "collection", "colledit", "guide"];
 let intelRoute = {};   // the parsed params of the current deeper route
 function intelParseRoute(sub) {
   if (sub == null) return null;
@@ -27778,6 +27816,9 @@ function intelParseRoute(sub) {
     return "new";
   }
   if (sub === "search") { intelRoute = {}; return "search"; }
+  // The writing guide: #/intel/guide[/<section>]
+  m = /^guide(?:\/([a-z]+))?$/.exec(sub);
+  if (m) { intelRoute = { sec: m[1] || null }; return "guide"; }
   // Collections (slice 8b): #/intel/c/<id>, …/edit, #/intel/c/new[?add=<entry>]
   m = /^c\/(?:(\d+)(\/edit)?|new(?:\?add=(\d+))?)$/.exec(sub);
   if (m) {
@@ -28645,7 +28686,7 @@ function renderIntel(section) {
   // Deeper routes keep the Library tab lit (search lights none).
   // Deeper views sit under Library, except a report's (it lives in the Feed);
   // an entry's kind is known only once it loads (intelSetTab then).
-  const tab = INTEL_KNOW_SECS.includes(section) ? section : section === "search" ? null
+  const tab = INTEL_KNOW_SECS.includes(section) ? section : section === "search" || section === "guide" ? null
     : section === "reviewing" && intelAccess().reviewer ? "review"
     : section === "new" && intelRoute.kind === "report" ? "feed"
     : section === "new" && intelRoute.kind === "dossier" ? "dossiers"
@@ -28848,7 +28889,7 @@ function renderIntelKnow(section) {
   ({ feed: intelFeed, library: intelLibrary, dossiers: intelDossiers, rfi: intelRfiList, search: intelSearchView, entry: intelEntryView,
      history: intelHistory, edit: intelEditor, new: intelEditor,
      review: intelReviewQueue, reviewing: intelReviewView,
-     collection: intelCollectionView, colledit: intelCollectionEditor })[section](box);
+     collection: intelCollectionView, colledit: intelCollectionEditor, guide: intelGuide })[section](box);
 }
 
 // ---- FEED (#50 slice 3) ----
@@ -28969,7 +29010,8 @@ async function intelFeed(box) {
           `a base layout. Procedures and tactics show up when they're published or revised.</p>` +
           `<p style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">` +
           `<a class="ix-primary" href="#/intel/new/report">${intelIco("report")}Write a report</a>` +
-          `<a class="ix-btn" href="#/intel/new/procedure">${intelIco("procedure")}New procedure</a></p></div>`;
+          `<a class="ix-btn" href="#/intel/new/procedure">${intelIco("procedure")}New procedure</a>` +
+          `<a class="ix-btn" href="#/intel/guide">${intelIco("edit")}How to write one</a></p></div>`;
     } else {
       const fresh = seen ? d.entries.filter(e => (e.revised_at || e.published_at) > seen).length : 0;
       let html = fresh ? `<div class="ix-since">${fresh} NEW SINCE YOU LOOKED · ${esc(intelWhen(seen).toUpperCase())}</div>` : "";
@@ -29033,7 +29075,7 @@ async function intelLibrary(box) {
     `${ico ? intelIco(ico) : ""}${label}</button>`;
   box.innerHTML = `<div class="panel" id="ix-drafts" hidden></div><div class="panel" id="ix-cols-p" hidden></div>` +
     `<div class="panel"><div class="ix-panel-h"><h2>LIBRARY</h2>` +
-    `<span class="muted">The org's procedures and tactics, by activity · ` +
+    `<span class="muted">The org's procedures and tactics, by activity · <a href="#/intel/guide">Writing guide</a> · ` +
     `<a href="/api/intel/export" download title="Every published entry you can open, as Markdown with its images (a .zip)">Export (.zip)</a></span></div>` +
     `<div class="ix-filters" role="group" aria-label="Filter the library">` +
     chip("", "All") + chip("procedure", "Procedures", "procedure") + chip("tactic", "Tactics", "tactic") +
@@ -29065,7 +29107,8 @@ async function intelLibrary(box) {
           `Each one shows which patch it was written for.</p>` +
           `<p style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">` +
           `<a class="ix-primary" href="#/intel/new/procedure">${intelIco("plus")}New procedure</a>` +
-          `<a class="ix-btn" href="#/intel/new/tactic">${intelIco("tactic")}New tactic</a></p></div>`;
+          `<a class="ix-btn" href="#/intel/new/tactic">${intelIco("tactic")}New tactic</a>` +
+          `<a class="ix-btn" href="#/intel/guide">${intelIco("edit")}How to write one</a></p></div>`;
       return;
     }
     const groups = new Map();
@@ -29078,6 +29121,124 @@ async function intelLibrary(box) {
     el.innerHTML = order.map(g => `<div class="ix-group-h"><span>${esc(g)}</span><span>${groups.get(g).length}</span></div>` +
       groups.get(g).slice().sort((a, b) => b.doctrine - a.doctrine).map(e => intelRow(e)).join("")).join("");
   } catch (err) { const el = $("ix-lib"); if (el) el.innerHTML = intelStatus(err.message, true); }
+}
+
+// ---- WRITING GUIDE (#/intel/guide) ----
+// How to write a procedure and a report, the Markdown the editor takes, and
+// how to get an image in. The formatting examples are rendered by the SAME
+// server renderer an entry goes through (/api/intel/render), so the "looks
+// like" column can't drift from what readers actually see.
+const INTEL_GUIDE_SECS = [["kinds", "Which kind to write"], ["procedure", "Write a procedure"],
+  ["report", "Write a report"], ["markdown", "Formatting"], ["images", "Add an image"],
+  ["links", "Link places, ops and entries"], ["paste", "Bring in an existing doc"], ["revise", "Change it later"]];
+const INTEL_GUIDE_MD = [
+  ["Headings", "Split a long entry into sections. Each one gets a link you can share and a line in ON THIS PAGE.", "## Loadout\n### Ships"],
+  ["Bold, italic, underline, strikethrough", "Underline is two underscores, the same as Discord.", "**Bold**, *italic*, __underline__ and ~~struck out~~"],
+  ["Lists", "Indent with two spaces to nest a list inside another.", "- Fuel\n- Med gun\n  - Spare med pen\n\n1. Form up at the marker\n2. Call the jump"],
+  ["Checklist", "The boxes are for reading, not ticking. Use them for steps people check off in their head.", "- [ ] Comms check\n- [ ] Shields to front\n- [x] Hull-C loaded"],
+  ["Quote", "For what someone said, or a rule quoted from elsewhere.", "> Never jump with less than half a tank."],
+  ["Code", "Fixed-width text, e.g. a command to type in game.", "Type `/showlocation` in chat.\n\n```\nr_displayinfo 3\n```"],
+  ["Table", "Loadouts, crew roles, price lists. The second line (dashes) is what makes it a table.", "| Role | Ship |\n|---|---|\n| Escort | Arrow |\n| Hauler | Hull-C |"],
+  ["Link", "Links open in a new tab and show the site's name. A bare address works too.", "Read the [RSI patch notes](https://robertsspaceindustries.com/comm-link) first.\n\nhttps://robertsspaceindustries.com"],
+  ["Time", "A Discord timestamp. Everyone sees it in their own time zone.", "Op starts <t:1767225600:f>"]];
+async function intelGuide(box) {
+  const sec = intelRoute.sec;
+  const g = (id, title, body) => `<section class="ix-gd-sec" id="gd-${id}"><h2>${esc(title)}</h2>${body}</section>`;
+  const step = (items) => `<ol class="ix-gd-steps">${items.map(s => `<li><span>${s}</span></li>`).join("")}</ol>`;
+  const kinds = `<div class="table-x"><table class="ix-gd-table"><thead><tr><th>Kind</th><th>Use it for</th><th>For example</th></tr></thead><tbody>` +
+    [["procedure", "How the org does something, step by step. It stays useful for months and has an owner who keeps it current.", "Hull-C escort formation · Pre-undock checklist"],
+     ["tactic", "How to beat a threat or win a kind of fight: the situation, what they usually do, the worst case, the counter.", "Breaking a gate camp at Pyro Gateway"],
+     ["report", "Something you saw, right now: who, where, when. It can expire after a few hours.", "Gate camp at the Stanton jump point, 5 ships"],
+     ["dossier", "Everything the org knows about one place or one other org. Anyone can add to it.", "Ruin Station · Red Wake Syndicate"],
+     ["rfi", "A question for the org. Whoever knows answers it.", "Where do the Pyro bunkers spawn?"]]
+      .map(([k, use, ex]) => `<tr><td><span class="ix-gd-kind">${intelIco(k)}${esc(k === "rfi" ? "Question" : INTEL_KIND[k])}</span></td><td>${esc(use)}</td><td class="muted">${esc(ex)}</td></tr>`).join("") +
+    `</tbody></table></div><p>Debriefs are written from the op itself: open the finished op and pick <b>Write debrief →</b>.</p>`;
+  const procedure = step([
+    `Pick <b>+ New</b> at the top of Intelligence, then <b>Procedure</b> (or <b>Tactic</b>).`,
+    `Give it a <b>title</b> people would search for, and a one-line <b>summary</b>: it shows in lists and search.`,
+    `Set the <b>activity</b> (it decides where it sits in the Library), the <b>system</b> if it only applies to one, and a few <b>tags</b> (<code>escort, hull-c</code>).`,
+    `Fill in the body. A new procedure starts with headings to fill: Purpose, When to use it, Steps, Loadout, Notes. Delete the ones you don't need.`,
+    `Use <b>PREVIEW</b> to see it exactly as readers will.`,
+    `Pick <b>Publish</b>. Tick <b>Announce in Discord</b> if the org should hear about it. If your org reviews procedures first, the button says <b>Submit for review</b> and a reviewer publishes it.`]) +
+    `<p>Your draft saves itself while you type, on the server, so you can start it on your phone and finish it at your desk. Only you can see a draft.</p>` +
+    `<p>A procedure is stamped with the game patch it was written for. When a new patch lands, it shows <b>written 4.3 · now 4.4</b> until someone saves a major revision or picks <b>Still valid on 4.4</b>.</p>` +
+    `<div class="ix-gd-tip">${intelIco("task")}<span><b>Write for a second screen.</b> People read procedures on a phone next to the game. Short steps, one action each, the important number first ("Hold 8 km", not "Hold back a good distance").</span></div>`;
+  const report = step([
+    `Pick <b>+ New → Report</b> (on the Feed, <b>+ New</b> starts a report). From the danger board, <b>Write up →</b> on a warning starts one already filled in.`,
+    `Fill in the <b>SALUTE</b> block. <b>Where</b> and <b>when</b> are required; the rest helps whoever reads it next.`,
+    `Grade it if you can (see below), and choose how long it stays <b>valid</b>. A gate camp is old news in a couple of hours.`,
+    `Write what happened in the body, in the order it happened, and what others should do about it.`,
+    `Pick <b>Publish report</b>. Reports never wait for review.`]) +
+    `<dl class="ix-gd-salute">` +
+    [["S", "Size", "How many: “5 ships, 2 crewed heavies”."], ["A", "What they're doing", "“Interdicting anything over 96 SCU”."],
+     ["L", "Location", "Find the place or survey zone, then say where exactly: “8 km off the Pyro-side exit”."],
+     ["U", "Unit", "Who it was. Link their org dossier if there is one, and say how you knew."],
+     ["T", "Time seen", "<b>Now</b> fills in the current time."], ["E", "Equipment", "Ships and weapons: “3× Polaris, 2× Hornet Mk II”."]]
+      .map(([k, l, d]) => `<dt><span class="k">${k}</span>${esc(l)}</dt><dd>${d}</dd>`).join("") + `</dl>` +
+    `<h3>Grading</h3><p>Two separate judgements, both optional. <b>Source</b> (A–F) is how far you trust where it came from; <b>Information</b> (1–6) is how likely it is to be true. ` +
+    `Saw it yourself and it's certain: <b>A1</b>. A stranger in chat said so: maybe <b>F3</b>. An ungraded report shows “—”, which is normal, not a low grade.</p>` +
+    `<h3>After you publish</h3><p>You have <b>15 minutes</b> to correct a typo. After that, add an <b>update</b> instead (“One Polaris left”), which can also extend or end how long it stays valid. ` +
+    `Others can <b>Corroborate</b> or <b>Dispute</b> it from the report.</p>` +
+    `<div class="ix-gd-tip warn">${intelIco("alert")}<span><b>Describe ships, orgs and behaviour, not individual players.</b> “3 Polaris flying Red Wake tags” is intel; a page about one named player isn't, and members can flag it.</span></div>`;
+  const md = `<p>Entries use <b>Markdown</b>: plain text with a few marks for formatting, close to what Discord uses. You don't have to learn it: the toolbar buttons above the text box insert it for you ` +
+    `(select some text first and they wrap it). Ctrl/⌘+B is bold, +I italic, +K a link.</p>` +
+    `<div class="ix-gd-md" id="ix-gd-md">${INTEL_GUIDE_MD.map(([t, note, src], i) => `<div class="ix-gd-ex"><div class="ix-gd-ex-h"><b>${esc(t)}</b><span class="muted">${esc(note)}</span></div>` +
+      `<div class="ix-gd-ex-b"><div><span class="ix-gd-lbl">YOU TYPE</span><pre>${esc(src)}</pre></div>` +
+      `<div><span class="ix-gd-lbl">READERS SEE</span><div class="ix-prose ix-gd-out" data-ex="${i}">${intelStatus("…")}</div></div></div></div>`).join("")}</div>` +
+    `<p>A blank line starts a new paragraph. A single <code>#</code> heading becomes a section heading too: the entry's title is the top level.</p>` +
+    `<p class="muted">Not available, on purpose: colours, fonts and sizes, HTML, videos or other sites embedded in the page, and @mentions that ping (use <b>Announce in Discord</b> for that).</p>`;
+  const images = `<p>Images aren't uploaded: an entry stores a <b>link</b> to an image hosted somewhere else, and each reader loads the images in an entry with one click. ` +
+    `The link has to come from <b>imgur</b>, <b>ImgBB</b>, <b>Postimages</b>, <b>X</b> or <b>RSI</b>.</p>` +
+    step([`Upload your screenshot to <a href="https://imgur.com/upload" target="_blank" rel="noopener noreferrer">imgur.com</a> (no account needed).`,
+      `Right-click the uploaded image and pick <b>Copy image address</b>. The link should start with <code>https://i.imgur.com/</code> and end in <code>.png</code> or <code>.jpg</code>. ` +
+        `A link to the imgur <i>page</i> (<code>imgur.com/abc123</code>) won't work.`,
+      `In the editor, put the cursor where the image should go and press the <b>image</b> button ${intelIco("image", "ix-ico sm")} in the toolbar.`,
+      `Paste the link, add a caption saying what it shows, and pick <b>Insert</b>. The box tells you straight away if the link won't work.`]) +
+    `<p>What it inserts is ordinary Markdown, so you can also type it yourself:</p><pre class="ix-gd-pre">![Pad layout at Ruin Station](https://i.imgur.com/abc123.png)</pre>` +
+    `<div class="ix-gd-tip warn">${intelIco("alert")}<span><b>Links that won't work.</b> Discord image links expire after a day. Google Docs and Drive images can't be shown (Docs links expire, Drive refuses). ` +
+      `Download the image and upload it to imgur instead.</span></div>` +
+    `<p class="muted">If the image button says no host is allowed, image previews are switched off for your org. An admin turns them on in <b>Settings → Announcements</b>. ` +
+    `Admins can also move a whole handbook in, screenshots included, with <b>Settings → Data → Import Markdown (.zip)</b>.</p>`;
+  const links = `<p>The <b>reference</b> button ${intelIco("ref", "ix-ico sm")} links a place, survey zone, danger-board warning, event, op or another entry. ` +
+    `Search for it and pick it: it goes in as a live chip that always shows the current name, and a place chip sets the reader's destination in one click. ` +
+    `The entry you link to lists yours under <b>LINKED FROM</b>.</p><p>In the text it looks like <code>[[poi:1842]]</code>. Use the button rather than typing the number.</p>`;
+  const paste = `<p>Paste straight from <b>Google Docs</b>, <b>Notion</b>, Word or a web page: headings, bold, lists, checklists, links and tables come across as Markdown. ` +
+    `Colours and fonts are dropped. Hold <b>Shift</b> while pasting to paste plain text.</p>` +
+    `<p>Pasted images don't come across (their links expire). The editor tells you how many were left out; upload those to imgur and add them with the image button.</p>`;
+  const revise = `<p>Owners, maintainers and admins edit a procedure; anyone can add to a dossier. Every save is a new revision you can compare and revert in <b>History</b>.</p>` +
+    `<ul><li><b>Minor</b>: typos and wording. It doesn't show in the Feed.</li>` +
+    `<li><b>Major</b>: the substance changed. Say <b>what changed</b> in one line (it's required): it shows in the Feed and History, goes in the Discord post, ` +
+    `and members who had read it as required reading are asked to read it again.</li></ul>` +
+    `<p>A report can't be rewritten after its 15 minutes: add an update instead.</p>`;
+  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/library">Intelligence</a><span>/</span><span>Writing guide</span></nav>` +
+    `<div class="ix-grid"><article class="panel ix-article"><div class="ix-head"><div class="ix-kindline">${intelIco("edit")}Guide</div>` +
+    `<h1 class="ix-title">Writing procedures and reports</h1>` +
+    `<p class="ix-lead">How to write the two kinds you'll use most, the formatting the editor takes, and how to get a screenshot in.</p>` +
+    `<div class="ix-actions"><a class="ix-primary" href="#/intel/new/procedure">${intelIco("procedure")}New procedure</a>` +
+    `<a class="ix-btn" href="#/intel/new/report">${intelIco("report")}New report</a></div></div>` +
+    `<div class="ix-prose ix-gd">${g("kinds", "Which kind to write", kinds)}${g("procedure", "Write a procedure", procedure)}${g("report", "Write a report", report)}` +
+    `${g("markdown", "Formatting", md)}${g("images", "Add an image", images)}${g("links", "Link places, ops and entries", links)}` +
+    `${g("paste", "Bring in an existing doc", paste)}${g("revise", "Change it later", revise)}</div></article>` +
+    `<aside class="ix-rail"><div class="panel ix-gd-toc"><h2>ON THIS PAGE</h2><ul class="ix-toc">${INTEL_GUIDE_SECS.map(([id, t]) =>
+      `<li><a href="#/intel/guide/${id}" data-sec="gd-${id}">${esc(t)}</a></li>`).join("")}</ul></div></aside></div>`;
+  box.querySelectorAll(".ix-gd-toc a").forEach(a => a.onclick = (ev) => {
+    ev.preventDefault(); history.replaceState(null, "", a.getAttribute("href"));
+    const t = document.getElementById(a.dataset.sec); if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  intelSetTab(null);
+  const target = sec && document.getElementById(`gd-${sec}`);
+  if (target) target.scrollIntoView({ block: "start" }); else window.scrollTo(0, 0);
+  // One render call for every example, split back apart on the rules.
+  try {
+    const d = await intelApi("/api/intel/render", { method: "POST", body: { body: INTEL_GUIDE_MD.map(x => x[2]).join("\n\n---\n\n") } });
+    const parts = d.html.split(/<hr\s*\/?>/);
+    box.querySelectorAll(".ix-gd-out").forEach(el => {
+      el.innerHTML = parts[+el.dataset.ex] || "";
+      intelHydrate(el, null);
+    });
+  } catch {
+    box.querySelectorAll(".ix-gd-out").forEach(el => { el.innerHTML = `<p class="muted">Preview unavailable right now.</p>`; });
+  }
 }
 
 // ---- COLLECTIONS (#50 slice 8b): ordered reading lists ----
@@ -31025,6 +31186,7 @@ async function intelEditor(box) {
     `<div class="ix-pop" id="ix-pop-img" hidden role="dialog" aria-label="Insert an image link">` +
     `<label class="ix-lbl"><span>IMAGE LINK</span><input class="ti" id="ix-img-url" type="url" autocomplete="off" placeholder="https://i.imgur.com/…"></label>` +
     `<div class="ix-hostcheck" id="ix-img-check"></div>` +
+    `<small class="muted"><a href="#/intel/guide/images" target="_blank" rel="noopener">How to get an image link</a></small>` +
     `<label class="ix-lbl"><span>CAPTION</span><input class="ti" id="ix-img-cap" maxlength="120" autocomplete="off" placeholder="What it shows"></label>` +
     `<div class="row"><button type="button" id="ix-img-x">Cancel</button><button type="button" class="ix-primary" id="ix-img-go" disabled>Insert</button></div></div>` +
     `<div class="ix-pop" id="ix-pop-ref" hidden role="dialog" aria-label="Insert a reference">` +
@@ -31034,7 +31196,8 @@ async function intelEditor(box) {
     `</div>` +
     `<textarea class="ti ix-area" id="ix-area" spellcheck="true" aria-label="Body (Markdown)"></textarea>` +
     `<div class="ix-prose ix-preview" id="ix-preview" hidden></div>` +
-    `<div class="ix-ed-foot"><span id="ix-count"></span><span>Paste from Docs or Notion keeps the formatting. Shift-paste for plain text.</span>` +
+    `<div class="ix-ed-foot"><span id="ix-count"></span><span>Paste from Docs or Notion keeps the formatting. Shift-paste for plain text. ` +
+    `<a href="#/intel/guide/markdown" target="_blank" rel="noopener">Formatting guide</a></span>` +
     `<span class="saved" id="ix-saved" role="status"></span></div>` +
     `</div><aside class="ix-ed-rail"><div class="panel" id="ix-save-p"></div><div class="panel" id="ix-people-p" hidden></div></aside></div>`;
   const ta = $("ix-area");
