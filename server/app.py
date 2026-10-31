@@ -10,7 +10,9 @@ Data: ../poi by default, override with SC_NAV_DATA=/path/to/poi
 
 import asyncio
 import copy
+import difflib
 import hashlib
+import html
 import io
 import json
 import os
@@ -17154,6 +17156,401 @@ async def intel_render(body: IntelRenderIn, user: dict = Depends(require_session
     r = await asyncio.to_thread(intel_md.render, body.body, IMAGE_PREVIEW_HOSTS)
     return {"html": r["html"], "refs": [{"kind": k, "id": i} for k, i in r["refs"]],
             "images": r["images"]}
+
+
+INTEL_LIBRARY_KINDS = ("procedure", "tactic")
+INTEL_SYSTEMS = ("Stanton", "Nyx", "Pyro")
+_INTEL_TAG_RE = re.compile(r"[^a-z0-9-]+")
+_INTEL_MAX_TAGS = 10
+
+
+def _intel_tags(raw: list[str]) -> list[str]:
+    """Free tags: lower-case, '#'/spaces stripped, [a-z0-9-] only, de-duplicated."""
+    out: list[str] = []
+    for t in raw:
+        t = _INTEL_TAG_RE.sub("-", str(t).strip().lstrip("#").lower()).strip("-")[:32]
+        if t and t not in out:
+            out.append(t)
+    return out[:_INTEL_MAX_TAGS]
+
+
+class IntelEntryFields(BaseModel):
+    title: str = Field("", max_length=140)
+    summary: str = Field("", max_length=300)
+    body: str = Field("", max_length=intel_md.MAX_BODY_CHARS)
+    activity: str | None = None
+    system: str | None = None
+    tags: list[str] = Field(default_factory=list, max_length=_INTEL_MAX_TAGS * 2)
+
+    @field_validator("activity")
+    @classmethod
+    def _activity(cls, v):
+        if v in (None, ""):
+            return None
+        if v not in PLAYSTYLE_TAGS:
+            raise ValueError("unknown activity")
+        return v
+
+    @field_validator("system")
+    @classmethod
+    def _system(cls, v):
+        if v in (None, ""):
+            return None
+        if v not in INTEL_SYSTEMS:
+            raise ValueError("unknown system")
+        return v
+
+
+class IntelCreateIn(IntelEntryFields):
+    kind: str
+
+    @field_validator("kind")
+    @classmethod
+    def _kind(cls, v):
+        if v not in INTEL_LIBRARY_KINDS:
+            raise ValueError("this kind can't be written yet")
+        return v
+
+
+class IntelSaveIn(IntelEntryFields):
+    base_rev: int | None = None        # revision the editor opened (published entries)
+    major: bool = False
+    note: str = Field("", max_length=300)
+    publish: bool = False              # draft → published (rev 1)
+
+
+class IntelPeopleIn(BaseModel):
+    owner_id: str | None = Field(None, max_length=32)
+    maintainers: list[str] | None = Field(None, max_length=10)
+
+
+class IntelRevertIn(BaseModel):
+    rev: int
+    base_rev: int
+
+
+def _intel_patch_now() -> str | None:
+    return patch_tracker.context().get("current")
+
+
+def _intel_minor(p: str | None) -> tuple:
+    # Staleness compares MAJOR.MINOR: a 4.4.0 → 4.4.1 hotfix doesn't mark every
+    # procedure out of date, a 4.4 → 4.5 patch does.
+    return nav_core._patch_order(p)[:2] if p else ()
+
+
+def _intel_patch_state(e: dict, current: str | None) -> dict:
+    written = e.get("patch_confirmed") or e.get("patch")
+    stale = bool(written and current and _intel_minor(current) > _intel_minor(written))
+    return {"written": written, "confirmed": bool(e.get("patch_confirmed")),
+            "current": current, "stale": stale}
+
+
+def _intel_can_edit(e: dict, user: dict) -> bool:
+    uid = str(user["id"])
+    if e["status"] == "draft":
+        return e["author_id"] == uid
+    return (bool(user.get("is_admin")) or e.get("owner_id") == uid
+            or uid in (e.get("maintainers") or []))
+
+
+def _intel_can_manage(e: dict, user: dict) -> bool:
+    """Owner + maintainers are chosen by the owner or an admin."""
+    return bool(user.get("is_admin")) or e.get("owner_id") == str(user["id"])
+
+
+def _intel_visible(e: dict | None, user: dict) -> bool:
+    if not e or (e["status"] == "archived" and not user.get("is_admin")):
+        return False
+    if e["status"] == "draft":
+        return e["author_id"] == str(user["id"])
+    return e.get("visibility") == "org" or bool(user.get("is_admin"))
+
+
+def _intel_summary(e: dict, current: str | None) -> dict:
+    return {
+        "id": e["id"], "kind": e["kind"], "title": e["title"], "slug": e["slug"],
+        "summary": e.get("summary") or "", "status": e["status"],
+        "activity": e.get("activity"), "system": e.get("system"), "tags": e.get("tags", []),
+        "owner": {"id": e.get("owner_id"),
+                  "name": _resolve_member_name(e["owner_id"], None) if e.get("owner_id") else None},
+        "author_name": e.get("author_name"),
+        "rev": e.get("rev") or 0,
+        "patch": _intel_patch_state(e, current),
+        "published_at": e.get("published_at"), "revised_at": e.get("revised_at"),
+        "updated_at": e.get("updated_at"),
+    }
+
+
+def _intel_require(entry_id: int, user: dict) -> dict:
+    e = db.intel_get_entry(entry_id)
+    if not _intel_visible(e, user):
+        raise HTTPException(status_code=404, detail="Entry not found.")
+    return e
+
+
+def _intel_entry_view(e: dict, user: dict) -> dict:
+    current = _intel_patch_now()
+    out = _intel_summary(e, current)
+    out.update({
+        "body_md": e["body_md"], "body_html": e["body_html"],
+        "maintainers": [{"id": m, "name": _resolve_member_name(m, None)}
+                        for m in e.get("maintainers") or []],
+        "can_edit": _intel_can_edit(e, user), "can_manage": _intel_can_manage(e, user),
+        "created_at": e.get("created_at"),
+    })
+    return out
+
+
+def _intel_fields(body: IntelEntryFields, image_hosts=IMAGE_PREVIEW_HOSTS) -> tuple[dict, list, list]:
+    title = body.title.strip()
+    r = intel_md.render(body.body, image_hosts)
+    fields = {"title": title, "slug": intel_md.section_slug(title or "untitled"),
+              "summary": body.summary.strip(), "body_md": body.body, "body_html": r["html"],
+              "activity": body.activity, "system": body.system}
+    return fields, _intel_tags(body.tags), r["refs"]
+
+
+@app.get("/api/intel/entries")
+def intel_entries(section: str = "library", kind: str = "", activity: str = "",
+                  system: str = "", tag: str = "", user: dict = Depends(require_session)):
+    """Lists for the Intelligence tabs: `library` (published procedures +
+    tactics, by title), `feed` (everything published, newest publish or MAJOR
+    revision first), `drafts` (the caller's own unpublished entries)."""
+    restricted_ok = bool(user.get("is_admin"))
+    kinds = [k for k in kind.split(",") if k] or None
+    kw = dict(activity=activity or None, system=system or None, tag=tag or None,
+              restricted_ok=restricted_ok)
+    if section == "library":
+        rows = db.intel_list(kinds=kinds or INTEL_LIBRARY_KINDS, order="title", **kw)
+    elif section == "feed":
+        rows = db.intel_list(kinds=kinds, order="recent", limit=100, **kw)
+    elif section == "drafts":
+        rows = db.intel_list(kinds=kinds, status="draft", author_id=user["id"], order="updated", **kw)
+    else:
+        raise HTTPException(status_code=400, detail="Unknown section.")
+    current = _intel_patch_now()
+    return {"entries": [_intel_summary(e, current) for e in rows],
+            "game_patch": current, "search": db.INTEL_SEARCH,
+            "image_hosts": list(IMAGE_PREVIEW_HOSTS)}   # the editor's image-link host check
+
+
+# Markdown syntax that reads as noise in a one-line snippet (headings, table
+# pipes + rules, emphasis, quote marks, task boxes). The \x02/\x03 match
+# markers are untouched.
+_MD_NOISE_RE = re.compile(r"-{3,}|\[[ xX]\]|[#|*_>`~]+")
+
+
+@app.get("/api/intel/search")
+def intel_search(q: str = "", kind: str = "", user: dict = Depends(require_session)):
+    """Full-text search over published entries. Snippet matches come back as
+    <mark>; everything else in the snippet is escaped here."""
+    q = q[:200]
+    kinds = [k for k in kind.split(",") if k] or None
+    rows = db.intel_search(q, kinds=kinds, restricted_ok=bool(user.get("is_admin")))
+    current = _intel_patch_now()
+    out = []
+    for e in rows:
+        snip = _MD_NOISE_RE.sub(" ", e.get("snippet") or "")
+        snip = html.escape(" ".join(snip.split())).replace("\x02", "<mark>").replace("\x03", "</mark>")
+        d = _intel_summary({**e, "status": "published", "tags": []}, current)
+        d["snippet"] = snip
+        out.append(d)
+    return {"results": out, "search": db.INTEL_SEARCH}
+
+
+@app.post("/api/intel/entries")
+def intel_create(body: IntelCreateIn, user: dict = Depends(require_session)):
+    """Start a draft. Drafts autosave to the server (not only localStorage), so
+    a phone-started draft can be finished at the desk."""
+    if not body.title.strip():
+        raise HTTPException(status_code=422, detail="Give it a title first.")
+    fields, tags, refs = _intel_fields(body)
+    uid, now = str(user["id"]), _now_iso()
+    eid = db.intel_create_entry({
+        **fields, "kind": body.kind, "status": "draft", "visibility": "org",
+        "author_id": uid, "author_name": _resolve_member_name(uid, None),
+        "owner_id": uid, "maintainers": [], "created_at": now, "updated_at": now,
+    }, tags, refs)
+    return _intel_entry_view(db.intel_get_entry(eid), user)
+
+
+@app.get("/api/intel/entries/{entry_id}")
+def intel_entry(entry_id: int, user: dict = Depends(require_session)):
+    return _intel_entry_view(_intel_require(entry_id, user), user)
+
+
+@app.put("/api/intel/entries/{entry_id}")
+def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_session)):
+    """Save. A draft is overwritten in place (autosave) until `publish`, which
+    writes rev 1. A published entry gets a new revision; `base_rev` must be the
+    current one or this 409s with the current revision number. A MAJOR revision
+    needs a "What changed" note and re-stamps the patch (clearing staleness);
+    a minor one changes neither."""
+    e = _intel_require(entry_id, user)
+    if not _intel_can_edit(e, user):
+        raise HTTPException(status_code=403, detail="Only the owner, maintainers or an admin can edit this.")
+    if not body.title.strip():
+        raise HTTPException(status_code=422, detail="The title can't be empty.")
+    fields, tags, refs = _intel_fields(body)
+    uid, now = str(user["id"]), _now_iso()
+    fields["updated_at"] = now
+    if e["status"] == "draft" and not body.publish:
+        db.intel_update_draft(entry_id, fields, tags, refs)
+        return _intel_entry_view(db.intel_get_entry(entry_id), user)
+    first = e["status"] == "draft"
+    major = first or body.major
+    note = body.note.strip()
+    if major and not first and len(note) < 3:
+        raise HTTPException(status_code=422, detail="Say what changed: a major revision needs a note.")
+    if first:
+        fields.update(status="published", published_at=now)
+        note = note or "First published"
+    if major:
+        fields.update(patch=_intel_patch_now(), patch_confirmed=None, revised_at=now)
+    try:
+        db.intel_save_revision(entry_id, None if first else body.base_rev, fields, tags, refs, {
+            "editor_id": uid, "editor_name": _resolve_member_name(uid, None),
+            "note": note, "major": major, "created_at": now})
+    except db.IntelConflict as c:
+        raise HTTPException(status_code=409, detail={
+            "message": f"Someone saved rev {c.current_rev} since you opened this. "
+                       "Review their changes, then save again.",
+            "current_rev": c.current_rev})
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
+
+
+@app.delete("/api/intel/entries/{entry_id}")
+def intel_delete(entry_id: int, user: dict = Depends(require_session)):
+    """A draft is deleted outright by its author. A published entry is
+    ARCHIVED (kept, out of every list) by its owner or an admin."""
+    e = _intel_require(entry_id, user)
+    if e["status"] == "draft":
+        if not db.intel_delete_draft(entry_id):
+            raise HTTPException(status_code=404, detail="Entry not found.")
+        return {"deleted": True}
+    if not _intel_can_manage(e, user):
+        raise HTTPException(status_code=403, detail="Only the owner or an admin can archive this.")
+    db.intel_set_fields(entry_id, {"status": "archived", "updated_at": _now_iso()})
+    return {"archived": True}
+
+
+@app.post("/api/intel/entries/{entry_id}/confirm")
+def intel_confirm(entry_id: int, user: dict = Depends(require_session)):
+    """"Still valid on 4.4": clears the staleness warning without an edit."""
+    e = _intel_require(entry_id, user)
+    if e["status"] != "published" or not _intel_can_edit(e, user):
+        raise HTTPException(status_code=403, detail="Only the owner, maintainers or an admin can confirm this.")
+    current = _intel_patch_now()
+    if not current:
+        raise HTTPException(status_code=409, detail="The org's current patch isn't known yet.")
+    db.intel_set_fields(entry_id, {"patch_confirmed": current})
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
+
+
+@app.put("/api/intel/entries/{entry_id}/people")
+def intel_people(entry_id: int, body: IntelPeopleIn, user: dict = Depends(require_session)):
+    """Hand over ownership or set maintainers (owner or admin)."""
+    e = _intel_require(entry_id, user)
+    if e["status"] == "draft" or not _intel_can_manage(e, user):
+        raise HTTPException(status_code=403, detail="Only the owner or an admin can change this.")
+    fields: dict = {}
+    if body.owner_id is not None:
+        if not members_dir.get(body.owner_id):
+            raise HTTPException(status_code=422, detail="Unknown member.")
+        fields["owner_id"] = body.owner_id
+    ms = e.get("maintainers") or []
+    if body.maintainers is not None:
+        ms = list(dict.fromkeys(str(m) for m in body.maintainers))
+        if any(not members_dir.get(m) for m in ms):
+            raise HTTPException(status_code=422, detail="Unknown member.")
+    owner = fields.get("owner_id", e["owner_id"])
+    if body.maintainers is not None or owner in ms:
+        fields["maintainers"] = [m for m in ms if m != owner]   # the owner isn't also a maintainer
+    if fields:
+        db.intel_set_fields(entry_id, fields)
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
+
+
+@app.get("/api/intel/members")
+def intel_member_search(q: str = "", user: dict = Depends(require_session)):
+    """Name search for the owner/maintainer picker (names only, opted-out
+    members skipped — same rule as the ops roster search)."""
+    return {"members": _member_name_search(q)}
+
+
+@app.get("/api/intel/entries/{entry_id}/revisions")
+def intel_revisions(entry_id: int, user: dict = Depends(require_session)):
+    e = _intel_require(entry_id, user)
+    return {"revisions": db.intel_revisions(entry_id), "current": e["rev"],
+            "can_edit": _intel_can_edit(e, user)}
+
+
+_DIFF_TOKEN_RE = re.compile(r"\s+|[^\s]+")
+
+
+def _intel_word_diff(a: str, b: str) -> tuple[str, int, int]:
+    """Word-level diff as escaped HTML with <ins>/<del>; whitespace kept so the
+    Markdown's line structure survives inside a <pre>."""
+    ta, tb = _DIFF_TOKEN_RE.findall(a or ""), _DIFF_TOKEN_RE.findall(b or "")
+    out, added, removed = [], 0, 0
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, ta, tb, autojunk=False).get_opcodes():
+        if op == "equal":
+            out.append(html.escape("".join(ta[i1:i2])))
+            continue
+        if op in ("delete", "replace"):
+            removed += sum(1 for t in ta[i1:i2] if not t.isspace())
+            out.append(f"<del>{html.escape(''.join(ta[i1:i2]))}</del>")
+        if op in ("insert", "replace"):
+            added += sum(1 for t in tb[j1:j2] if not t.isspace())
+            out.append(f"<ins>{html.escape(''.join(tb[j1:j2]))}</ins>")
+    return "".join(out), added, removed
+
+
+@app.get("/api/intel/entries/{entry_id}/diff")
+def intel_diff(entry_id: int, rev: int, user: dict = Depends(require_session)):
+    """What revision `rev` changed, against the one before it."""
+    _intel_require(entry_id, user)
+    new = db.intel_revision(entry_id, rev)
+    if not new:
+        raise HTTPException(status_code=404, detail="Revision not found.")
+    old = db.intel_revision(entry_id, rev - 1) or {}
+    body, added, removed = _intel_word_diff(old.get("body_md") or "", new["body_md"] or "")
+    return {
+        "rev": rev, "from_rev": old.get("rev"),
+        "title": {"from": old.get("title"), "to": new["title"]},
+        "summary": {"from": old.get("summary"), "to": new.get("summary")},
+        "html": body, "added": added, "removed": removed,
+        "editor_name": new.get("editor_name"), "note": new.get("note"),
+        "major": bool(new.get("major")), "created_at": new.get("created_at"),
+    }
+
+
+@app.post("/api/intel/entries/{entry_id}/revert")
+def intel_revert(entry_id: int, body: IntelRevertIn, user: dict = Depends(require_session)):
+    """One-click revert: a NEW revision with an older revision's text (history
+    is never rewritten). Minor by default, so undoing a slip doesn't reset
+    anyone's read receipt or ping the org."""
+    e = _intel_require(entry_id, user)
+    if e["status"] != "published" or not _intel_can_edit(e, user):
+        raise HTTPException(status_code=403, detail="Only the owner, maintainers or an admin can revert this.")
+    old = db.intel_revision(entry_id, body.rev)
+    if not old:
+        raise HTTPException(status_code=404, detail="Revision not found.")
+    r = intel_md.render(old["body_md"] or "", IMAGE_PREVIEW_HOSTS)
+    uid, now = str(user["id"]), _now_iso()
+    fields = {"title": old["title"], "slug": intel_md.section_slug(old["title"] or "untitled"),
+              "summary": old.get("summary") or "", "body_md": old["body_md"] or "",
+              "body_html": r["html"], "header": old.get("header"), "updated_at": now}
+    try:
+        db.intel_save_revision(entry_id, body.base_rev, fields, e["tags"], r["refs"], {
+            "editor_id": uid, "editor_name": _resolve_member_name(uid, None),
+            "note": f"Reverted to rev {body.rev}", "major": False, "created_at": now})
+    except db.IntelConflict as c:
+        raise HTTPException(status_code=409, detail={
+            "message": f"Someone saved rev {c.current_rev} since you opened the history. Reload it first.",
+            "current_rev": c.current_rev})
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
 
 
 @app.get("/api/intel/directory")

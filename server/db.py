@@ -1139,6 +1139,11 @@ def init(db_path) -> None:
         _ensure_column("inventory_allocations", "delivered_qty", "REAL NOT NULL DEFAULT 0")
         if denorm_added:                        # only on the boot that adds the columns
             _backfill_listing_denorm()
+        # Intelligence slice 1: when the last MAJOR revision landed (the feed's
+        # "updated" time; minor edits don't resurface an entry), and the summary
+        # in each revision so revert restores it too.
+        _ensure_column("intel_entries", "revised_at", "TEXT")
+        _ensure_column("intel_revisions", "summary", "TEXT")
         _init_intel_search()
 
 
@@ -5235,3 +5240,238 @@ def latest_org_prices() -> list[dict]:
         d = dict(r)
         latest[(d["poi_id"], (d["commodity"] or "").lower(), d["side"])] = d
     return list(latest.values())
+
+
+# ---- Intelligence (#50, slice 1: the Library) ----
+# Entries are drafts until published. A draft has no revisions (autosave
+# overwrites it); publishing writes rev 1, and every later save of a published
+# entry writes rev n+1 with the full text, so history, diffs and revert never
+# need to replay anything.
+
+class IntelConflict(Exception):
+    """The entry moved on since the editor opened it (base_rev is stale)."""
+
+    def __init__(self, current_rev: int):
+        super().__init__(current_rev)
+        self.current_rev = current_rev
+
+
+_INTEL_ENTRY_COLS = ("kind", "title", "slug", "summary", "body_md", "body_html",
+                     "status", "visibility", "author_id", "author_name", "owner_id",
+                     "maintainers", "system", "patch", "patch_confirmed", "activity",
+                     "header", "created_at", "updated_at", "published_at", "revised_at")
+
+
+def _intel_row(r) -> dict:
+    d = dict(r)
+    try:
+        d["maintainers"] = json.loads(d.get("maintainers") or "[]")
+    except (TypeError, ValueError):
+        d["maintainers"] = []
+    return d
+
+
+def _intel_tags_for(ids) -> dict[int, list[str]]:
+    ids = list(ids)
+    if not ids:
+        return {}
+    q = ",".join("?" * len(ids))
+    out: dict[int, list[str]] = {i: [] for i in ids}
+    for r in _conn.execute(f"SELECT entry_id, tag FROM intel_tags WHERE entry_id IN ({q}) "
+                           "ORDER BY tag", ids):
+        out[r["entry_id"]].append(r["tag"])
+    return out
+
+
+def _intel_current_rev(entry_id: int) -> int:
+    r = _conn.execute("SELECT MAX(rev) FROM intel_revisions WHERE entry_id=? AND status='live'",
+                      (entry_id,)).fetchone()
+    return r[0] or 0
+
+
+def _intel_write_side_tables(entry_id: int, tags, refs) -> None:
+    """Tags, backlinks and the search row follow the entry's current text.
+    Caller holds _lock and an open transaction."""
+    _conn.execute("DELETE FROM intel_tags WHERE entry_id=?", (entry_id,))
+    _conn.executemany("INSERT OR IGNORE INTO intel_tags (entry_id, tag) VALUES (?,?)",
+                      [(entry_id, t) for t in tags])
+    _conn.execute("DELETE FROM intel_links WHERE entry_id=? AND field='body'", (entry_id,))
+    _conn.executemany("INSERT OR IGNORE INTO intel_links (entry_id, ref_kind, ref_id, field) "
+                      "VALUES (?,?,?,'body')", [(entry_id, k, i) for k, i in refs])
+    if INTEL_SEARCH == "fts5":
+        e = _conn.execute("SELECT title, summary, body_md FROM intel_entries WHERE id=?",
+                          (entry_id,)).fetchone()
+        _conn.execute("DELETE FROM intel_fts WHERE rowid=?", (entry_id,))
+        _conn.execute("INSERT INTO intel_fts (rowid, title, summary, body, tags) VALUES (?,?,?,?,?)",
+                      (entry_id, e["title"], e["summary"] or "", e["body_md"], " ".join(tags)))
+
+
+def intel_create_entry(d: dict, tags, refs) -> int:
+    cols = [c for c in _INTEL_ENTRY_COLS if c in d]
+    vals = [json.dumps(d[c]) if c == "maintainers" else d[c] for c in cols]
+    with _lock, _conn:
+        cur = _conn.execute(f"INSERT INTO intel_entries ({','.join(cols)}) "
+                            f"VALUES ({','.join('?' * len(cols))})", vals)
+        _intel_write_side_tables(cur.lastrowid, tags, refs)
+    return cur.lastrowid
+
+
+def intel_get_entry(entry_id: int) -> dict | None:
+    r = _conn.execute("SELECT * FROM intel_entries WHERE id=?", (entry_id,)).fetchone()
+    if not r:
+        return None
+    d = _intel_row(r)
+    d["tags"] = _intel_tags_for([entry_id])[entry_id]
+    d["rev"] = _intel_current_rev(entry_id)
+    return d
+
+
+def intel_update_draft(entry_id: int, fields: dict, tags, refs) -> None:
+    sets = ", ".join(f"{c}=?" for c in fields)
+    vals = [json.dumps(v) if c == "maintainers" else v for c, v in fields.items()]
+    with _lock, _conn:
+        _conn.execute(f"UPDATE intel_entries SET {sets} WHERE id=? AND status='draft'",
+                      vals + [entry_id])
+        _intel_write_side_tables(entry_id, tags, refs)
+
+
+def intel_save_revision(entry_id: int, base_rev: int | None, fields: dict, tags, refs,
+                        rev_meta: dict) -> int:
+    """Write a new revision and make it current. `base_rev` is the revision the
+    editor started from; a different current revision raises IntelConflict
+    (two people editing one SOP get a conflict, not a silent overwrite).
+    `base_rev=None` is the publish of a draft (rev 1)."""
+    sets = ", ".join(f"{c}=?" for c in fields)
+    vals = [json.dumps(v) if c == "maintainers" else v for c, v in fields.items()]
+    with _lock, _conn:
+        cur_rev = _intel_current_rev(entry_id)
+        if (base_rev or 0) != cur_rev:
+            raise IntelConflict(cur_rev)
+        new_rev = cur_rev + 1
+        _conn.execute(f"UPDATE intel_entries SET {sets} WHERE id=?", vals + [entry_id])
+        e = _conn.execute("SELECT title, summary, body_md, header FROM intel_entries WHERE id=?",
+                          (entry_id,)).fetchone()
+        _conn.execute(
+            "INSERT INTO intel_revisions (entry_id, rev, title, summary, body_md, header, "
+            "editor_id, editor_name, note, major, status, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,'live',?)",
+            (entry_id, new_rev, e["title"], e["summary"], e["body_md"], e["header"],
+             rev_meta["editor_id"], rev_meta.get("editor_name"), rev_meta.get("note") or None,
+             1 if rev_meta.get("major") else 0, rev_meta["created_at"]))
+        _intel_write_side_tables(entry_id, tags, refs)
+    return new_rev
+
+
+def intel_set_fields(entry_id: int, fields: dict) -> None:
+    """Metadata that isn't a revision (owner, maintainers, patch re-confirm, status)."""
+    sets = ", ".join(f"{c}=?" for c in fields)
+    vals = [json.dumps(v) if c == "maintainers" else v for c, v in fields.items()]
+    with _lock, _conn:
+        _conn.execute(f"UPDATE intel_entries SET {sets} WHERE id=?", vals + [entry_id])
+
+
+def intel_delete_draft(entry_id: int) -> bool:
+    with _lock, _conn:
+        cur = _conn.execute("DELETE FROM intel_entries WHERE id=? AND status='draft'", (entry_id,))
+        if cur.rowcount:
+            for t in ("intel_tags", "intel_links"):
+                _conn.execute(f"DELETE FROM {t} WHERE entry_id=?", (entry_id,))
+            if INTEL_SEARCH == "fts5":
+                _conn.execute("DELETE FROM intel_fts WHERE rowid=?", (entry_id,))
+    return bool(cur.rowcount)
+
+
+def intel_revisions(entry_id: int) -> list[dict]:
+    rows = _conn.execute(
+        "SELECT rev, title, editor_id, editor_name, note, major, created_at FROM intel_revisions "
+        "WHERE entry_id=? AND status='live' ORDER BY rev DESC", (entry_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def intel_revision(entry_id: int, rev: int) -> dict | None:
+    r = _conn.execute("SELECT * FROM intel_revisions WHERE entry_id=? AND rev=? AND status='live'",
+                      (entry_id, rev)).fetchone()
+    return dict(r) if r else None
+
+
+def _intel_vis_sql(restricted_ok: bool) -> str:
+    # The RESTRICTED marking arrives in slice 2; the filter is already in SQL so
+    # no list or search can ever leak a restricted row once it exists.
+    return "" if restricted_ok else " AND e.visibility='org'"
+
+
+def intel_list(*, kinds=None, status="published", author_id=None, activity=None,
+               system=None, tag=None, order="title", restricted_ok=False,
+               limit=500) -> list[dict]:
+    where = ["e.status=?"]
+    args: list = [status]
+    if kinds:
+        where.append(f"e.kind IN ({','.join('?' * len(kinds))})")
+        args += list(kinds)
+    if author_id is not None:
+        where.append("e.author_id=?")
+        args.append(str(author_id))
+    if activity:
+        where.append("e.activity=?")
+        args.append(activity)
+    if system:
+        where.append("(e.system=? OR e.system IS NULL)")
+        args.append(system)
+    if tag:
+        where.append("EXISTS (SELECT 1 FROM intel_tags t WHERE t.entry_id=e.id AND t.tag=?)")
+        args.append(tag)
+    order_sql = {"title": "e.title COLLATE NOCASE",
+                 "recent": "COALESCE(e.revised_at, e.published_at, e.updated_at) DESC",
+                 "updated": "e.updated_at DESC"}[order]
+    rows = _conn.execute(
+        "SELECT e.id, e.kind, e.title, e.slug, e.summary, e.status, e.visibility, e.author_id, "
+        "e.author_name, e.owner_id, e.maintainers, e.system, e.patch, e.patch_confirmed, "
+        "e.activity, e.created_at, e.updated_at, e.published_at, e.revised_at, "
+        "(SELECT MAX(rev) FROM intel_revisions r WHERE r.entry_id=e.id AND r.status='live') AS rev "
+        f"FROM intel_entries e WHERE {' AND '.join(where)}{_intel_vis_sql(restricted_ok)} "
+        f"ORDER BY {order_sql} LIMIT ?", args + [limit]).fetchall()
+    out = [_intel_row(r) for r in rows]
+    tags = _intel_tags_for(d["id"] for d in out)
+    for d in out:
+        d["tags"] = tags.get(d["id"], [])
+    return out
+
+
+
+def intel_search(q: str, *, kinds=None, restricted_ok=False, limit=40) -> list[dict]:
+    """Published entries matching `q`, best first, each with a short `snippet`
+    whose matches are wrapped in \\x02…\\x03 (the caller escapes, then marks).
+    FTS5 when present (bm25, title weighted highest), else a LIKE scan."""
+    import re as _re
+    terms = [t for t in _re.findall(r"\w+", q.lower()) if t][:8]
+    if not terms:
+        return []
+    kind_sql, kind_args = "", []
+    if kinds:
+        kind_sql = f" AND e.kind IN ({','.join('?' * len(kinds))})"
+        kind_args = list(kinds)
+    vis = _intel_vis_sql(restricted_ok)
+    if INTEL_SEARCH == "fts5":
+        match = " ".join(f'"{t}"*' for t in terms)
+        rows = _conn.execute(
+            "SELECT e.id, e.kind, e.title, e.slug, e.summary, e.activity, e.system, "
+            "e.owner_id, e.author_name, e.patch, e.patch_confirmed, "
+            "snippet(intel_fts, 2, char(2), char(3), '…', 14) AS snippet "
+            "FROM intel_fts JOIN intel_entries e ON e.id = intel_fts.rowid "
+            f"WHERE intel_fts MATCH ? AND e.status='published'{kind_sql}{vis} "
+            "ORDER BY bm25(intel_fts, 10.0, 4.0, 1.0, 6.0) LIMIT ?",
+            [match] + kind_args + [limit]).fetchall()
+    else:
+        like_where, like_args = [], []
+        for t in terms:
+            pat = "%" + t.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+            like_where.append("(e.title LIKE ? ESCAPE '\\' OR e.summary LIKE ? ESCAPE '\\' "
+                              "OR e.body_md LIKE ? ESCAPE '\\')")
+            like_args += [pat, pat, pat]
+        rows = _conn.execute(
+            "SELECT e.id, e.kind, e.title, e.slug, e.summary, e.activity, e.system, "
+            "e.owner_id, e.author_name, e.patch, e.patch_confirmed, e.summary AS snippet "
+            f"FROM intel_entries e WHERE e.status='published' AND {' AND '.join(like_where)}"
+            f"{kind_sql}{vis} ORDER BY e.title COLLATE NOCASE LIMIT ?",
+            like_args + kind_args + [limit]).fetchall()
+    return [dict(r) for r in rows]
