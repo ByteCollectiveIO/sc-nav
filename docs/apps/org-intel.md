@@ -40,8 +40,14 @@ fix typos for 15 minutes and then posts **updates**, and the feed marks what's
 new since you last looked. Places, zones, warnings, events, ops and other
 entries can be dropped into any entry as live chips (a place chip sets your
 destination), and each entry lists what links to it. On the danger board,
-**Write up →** starts a report pre-filled from the warning. Dossiers and
-questions are still being built
+**Write up →** starts a report pre-filled from the warning. **Dossiers** are
+the org's page about one place or one other org: any member can edit them
+(every change is kept), an org dossier carries a stance (hostile, neutral,
+allied, unknown) and its aliases, and underneath, the page gathers the
+reports, procedures, live warnings and events that mention it by itself; an
+org's *Seen at* counts the reports that name it as the unit. In the navigator,
+your destination shows **◆ Dossier** or **◆ Start dossier**. Questions are
+still being built
 (see [intelligence.md](../intelligence.md)). Open
 `#/intel/overview` and you get org-wide totals for mapping coverage, cargo hauling,
 trade-route profit, belt surveying, marketplace volume, per-contributor
