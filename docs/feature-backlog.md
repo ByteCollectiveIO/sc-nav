@@ -84,7 +84,10 @@ major revision) built 2026-10-31. Slice 8 is split in two: **8a** (images +
 portability: one-click image loading per entry, Import Markdown (.zip) with
 stored images under an admin quota + 1 GB disk floor, chunked upload, WebP
 re-encode via Pillow, Export Markdown (.zip)) built 2026-10-31; **8b**
-(collections, watch, flag queue) is next.
+(collections as ordered reading lists + event required reading, watch an
+entry/tag/collection with the Feed's Watching filter, flag + admin queue +
+hide) built 2026-10-31. Next: co-authors/credit, checklists on a live op,
+admin tag merge (the remaining "Member features").
 
 ### 49. Goal custody: hand delivered materials to a holder 📐 DESIGN (2026-10-21)
 User report: deleting a holding after delivering it to an org goal withdraws

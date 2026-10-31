@@ -66,7 +66,15 @@ in an entry load with one click (**Load N images**), or always if you tick that
 box. An admin can move a handbook in with **Settings → Data → Import Markdown
 (.zip)** (a Notion or Google Docs export; its screenshots are stored on the
 server, within a quota the admin sets), and anyone can take the knowledge base
-out with **Export (.zip)** on the Library. Open
+out with **Export (.zip)** on the Library. A **collection** puts entries in
+reading order ("New member handbook") and lives on the Library; an event can
+require a whole collection. **Watch** an entry, a #tag (click it on the entry)
+or a collection, and the Feed marks it when someone revises, answers or
+comments on it; **Watching · N updated** shows just those. **Flag** an entry or
+a comment (out of date, inaccurate, inappropriate, names a player) and it goes
+to the admins, who work a flag queue on the Review tab and can **hide** an
+entry: it's kept, out of every list, and only admins can open it until it's
+unhidden. Open
 `#/intel/overview` and you get org-wide totals for mapping coverage, cargo hauling,
 trade-route profit, belt surveying, marketplace volume, per-contributor
 leaderboards and an ops-attendance board, plus (if you're an admin) a member

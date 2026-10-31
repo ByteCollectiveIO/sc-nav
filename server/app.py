@@ -31,6 +31,7 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
@@ -2047,6 +2048,9 @@ _RATE_LIMITS = {
     # Intelligence export (#50 slice 8): a whole-knowledge-base zip. A few a
     # day is real use; a loop is the org's data being scraped.
     "export": (10, 3600.0),
+    # Flags (#50 slice 8b): a member flags a handful of things a week; a loop
+    # filling the admin queue is not.
+    "flag": (20, 3600.0),
 }
 
 
@@ -8927,8 +8931,23 @@ def _read_is_current(read_rev: int | None, major: dict | None) -> bool:
     return read_rev is not None and read_rev >= ((major or {}).get("rev") or 1)
 
 
+def _event_reading_ids(event_id: int) -> tuple[list[int], dict | None]:
+    """The entries an event requires: its own picks, then (deduplicated) the
+    entries of its required collection (slice 8b), in the collection's order."""
+    ids = db.event_reading(event_id)
+    col = None
+    cid = db.event_reading_collection(event_id)
+    if cid:
+        col = db.intel_collection_get(cid)
+        if col:
+            ids = list(dict.fromkeys(ids + col["entry_ids"]))
+    return ids, col
+
+
 def _event_reading_view(ev: dict, user: dict, attendees: list[dict]) -> dict:
-    entries = _reading_entries(db.event_reading(ev["id"]), user)
+    ids_all, col = _event_reading_ids(ev["id"])
+    own = set(db.event_reading(ev["id"]))
+    entries = _reading_entries(ids_all, user)
     ids = [e["id"] for e in entries]
     majors = db.intel_major_revs(ids)
     people = [a["discord_id"] for a in attendees] + [str(user["id"])]
@@ -8936,11 +8955,14 @@ def _event_reading_view(ev: dict, user: dict, attendees: list[dict]) -> dict:
     for a in attendees:
         a["read"] = [i for i in ids if _read_is_current(reads.get((a["discord_id"], i)), majors.get(i))]
     uid = str(user["id"])
+    show_col = col and (col.get("visibility") == "org" or intel_cleared(user))
     return {"reading": [{"id": e["id"], "kind": e["kind"], "title": e["title"], "slug": e["slug"],
                          "read": _read_is_current(reads.get((uid, e["id"])), majors.get(e["id"])),
                          "stale": reads.get((uid, e["id"])) is not None
-                                  and not _read_is_current(reads.get((uid, e["id"])), majors.get(e["id"]))}
-                        for e in entries]}
+                                  and not _read_is_current(reads.get((uid, e["id"])), majors.get(e["id"])),
+                         "via_collection": e["id"] not in own}
+                        for e in entries],
+            "reading_collection": {"id": col["id"], "title": col["title"]} if show_col else None}
 
 
 def _entry_reading_view(e: dict, user: dict) -> dict | None:
@@ -8950,6 +8972,9 @@ def _entry_reading_view(e: dict, user: dict) -> dict | None:
     uid = str(user["id"])
     since = (datetime.now(timezone.utc) - _READING_LOOKAHEAD).isoformat()
     required = db.events_requiring(e["id"], since)
+    have = {r["id"] for r in required}
+    required += [r for r in db.events_requiring_via_collection(e["id"], since) if r["id"] not in have]
+    required.sort(key=lambda r: r["start_at"] or "")
     read_rev = db.intel_reads_for([e["id"]], [uid]).get((uid, e["id"]))
     if not required and read_rev is None:
         return None
@@ -8962,6 +8987,8 @@ def _entry_reading_view(e: dict, user: dict) -> dict | None:
 
 class EventReadingIn(BaseModel):
     entry_ids: list[int] = Field(default_factory=list, max_length=EVENT_READING_MAX)
+    # A whole collection (slice 8b). Only applied when sent: null clears it.
+    collection_id: int | None = None
 
 
 # --- Discord notifications: shared helpers + message builders ----------------
@@ -10228,6 +10255,14 @@ async def set_event_reading(event_id: int, body: EventReadingIn, user: dict = De
             raise HTTPException(status_code=422, detail=f"\"{e['title']}\" is RESTRICTED: not everyone on the event could open it.")
         if e["kind"] not in EVENT_READING_KINDS:
             raise HTTPException(status_code=422, detail="Required reading is a procedure, tactic, debrief or dossier.")
+    if "collection_id" in body.model_fields_set:
+        if body.collection_id is not None:
+            col = db.intel_collection_get(body.collection_id)
+            if not col or not _intel_collection_visible(col, user):
+                raise HTTPException(status_code=404, detail="That collection is gone.")
+            if col["visibility"] != "org":
+                raise HTTPException(status_code=422, detail=f"\"{col['title']}\" is RESTRICTED: not everyone on the event could open it.")
+        db.set_event_reading_collection(event_id, body.collection_id)
     db.set_event_reading(event_id, ids)
     return _event_view(db.get_event(event_id), user, detail=True)
 
@@ -17835,6 +17870,8 @@ def _intel_subject_free(subject: tuple[str, str] | None, entry_id: int | None) -
     if not subject:
         return
     held = db.intel_subject_holder(*subject)
+    if held and held["id"] != entry_id and held.get("hidden_at"):
+        raise HTTPException(status_code=409, detail="There's already a dossier for this subject; an admin has hidden it for now.")
     if held and held["id"] != entry_id:
         what = "this org" if subject[0] == "org" else "this place"
         raise HTTPException(status_code=409, detail={
@@ -17853,6 +17890,8 @@ def _intel_visible(e: dict | None, user: dict) -> bool:
     clearance roles), including for reviewers. The author of a submission can
     always see their own submission."""
     if not e or (e["status"] == "archived" and not user.get("is_admin")):
+        return False
+    if e.get("hidden_at") and not user.get("is_admin"):   # hidden (slice 8b): admins only
         return False
     uid = str(user["id"])
     if e["status"] == "draft":
@@ -17983,6 +18022,7 @@ def _intel_entry_view(e: dict, user: dict) -> dict:
         out["can_comment"] = True
     if e["status"] == "published":
         out["reading"] = _entry_reading_view(e, user)
+    out.update(_intel_member_view(e, user))
     if e["status"] == "published":
         out["linked_from"] = [
             {"id": b["id"], "kind": b["kind"], "title": b["title"], "slug": b["slug"]}
@@ -18000,6 +18040,434 @@ def intel_mark_read(entry_id: int, user: dict = Depends(require_session)):
     db.intel_ack_read(str(user["id"]), entry_id, e["rev"], _now_iso())
     return {"reading": _entry_reading_view(db.intel_get_entry(entry_id), user)}
 
+
+
+# ---- collections, watch, flag + hide (#50 slice 8b, docs/intelligence.md "Member features") ----
+# A COLLECTION is an ordered reading list with its own title and summary (a
+# "New member handbook"); an event can require a whole one. WATCHING an entry,
+# a tag or a collection means an "updated" marker in the feed and a Watching
+# filter: no notification centre, no DMs (Discord is webhook-only). "Updated"
+# = someone else revised, commented on, answered or updated it after you
+# started watching and since you last opened it. Any member can FLAG an entry
+# or comment; admins work the flag queue and can HIDE an entry: kept, out of
+# every list, openable by admins only, reversible, and every hide/unhide logged.
+INTEL_COLLECTION_MAX = 50
+INTEL_WATCH_MAX = 200
+INTEL_FLAG_REASONS = {"outdated": "Out of date", "inaccurate": "Inaccurate",
+                      "inappropriate": "Inappropriate", "names_player": "Names a player"}
+# The reasons an entry's owner and maintainers see counts of (the content
+# ones). Inappropriate / names a player go to admins only.
+_INTEL_FLAG_OWNER_REASONS = ("outdated", "inaccurate")
+
+
+def _intel_collection_visible(col: dict, user: dict) -> bool:
+    return col.get("visibility") != "restricted" or intel_cleared(user)
+
+
+def _intel_collection_can_edit(col: dict, user: dict) -> bool:
+    return bool(user.get("is_admin")) or col.get("owner_id") == str(user["id"])
+
+
+def _intel_collection_require(collection_id: int, user: dict) -> dict:
+    col = db.intel_collection_get(collection_id)
+    if not col or not _intel_collection_visible(col, user):
+        raise HTTPException(status_code=404, detail="Collection not found.")
+    return col
+
+
+def _intel_watch_updated(uid: str, entry_ids, watched: dict[int, str]) -> set[int]:
+    """The watched entries with activity by someone else since the member
+    started watching AND since they last opened the entry."""
+    ids = [i for i in entry_ids if i in watched]
+    out = set()
+    for eid, a in db.intel_activity_since(ids, uid).items():
+        if a["last"] and a["last"] > max(watched[eid], a["seen"] or ""):
+            out.add(eid)
+    return out
+
+
+def _intel_collection_summary(col: dict, user: dict, visible_ids: list[int], watching: bool) -> dict:
+    return {"id": col["id"], "title": col["title"], "summary": col.get("summary") or "",
+            "visibility": col.get("visibility") or "org",
+            "owner": {"id": col.get("owner_id"),
+                      "name": _resolve_member_name(col["owner_id"], None) if col.get("owner_id") else None},
+            "n": len(visible_ids), "updated_at": col.get("updated_at"),
+            "can_edit": _intel_collection_can_edit(col, user), "watching": watching}
+
+
+def _intel_collection_entries(col: dict, user: dict) -> list[dict]:
+    """The collection's entries this viewer may open, in the collection's
+    order (a restricted, hidden or archived one silently drops out)."""
+    rows = db.intel_list(ids=col["entry_ids"], restricted_ok=intel_cleared(user), limit=INTEL_COLLECTION_MAX)
+    by_id = {e["id"]: e for e in rows}
+    return [by_id[i] for i in col["entry_ids"] if i in by_id]
+
+
+def _intel_collection_view(col: dict, user: dict) -> dict:
+    uid = str(user["id"])
+    entries = _intel_collection_entries(col, user)
+    ids = [e["id"] for e in entries]
+    watching = any(w["target_kind"] == "collection" and w["target_id"] == str(col["id"])
+                   for w in db.intel_watches(uid))
+    out = _intel_collection_summary(col, user, ids, watching)
+    current = _intel_patch_now()
+    majors = db.intel_major_revs(ids)
+    reads = db.intel_reads_for(ids, [uid])
+    watched = db.intel_watched_entries(uid)
+    updated = _intel_watch_updated(uid, ids, watched)
+    items = []
+    for e in entries:
+        d = _intel_summary(e, current)
+        d["read"] = _read_is_current(reads.get((uid, e["id"])), majors.get(e["id"]))
+        d["watch_updated"] = e["id"] in updated
+        items.append(d)
+    out.update(entries=items, created_at=col.get("created_at"),
+               read_count=sum(1 for d in items if d["read"]))
+    return out
+
+
+class IntelCollectionIn(BaseModel):
+    title: str | None = Field(default=None, max_length=140)
+    summary: str | None = Field(default=None, max_length=600)
+    visibility: Literal["org", "restricted"] | None = None
+    entry_ids: list[int] | None = Field(default=None, max_length=INTEL_COLLECTION_MAX)
+
+
+def _intel_collection_check(body: IntelCollectionIn, col: dict | None, user: dict) -> list[int] | None:
+    if body.visibility == "restricted" and (col or {}).get("visibility") != "restricted" \
+            and not intel_cleared(user):
+        raise HTTPException(status_code=403, detail="Only members with Intelligence clearance can mark a collection RESTRICTED.")
+    if body.entry_ids is None:
+        return None
+    ids = list(dict.fromkeys(body.entry_ids))
+    for eid in ids:
+        e = db.intel_get_entry(eid)
+        if not e or e["status"] != "published" or not _intel_visible(e, user):
+            raise HTTPException(status_code=422, detail="A collection holds published entries only.")
+    return ids
+
+
+@app.get("/api/intel/collections")
+def intel_collections(user: dict = Depends(require_session)):
+    uid = str(user["id"])
+    watched = {w["target_id"] for w in db.intel_watches(uid) if w["target_kind"] == "collection"}
+    out = []
+    for c in db.intel_collections_list(intel_cleared(user)):
+        col = db.intel_collection_get(c["id"])
+        ids = [e["id"] for e in _intel_collection_entries(col, user)]
+        out.append(_intel_collection_summary(col, user, ids, str(c["id"]) in watched))
+    return {"collections": out}
+
+
+@app.post("/api/intel/collections")
+def intel_collection_new(body: IntelCollectionIn, user: dict = Depends(require_session)):
+    title = (body.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Give the collection a title.")
+    ids = _intel_collection_check(body, None, user) or []
+    cid = db.intel_collection_create({"title": title, "summary": (body.summary or "").strip() or None,
+                                      "owner_id": str(user["id"]), "visibility": body.visibility or "org",
+                                      "created_at": _now_iso()}, ids)
+    return _intel_collection_view(db.intel_collection_get(cid), user)
+
+
+@app.get("/api/intel/collections/{collection_id}")
+def intel_collection(collection_id: int, user: dict = Depends(require_session)):
+    return _intel_collection_view(_intel_collection_require(collection_id, user), user)
+
+
+@app.put("/api/intel/collections/{collection_id}")
+def intel_collection_save(collection_id: int, body: IntelCollectionIn, user: dict = Depends(require_session)):
+    """Title, summary, marking and the ordered list, each only when sent.
+    Owner or admin. A list save keeps entries this editor can't see (a
+    restricted one an officer added stays put for an uncleared co-editor)."""
+    col = _intel_collection_require(collection_id, user)
+    if not _intel_collection_can_edit(col, user):
+        raise HTTPException(status_code=403, detail="Only the collection's owner or an admin can change it.")
+    ids = _intel_collection_check(body, col, user)
+    if ids is not None:
+        seen = {e["id"] for e in _intel_collection_entries(col, user)}
+        ids += [i for i in col["entry_ids"] if i not in seen and i not in ids]
+        ids = ids[:INTEL_COLLECTION_MAX]
+    fields = {"updated_at": _now_iso()}
+    if body.title is not None:
+        if not body.title.strip():
+            raise HTTPException(status_code=422, detail="The title can't be empty.")
+        fields["title"] = body.title.strip()
+    if body.summary is not None:
+        fields["summary"] = body.summary.strip() or None
+    if body.visibility is not None:
+        fields["visibility"] = body.visibility
+    db.intel_collection_update(collection_id, fields, ids)
+    return _intel_collection_view(db.intel_collection_get(collection_id), user)
+
+
+class IntelCollectionAddIn(BaseModel):
+    entry_id: int
+
+
+@app.post("/api/intel/collections/{collection_id}/add")
+def intel_collection_add(collection_id: int, body: IntelCollectionAddIn, user: dict = Depends(require_session)):
+    """Add to collection (from an entry page): appends it at the end."""
+    col = _intel_collection_require(collection_id, user)
+    if not _intel_collection_can_edit(col, user):
+        raise HTTPException(status_code=403, detail="Only the collection's owner or an admin can change it.")
+    e = _intel_require(body.entry_id, user)
+    if e["status"] != "published":
+        raise HTTPException(status_code=422, detail="A collection holds published entries only.")
+    if body.entry_id not in col["entry_ids"] and len(col["entry_ids"]) >= INTEL_COLLECTION_MAX:
+        raise HTTPException(status_code=422, detail=f"A collection holds up to {INTEL_COLLECTION_MAX} entries.")
+    db.intel_collection_add(collection_id, body.entry_id, _now_iso())
+    return {"collections": _intel_entry_collections(db.intel_get_entry(body.entry_id), user)}
+
+
+@app.delete("/api/intel/collections/{collection_id}")
+def intel_collection_delete(collection_id: int, user: dict = Depends(require_session)):
+    col = _intel_collection_require(collection_id, user)
+    if not _intel_collection_can_edit(col, user):
+        raise HTTPException(status_code=403, detail="Only the collection's owner or an admin can delete it.")
+    db.intel_collection_delete(collection_id)
+    return {"ok": True}
+
+
+def _intel_entry_collections(e: dict, user: dict) -> dict:
+    """The collections an entry is in, and the ones this member could add it to."""
+    cleared = intel_cleared(user)
+    inn = db.intel_collections_with(e["id"], cleared)
+    have = {c["id"] for c in inn}
+    mine = [{"id": c["id"], "title": c["title"], "has": c["id"] in have}
+            for c in db.intel_collections_list(cleared) if _intel_collection_can_edit(c, user)]
+    return {"in": [{"id": c["id"], "title": c["title"]} for c in inn], "mine": mine}
+
+
+class IntelWatchIn(BaseModel):
+    target_kind: Literal["entry", "tag", "collection"]
+    target_id: str = Field(min_length=1, max_length=40)
+    on: bool = True
+
+
+@app.put("/api/intel/watch")
+def intel_watch(body: IntelWatchIn, user: dict = Depends(require_session)):
+    uid, tid = str(user["id"]), body.target_id.strip()
+    if body.target_kind == "entry":
+        if not tid.isdigit():
+            raise HTTPException(status_code=422, detail="Not an entry.")
+        e = _intel_require(int(tid), user)
+        if e["status"] != "published":
+            raise HTTPException(status_code=409, detail="Only a published entry can be watched.")
+    elif body.target_kind == "tag":
+        tags = _intel_tags([tid])
+        if not tags:
+            raise HTTPException(status_code=422, detail="Not a tag.")
+        tid = tags[0]
+    else:
+        if not tid.isdigit():
+            raise HTTPException(status_code=422, detail="Not a collection.")
+        _intel_collection_require(int(tid), user)
+    if body.on:
+        mine = db.intel_watches(uid)
+        if len(mine) >= INTEL_WATCH_MAX and not any(
+                w["target_kind"] == body.target_kind and w["target_id"] == tid for w in mine):
+            raise HTTPException(status_code=422, detail=f"You can watch up to {INTEL_WATCH_MAX} things. Unwatch something first.")
+    now = _now_iso()
+    db.intel_watch_set(uid, body.target_kind, tid, body.on, now)
+    if body.on and body.target_kind == "entry":
+        db.intel_mark_seen(uid, int(tid), now)        # watching starts from what you see now
+    return intel_watching(user)
+
+
+@app.get("/api/intel/watching")
+def intel_watching(user: dict = Depends(require_session)):
+    """What this member watches, each with how many of its entries changed.
+    A watch whose target this member can no longer see is left out (kept,
+    so clearance coming back restores it)."""
+    uid = str(user["id"])
+    cleared = intel_cleared(user)
+    watched = db.intel_watched_entries(uid)
+    visible = {e["id"]: e for e in db.intel_list(ids=list(watched), restricted_ok=cleared, limit=2000)}
+    updated = _intel_watch_updated(uid, list(visible), watched)
+    items = []
+    for w in db.intel_watches(uid):
+        k, t = w["target_kind"], w["target_id"]
+        if k == "entry":
+            e = visible.get(int(t)) if t.isdigit() else None
+            if not e:
+                continue
+            items.append({"kind": k, "id": t, "label": e["title"], "entry_kind": e["kind"],
+                          "slug": e["slug"], "updated": int(e["id"] in updated)})
+        elif k == "tag":
+            ids = [e["id"] for e in visible.values() if t in (e.get("tags") or [])]
+            items.append({"kind": k, "id": t, "label": f"#{t}", "n": len(ids),
+                          "updated": sum(1 for i in ids if i in updated)})
+        else:
+            col = db.intel_collection_get(int(t)) if t.isdigit() else None
+            if not col or not _intel_collection_visible(col, user):
+                continue
+            ids = [i for i in col["entry_ids"] if i in visible]
+            items.append({"kind": k, "id": t, "label": col["title"], "n": len(ids),
+                          "updated": sum(1 for i in ids if i in updated)})
+    return {"items": items, "updated": len(updated), "count": len(visible)}
+
+
+def _intel_member_view(e: dict, user: dict) -> dict:
+    """The entry page's watch / collection / flag controls, and for admins the
+    open flags, the hidden state and the moderation log."""
+    uid, admin = str(user["id"]), bool(user.get("is_admin"))
+    out: dict = {"flag_reasons": INTEL_FLAG_REASONS}
+    if e["status"] == "published":
+        mine = {(w["target_kind"], w["target_id"]) for w in db.intel_watches(uid)}
+        out["watching"] = {"entry": ("entry", str(e["id"])) in mine,
+                           "tags": [t for t in e.get("tags") or [] if ("tag", t) in mine]}
+        out["collections"] = _intel_entry_collections(e, user)
+    flags = db.intel_flags_open("entry", str(e["id"]))
+    my = next((f for f in flags if f["member_id"] == uid), None)
+    out["my_flag"] = {"reason": my["reason"], "note": my.get("note")} if my else None
+    if admin:
+        out["flags"] = [{"reason": f["reason"], "note": f.get("note"), "by": f.get("member_name") or "?",
+                         "at": f["created_at"]} for f in flags]
+        out["hidden"] = ({"at": e["hidden_at"], "by": _resolve_member_name(e["hidden_by"], None)
+                          if e.get("hidden_by") else None} if e.get("hidden_at") else None)
+        out["mod_log"] = [{"action": m["action"], "by": m.get("admin_name") or "?", "note": m.get("note"),
+                           "at": m["created_at"]} for m in db.intel_mod_log(e["id"])]
+    elif _intel_can_edit(e, user) or e.get("owner_id") == uid:
+        counts = {r: 0 for r in _INTEL_FLAG_OWNER_REASONS}
+        for f in flags:
+            if f["reason"] in counts:
+                counts[f["reason"]] += 1
+        if any(counts.values()):
+            out["flag_counts"] = counts
+    return out
+
+
+class IntelFlagIn(BaseModel):
+    target_kind: Literal["entry", "comment"]
+    target_id: int
+    reason: Literal["outdated", "inaccurate", "inappropriate", "names_player"]
+    note: str | None = Field(default=None, max_length=500)
+
+
+@app.post("/api/intel/flags")
+def intel_flag(body: IntelFlagIn, user: dict = Depends(require_session)):
+    """Any member flags an entry or a comment, with a reason and a note. It
+    goes to the admin queue; nothing is announced."""
+    uid = str(user["id"])
+    rate_limit("flag", uid)
+    if body.target_kind == "entry":
+        e = _intel_require(body.target_id, user)
+        if e["status"] != "published":
+            raise HTTPException(status_code=409, detail="Only a published entry can be flagged.")
+    else:
+        c = db.intel_get_comment(body.target_id)
+        if not c or c.get("deleted_at"):
+            raise HTTPException(status_code=404, detail="That comment is gone.")
+        _intel_require(c["entry_id"], user)
+        if c["author_id"] == uid:
+            raise HTTPException(status_code=422, detail="Edit or delete your own comment instead.")
+    note = (body.note or "").strip() or None
+    db.intel_flag_add(body.target_kind, str(body.target_id), uid, _resolve_member_name(uid, None),
+                      body.reason, note, _now_iso())
+    return {"ok": True, "reason": body.reason, "note": note}
+
+
+def _intel_flag_target(kind: str, tid: str) -> dict | None:
+    if kind == "entry":
+        e = db.intel_get_entry(int(tid))
+        return {"entry": {"id": e["id"], "kind": e["kind"], "title": e["title"], "slug": e["slug"],
+                          "hidden": bool(e.get("hidden_at")), "status": e["status"]}} if e else None
+    c = db.intel_get_comment(int(tid))
+    if not c:
+        return None
+    e = db.intel_get_entry(c["entry_id"])
+    text = " ".join((c.get("body_md") or "").split())
+    return {"comment": {"id": c["id"], "by": c.get("author_name") or "?", "at": c["created_at"],
+                        "excerpt": text[:280] + ("…" if len(text) > 280 else ""), "deleted": bool(c.get("deleted_at"))},
+            "entry": {"id": e["id"], "kind": e["kind"], "title": e["title"], "slug": e["slug"],
+                      "hidden": bool(e.get("hidden_at")), "status": e["status"]} if e else None}
+
+
+@app.get("/api/intel/flags")
+def intel_flag_queue(user: dict = Depends(require_admin)):
+    """The admin flag queue: open flags grouped by what they're about, the
+    hidden entries (the only list a hidden entry appears in), recent calls."""
+    groups: dict[tuple, dict] = {}
+    for f in db.intel_flags_open():
+        key = (f["target_kind"], f["target_id"])
+        if key not in groups:
+            t = _intel_flag_target(*key)
+            if t is None:
+                continue
+            groups[key] = {"target_kind": key[0], "target_id": int(key[1]), **t, "flags": []}
+        groups[key]["flags"].append({"reason": f["reason"], "note": f.get("note"),
+                                     "by": f.get("member_name") or "?", "at": f["created_at"]})
+    resolved = []
+    for f in db.intel_flags_resolved():
+        t = _intel_flag_target(f["target_kind"], f["target_id"]) or {}
+        resolved.append({"reason": f["reason"], "by": f.get("member_name") or "?",
+                         "resolution": f.get("resolution"), "at": f["resolved_at"],
+                         "resolved_by": _resolve_member_name(f["resolved_by"], None) if f.get("resolved_by") else None,
+                         "title": (t.get("entry") or {}).get("title"), "entry": t.get("entry"),
+                         "target_kind": f["target_kind"]})
+    return {"open": sorted(groups.values(), key=lambda g: g["flags"][0]["at"]),
+            "hidden": [{"id": h["id"], "kind": h["kind"], "title": h["title"], "slug": h["slug"],
+                        "at": h["hidden_at"], "by": _resolve_member_name(h["hidden_by"], None) if h.get("hidden_by") else None}
+                       for h in db.intel_hidden_entries()],
+            "resolved": resolved, "reasons": INTEL_FLAG_REASONS}
+
+
+class IntelFlagResolveIn(BaseModel):
+    target_kind: Literal["entry", "comment"]
+    target_id: int
+    action: Literal["dismiss", "hide", "delete"]
+    note: str | None = Field(default=None, max_length=500)
+
+
+@app.post("/api/intel/flags/resolve")
+def intel_flag_resolve(body: IntelFlagResolveIn, user: dict = Depends(require_admin)):
+    """Dismiss (nothing to do), hide the entry, or delete the comment. Every
+    open flag on the target closes with that call."""
+    uid, now = str(user["id"]), _now_iso()
+    tid = str(body.target_id)
+    if body.action == "hide":
+        if body.target_kind != "entry":
+            raise HTTPException(status_code=422, detail="Hide is for entries; delete a comment instead.")
+        e = db.intel_get_entry(body.target_id)
+        if not e:
+            raise HTTPException(status_code=404, detail="Entry not found.")
+        if not e.get("hidden_at"):
+            db.intel_set_hidden(e["id"], True, uid, _resolve_member_name(uid, None),
+                                (body.note or "").strip() or None, now)
+    elif body.action == "delete":
+        if body.target_kind != "comment":
+            raise HTTPException(status_code=422, detail="Delete is for comments; hide an entry instead.")
+        c = db.intel_get_comment(body.target_id)
+        if not c:
+            raise HTTPException(status_code=404, detail="That comment is gone.")
+        if not c.get("deleted_at"):
+            db.intel_delete_comment(c["id"], now)
+    db.intel_flags_resolve(body.target_kind, tid, uid,
+                           {"dismiss": "dismissed", "hide": "hidden", "delete": "deleted"}[body.action], now)
+    return intel_flag_queue(user)
+
+
+class IntelHideIn(BaseModel):
+    hidden: bool
+    note: str | None = Field(default=None, max_length=500)
+
+
+@app.post("/api/intel/entries/{entry_id}/hide")
+def intel_hide(entry_id: int, body: IntelHideIn, user: dict = Depends(require_admin)):
+    """Hide (kept, out of every list, admins only) or unhide. Logged both ways."""
+    e = db.intel_get_entry(entry_id)
+    if not e:
+        raise HTTPException(status_code=404, detail="Entry not found.")
+    if bool(e.get("hidden_at")) == body.hidden:
+        raise HTTPException(status_code=409, detail="It's already " + ("hidden." if body.hidden else "visible."))
+    uid, now = str(user["id"]), _now_iso()
+    db.intel_set_hidden(entry_id, body.hidden, uid, _resolve_member_name(uid, None),
+                        (body.note or "").strip() or None, now)
+    if body.hidden:
+        db.intel_flags_resolve("entry", str(entry_id), uid, "hidden", now)
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
 
 
 # ---- stored images, import, export (#50 slice 8, docs/intelligence.md "Images") ----
@@ -18433,7 +18901,8 @@ def _intel_thread_view(e: dict, user: dict) -> list[dict]:
                     "by": r.get("author_name") or "?", "at": r["created_at"], "edited_at": r.get("edited_at"),
                     "deleted": bool(r["deleted_at"]), "html": r.get("body_html") or "",
                     "md": r.get("body_md") or "", "mine": mine,
-                    "can_delete": not r["deleted_at"] and (mine or admin)})
+                    "can_delete": not r["deleted_at"] and (mine or admin),
+                    "can_flag": not r["deleted_at"] and not mine})
     return out
 
 
@@ -18715,6 +19184,7 @@ def intel_comment_delete(comment_id: int, user: dict = Depends(require_session))
     if c["author_id"] != str(user["id"]) and not user.get("is_admin"):
         raise HTTPException(status_code=403, detail="You can only delete your own comments.")
     db.intel_delete_comment(comment_id, _now_iso())
+    db.intel_flags_resolve("comment", str(comment_id), str(user["id"]), "deleted", _now_iso())
     return _intel_entry_view(db.intel_get_entry(e["id"]), user)
 
 
@@ -19066,7 +19536,7 @@ def _intel_report_ready(fields: dict) -> None:
 
 @app.get("/api/intel/entries")
 def intel_entries(section: str = "library", kind: str = "", activity: str = "",
-                  system: str = "", tag: str = "", expired: bool = False,
+                  system: str = "", tag: str = "", expired: bool = False, watching: bool = False,
                   user: dict = Depends(require_session)):
     """Lists for the Intelligence tabs: `library` (published procedures +
     tactics, by title), `feed` (everything published, newest publish or MAJOR
@@ -19079,10 +19549,24 @@ def intel_entries(section: str = "library", kind: str = "", activity: str = "",
     if section == "library":
         rows = db.intel_list(kinds=kinds or INTEL_LIBRARY_KINDS, order="title", **kw)
     elif section == "feed":
-        # Expired reports drop off the live feed unless asked for.
-        rows = db.intel_list(kinds=kinds, order="recent", limit=150,
-                             live_at=None if expired else _now_iso(), **kw)
+        uid = str(user["id"])
+        watched = db.intel_watched_entries(uid)
+        mine = db.intel_list(ids=list(watched), restricted_ok=restricted_ok, limit=2000) if watched else []
+        updated = _intel_watch_updated(uid, [e["id"] for e in mine], watched)
+        extra["watching"] = {"count": len(mine), "updated": len(updated),
+                             "targets": len(db.intel_watches(uid))}
+        if watching:
+            # Watching · N updated: everything watched, the changed ones first.
+            # Every kind (a watched SOP is as much news as a report).
+            rows = db.intel_list(kinds=kinds, order="recent", limit=150, ids=list(watched),
+                                 live_at=None if expired else _now_iso(), **kw) if watched else []
+            rows.sort(key=lambda e: e["id"] not in updated)
+        else:
+            # Expired reports drop off the live feed unless asked for.
+            rows = db.intel_list(kinds=kinds, order="recent", limit=150,
+                                 live_at=None if expired else _now_iso(), **kw)
         extra["seen"] = db.intel_feed_seen(user["id"])
+        extra["watch_updated"] = sorted(updated)
         current = _intel_patch_now()
         extra["out_of_date"] = [
             {"id": e["id"], "kind": e["kind"], "title": e["title"], "slug": e["slug"],
@@ -19168,7 +19652,10 @@ def intel_create(body: IntelCreateIn, user: dict = Depends(require_session)):
 
 @app.get("/api/intel/entries/{entry_id}")
 def intel_entry(entry_id: int, user: dict = Depends(require_session)):
-    return _intel_entry_view(_intel_require(entry_id, user), user)
+    e = _intel_require(entry_id, user)
+    if e["status"] == "published":     # opened: clears watch's "updated" marker (slice 8b)
+        db.intel_mark_seen(str(user["id"]), entry_id, _now_iso())
+    return _intel_entry_view(e, user)
 
 
 @app.put("/api/intel/entries/{entry_id}")
@@ -19459,7 +19946,9 @@ def intel_review_queue(user: dict = Depends(require_session)):
     current = _intel_patch_now()
     return {"items": [_intel_review_item(e, current)
                       for e in db.intel_review_queue(restricted_ok=intel_cleared(user))],
-            "required": intel_review_required(), "kinds": intel_review_kinds()}
+            "required": intel_review_required(), "kinds": intel_review_kinds(),
+            # Admins work the flag queue on the same tab (slice 8b).
+            **({"flags_open": db.intel_flag_count_open()} if user.get("is_admin") else {})}
 
 
 @app.get("/api/intel/entries/{entry_id}/review")
