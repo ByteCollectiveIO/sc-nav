@@ -15715,8 +15715,8 @@ class IntelLibraryTests(unittest.TestCase):
         self.assertEqual(lib[0]["owner"]["name"], "Owner")
 
     def test_only_writable_kinds_can_be_written(self):
-        # Reports arrived in slice 3, dossiers in slice 4; RFIs and debriefs come later.
-        r = self.client.post("/api/intel/entries", json={"kind": "rfi", "title": "x"})
+        # Debriefs only start from an op (slice 7); nothing writes one directly yet.
+        r = self.client.post("/api/intel/entries", json={"kind": "debrief", "title": "x"})
         self.assertEqual(r.status_code, 422)
         r = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": "x",
                                                          "activity": "not-a-playstyle"})
@@ -16584,6 +16584,133 @@ class IntelDossierTests(unittest.TestCase):
         self.assertEqual(org["dossier"]["stance"], "hostile")
         lib = self.client.get("/api/intel/entries?section=library").json()["entries"]
         self.assertEqual(lib, [])
+
+class IntelDiscussionTests(unittest.TestCase):
+    """Intelligence slice 5 (#50): comments under every entry (one level of
+    reply, edit/delete your own, admins moderate) and RFIs (answers, accept,
+    open questions on a place's dossier)."""
+
+    CLEAR_ROLE = IntelReportTests.CLEAR_ROLE
+    AUTHOR, OTHER, ADMIN, CLEARED = (IntelReportTests.AUTHOR, IntelReportTests.OTHER,
+                                     IntelReportTests.ADMIN, IntelReportTests.CLEARED)
+    setUpClass = IntelReportTests.__dict__["setUpClass"]
+    tearDownClass = IntelReportTests.__dict__["tearDownClass"]
+    setUp = IntelReportTests.setUp
+    as_ = IntelReportTests.as_
+    header = IntelReportTests.header
+    report = IntelReportTests.report
+    dossier = IntelDossierTests.dossier
+
+    def entry(self, kind="procedure", title="Hull-C escort", **kw):
+        r = self.client.post("/api/intel/entries", json={"kind": kind, "title": title, **kw})
+        self.assertEqual(r.status_code, 200, r.text)
+        r = self.client.put(f"/api/intel/entries/{r.json()['id']}", json={"title": title, "publish": True, **kw})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def post(self, eid, body, parent=None, expect=200):
+        r = self.client.post(f"/api/intel/entries/{eid}/comments", json={"body": body, "parent_id": parent})
+        self.assertEqual(r.status_code, expect, r.text)
+        return r.json()
+
+    def test_comments_and_one_level_of_reply(self):
+        e = self.entry()
+        self.as_(self.OTHER)
+        v = self.post(e["id"], "Does this still work after **4.4**?")
+        c = v["thread"][0]
+        self.assertEqual((c["kind"], c["by"], c["mine"]), ("comment", "Other", True))
+        self.assertIn("<strong>4.4</strong>", c["html"])
+        self.as_(self.AUTHOR)
+        v = self.post(e["id"], "Yes.", parent=c["id"])
+        reply = v["thread"][1]
+        self.assertEqual(reply["parent_id"], c["id"])
+        self.post(e["id"], "Nested", parent=reply["id"], expect=422)          # one level only
+        # Edit: only your own.
+        self.assertEqual(self.client.put(f"/api/intel/comments/{c['id']}", json={"body": "x y"}).status_code, 403)
+        self.as_(self.OTHER)
+        v = self.client.put(f"/api/intel/comments/{c['id']}", json={"body": "Does it work on 4.4?"}).json()
+        self.assertTrue(v["thread"][0]["edited_at"])
+        # Delete keeps the slot while a reply hangs off it.
+        v = self.client.delete(f"/api/intel/comments/{c['id']}").json()
+        self.assertTrue(v["thread"][0]["deleted"])
+        self.assertEqual(v["thread"][0]["html"], "")
+        self.assertEqual(len(v["thread"]), 2)
+        # An admin moderates anyone's comment; with no live replies, it's gone.
+        self.as_(self.ADMIN)
+        v = self.client.delete(f"/api/intel/comments/{reply['id']}").json()
+        self.assertEqual(v["thread"], [])
+        # Counts on lists.
+        self.post(e["id"], "Another")
+        lib = self.client.get("/api/intel/entries?section=library").json()["entries"]
+        self.assertEqual(lib[0]["counts"]["comment"], 1)
+
+    def test_no_comments_on_drafts_or_hidden_entries(self):
+        d = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": "Draft"}).json()
+        self.post(d["id"], "hi", expect=409)
+        e = self.entry(title="Secret")
+        db.intel_set_fields(e["id"], {"visibility": "restricted"})
+        self.as_(self.OTHER)
+        self.post(e["id"], "hi", expect=404)
+        self.as_(self.CLEARED)
+        self.post(e["id"], "cleared can")
+
+    def test_rfi_answers_and_accept(self):
+        self.as_(self.OTHER)
+        q = self.entry("rfi", "Anyone mapped the caves at Aberdeen?", body="Looking for the ore pockets.",
+                       header={"location_ref": f"poi:{self.poi.id}"})
+        self.assertFalse(q["rfi"]["answered"])
+        self.assertEqual(q["rfi"]["location"], self.poi.name)
+        self.as_(self.AUTHOR)
+        v = self.post(q["id"], "Yes: two pockets, north side.")
+        ans = v["thread"][0]
+        self.assertEqual(ans["kind"], "answer")
+        v = self.post(q["id"], "Which entrance?", parent=ans["id"])
+        self.assertEqual(v["thread"][1]["kind"], "comment")
+        # Only the asker (or an admin) accepts.
+        r = self.client.post(f"/api/intel/entries/{q['id']}/accept", json={"comment_id": ans["id"]})
+        self.assertEqual(r.status_code, 403)
+        self.as_(self.OTHER)
+        r = self.client.post(f"/api/intel/entries/{q['id']}/accept", json={"comment_id": v["thread"][1]["id"]})
+        self.assertEqual(r.status_code, 404)        # a reply isn't an answer
+        v = self.client.post(f"/api/intel/entries/{q['id']}/accept", json={"comment_id": ans["id"]}).json()
+        self.assertEqual(v["accepted_id"], ans["id"])
+        self.assertTrue(v["rfi"]["answered"])
+        rows = self.client.get("/api/intel/entries?section=rfi").json()["entries"]
+        self.assertEqual(rows[0]["counts"]["answer"], 1)
+        # Deleting the accepted answer re-opens the question.
+        self.as_(self.AUTHOR)
+        v = self.client.delete(f"/api/intel/comments/{ans['id']}").json()
+        self.assertIsNone(v["accepted_id"])
+        self.assertFalse(v["rfi"]["answered"])
+
+    def test_rfi_list_open_first_and_edit_rights(self):
+        a = self.entry("rfi", "Answered one")
+        b = self.entry("rfi", "Open one")
+        ans = self.post(a["id"], "Here.")["thread"][0]
+        self.client.post(f"/api/intel/entries/{a['id']}/accept", json={"comment_id": ans["id"]})
+        rows = self.client.get("/api/intel/entries?section=rfi").json()["entries"]
+        self.assertEqual([x["id"] for x in rows], [b["id"], a["id"]])
+        self.as_(self.OTHER)
+        self.assertFalse(self.client.get(f"/api/intel/entries/{b['id']}").json()["can_edit"])
+        self.as_(self.ADMIN)
+        self.assertTrue(self.client.get(f"/api/intel/entries/{b['id']}").json()["can_edit"])
+
+    def test_open_questions_on_the_place_dossier(self):
+        d = self.dossier(self.poi.name, {"subject_kind": "place", "subject_ref": f"poi:{self.poi.id}"})
+        q = self.entry("rfi", "Is the hangar camped tonight?", header={"location_ref": f"poi:{self.poi.id}"})
+        v = self.client.get(f"/api/intel/entries/{d['id']}").json()
+        self.assertEqual([x["id"] for x in v["rollup"]["questions"]], [q["id"]])
+        self.assertEqual(v["rollup"]["other"], [])
+
+    def test_comment_rate_limit(self):
+        e = self.entry()
+        app._RATE_LIMITS["comment"], old = (2, 60.0), app._RATE_LIMITS["comment"]
+        try:
+            self.post(e["id"], "one")
+            self.post(e["id"], "two")
+            self.post(e["id"], "three", expect=429)
+        finally:
+            app._RATE_LIMITS["comment"] = old
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
