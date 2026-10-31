@@ -6,7 +6,8 @@
 **Settled 2026-10-31 (user):**
 
 - **Images.** One click loads all of an entry's linked images (see *Images*).
-  v1 has no uploads.
+  The editor is link-only. Only an admin's **Import (.zip)** stores image
+  files, under an org quota the admin sets (see *Import uploads*).
 - **No player dossiers.** Dossiers cover places and orgs only.
 - **No loadout builder.** Link to erkul.games and similar tools instead.
 - **Channel choice.** The author picks any configured intel channel when
@@ -318,6 +319,12 @@ change*. The op's page then links to its debrief(s). The **pre-op briefing**
 is the event's description plus its required reading. It doesn't need a
 separate kind.
 
+**A debrief only starts from its op (user, 2026-10-31).** The **+ New** kind
+picker offers report, procedure, tactic, dossier and RFI, but not debrief, so
+every debrief carries its op header. Someone who wants to write about an
+event that never had an Ops record writes a report with an `[[event:…]]`
+reference instead.
+
 ### RFIs
 
 A question with answers. The asker (or an admin) marks one answer **accepted**.
@@ -386,8 +393,9 @@ intel_watches   member_id, target_kind, target_id   -- entry | tag | collection
 intel_flags     id, target_kind, target_id, member_id, reason, note, resolved_by, created_at
 intel_discord_posts     entry_id, rev, channel_key, message_id, thread_id, posted_at
 intel_fts       FTS5(title, summary, body, tags) content=intel_entries
--- later, only if uploads are ever enabled (see Images):
-intel_files     id, entry_id, sha256, mime, bytes, width, height, uploader_id, created_at
+intel_files     id, sha256, mime, bytes, width, height, import_id, created_at   -- import uploads only
+intel_file_refs file_id, entry_id                   -- delete the file with its last reference
+intel_imports   id, admin_id, status, files_total, files_skipped, bytes_stored, report (json), created_at
 ```
 
 - Authors are Discord member ids, like events and ops. A revoked member's
@@ -492,6 +500,13 @@ a plain link, never as HTML.
     attached to the page, so nothing in the pasted HTML runs or loads. No
     library is needed.
   - **Shift-paste** pastes plain text.
+  - **Dropped images are named, not silently lost (user, 2026-10-31).** The
+    paste toast counts them and says why. Images hosted by Google Docs or
+    Drive get a specific line: *"3 images from Google Docs weren't kept.
+    Docs image links expire. Get the files with File → Download → Web page
+    (.zip), upload them to imgur, and add them with ▣ Image link."* See
+    [Google Docs and Drive images](#google-docs-and-drive-images) for why
+    they can't be kept.
   - The server sanitizer is still the trust boundary. The paste converter is
     only for convenience.
 
@@ -524,8 +539,9 @@ Markdown `![caption](https://i.imgur.com/…)`, accepted only from
 the same fixed list and the same reasoning as setting **S10**: known hosts
 only, never "any https host", which closes the tracking-server case. Discord
 CDN links are refused, as they are for banners, because Discord's attachment
-URLs expire. Anything else renders as a plain link with its host shown. The
-server stores nothing.
+URLs expire. Anything else renders as a plain link with its host shown. For a
+linked image the server stores nothing; the one exception is an admin import
+(see *Import uploads*).
 
 **What changes from the banner rule.** For a banner, one image is shown on
 one explicit click. An article might hold ten screenshots, and clicking each
@@ -550,20 +566,152 @@ one per image. The build PR must reword that CLAUDE.md line to match, and add
 a test that a rendered entry contains no bare `<img>`, so the rule earns its
 way off that list.
 
-**Later, if link-only proves too clunky: uploads with a hard org quota.**
-This is the version the banner sweep lacked:
+**Import uploads: images from Import Markdown (.zip) are stored (user,
+2026-10-31).** The editor stays link-only. The one exception is the import: a
+Docs or Notion export zip already contains its images, and re-hosting 40
+screenshots by hand is the biggest chore of moving a handbook in (see
+*Google Docs and Drive images*). Admins only.
 
-- a **total** org quota (admin-set, default off, e.g. 250 MB);
-- re-encoded to WebP at ≤ 1600 px, which strips EXIF and turns a 4 MB PNG
-  into roughly 200 KB;
-- a per-member share of the quota;
-- files deleted with their last referencing entry;
-- served from `/api/intel/files/<id>` with a visibility check, **never** under
-  the public `/images/` prefix.
+*The quota is the org admin's to set (user).* Orgs self-host on very
+different machines. Some have a small VM, others a box with terabytes free.
+A conservative fixed cap would restrict the second kind for no reason.
 
-Because uploads are bounded by the org's own quota and the server does the
-re-encoding, it isn't an open-ended disk risk. It's still more code than v1
-needs, so it waits until members ask.
+- **Settings → Data → Intelligence images** shows a readout: *"used
+  132 MB of 250 MB · 41 GB free on the data volume"*. The admin picks a quota
+  with presets (100 MB · **250 MB default** · 1 GB · 5 GB · 20 GB) or types
+  any value. **No limit** is a valid choice.
+- **Lowering the quota below current use deletes nothing.** The readout shows
+  *over quota*, and new imports are refused until usage is back under.
+- **The disk floor is separate, always on, and not a quota.** An import is
+  refused if it would leave less than **1 GB free** on the data volume
+  (`shutil.disk_usage`), whatever the quota. SQLite lives on the same
+  `/data` volume, and a full disk stops the whole app, not just
+  Intelligence. "No limit" means no *org-chosen* limit; the floor still
+  protects the database.
+
+**How an import is stored:**
+
+- **Uploaded in chunks.** Behind a Cloudflare tunnel a single request body
+  can be at most **100 MB** on the Free and Pro plans (200 MB on Business),
+  and anything larger gets a 413. A zip is therefore sent in 50 MB chunks to
+  a resumable admin endpoint and reassembled in a temp directory on the data
+  volume. The temp space counts against the disk floor, and the directory is
+  deleted when the import finishes or fails. A big quota is useless if the
+  upload can't get through the tunnel.
+- **Unpacked defensively.**
+  - Reject absolute or `..` paths (zip-slip), symlinks and nested zips.
+  - Cap the file count (2,000) and the total uncompressed size (refused if it
+    exceeds what the quota and the floor allow).
+  - Only `.md` and image files are read. Everything else is listed as skipped.
+- **Each image:**
+  - checked with `_sniff_image` (PNG, JPEG, WebP, GIF; never SVG);
+  - decoded with a pixel cap (40 MP; Pillow's decompression-bomb guard);
+  - **re-encoded to WebP**, longest edge ≤ 2560 px, which strips EXIF.
+
+  A 4 MB 1440p PNG screenshot becomes roughly 200–400 KB, so a quota goes
+  about ten times further. Animated GIFs are kept as they are if ≤ 4 MB,
+  otherwise only their first frame is stored. Decoding runs in
+  `asyncio.to_thread`, off the event loop.
+- **Deduplicated by the hash of the re-encoded bytes**, so the same logo in
+  30 pages is stored and counted once.
+- **Rewritten in the Markdown.** `![cap](images/foo.png)` in the imported
+  file becomes `![cap](/api/intel/files/<id>)`. Image references the zip
+  doesn't contain stay as links.
+- **Served from `/api/intel/files/<id>`.** It requires a session, and the
+  image is visible only to readers who can read at least one entry that
+  references it. **Never** under the public `/images/` prefix. Our own
+  images load inline with no click and no consent bar, because they're not a
+  third-party request.
+- **Deleted with their last reference.** `intel_file_refs` counts
+  references. Deleting or editing away the last one deletes the file in the
+  same transaction, and an orphan sweep also runs on the periodic
+  maintenance loop, not only at startup. A startup-only sweep is exactly
+  what let the old banner uploads grow without bound.
+- **Exported.** Export → Markdown (.zip) puts the files back in, so an
+  import → export round trip doesn't lose them.
+
+**New dependency:** Pillow (HPND licence, permissive), with a security floor
+in `requirements.txt` like the others. It's the only practical way to
+re-encode in Python. Image decoding is attack surface, so the sniff runs
+first, the pixel cap is set before any decode, and only the four formats are
+opened.
+
+**Not in v1, and kept out deliberately:** turning on uploads *in the editor*.
+The store, quota and floor above would support it, so it can become a single
+admin toggle later. But editor uploads are a much higher-volume path (any
+member, any time) than an admin-run import, and v1 doesn't need them.
+
+### Google Docs and Drive images
+
+Researched 2026-10-31 because a handbook moved in from Google Docs is the
+most likely day-one import. **Neither kind of Google image can be shown in an
+entry, and no access list on our side would change that.** The image belongs
+to Google's sharing model, not ours.
+
+**Images inside a Google Doc (copy and paste).** When you copy from a Doc,
+the clipboard's `<img>` tags point at Google-hosted URLs
+(`lh*-rt.googleusercontent.com/docsz/…`), not at a file the member owns.
+
+- Platforms that kept those URLs report the images **breaking later**, when
+  the link expired or the doc's sharing changed. The fix those platforms give
+  their users is to download the images and upload them somewhere permanent.
+- Google doesn't document the expiry. Exported-HTML links from the Drive API
+  show the same expiring behaviour.
+- So these URLs are never kept. They're named in the paste toast, with the
+  way to get the files out (File → Download → Web page (.zip) gives every
+  image as a file).
+
+**Images stored in Google Drive.**
+
+- **Restricted sharing (named people only)** can never load in our page. The
+  reader's Google login cookie isn't sent to a Google image request made from
+  our site, and Google's third-party-cookie phase-out makes that firmer, not
+  looser. An "access list" would have to be Google's, applied to every
+  reader's Google account, and the browser won't do that cross-site.
+- **"Anyone with the link"** is still not embeddable in a supported way. The
+  old direct link (`drive.google.com/uc?export=view&id=…`) has returned
+  **403 since early 2024**. Google Workspace developer relations attributes
+  that partly to the third-party-cookie change. The **only** method Google
+  documents is the Drive **"Embed item…" `<iframe>`**. That would mean
+  widening `frame-src` in our CSP, which v1 rules out (no embeds, see
+  *Formatting*). Google's own long-term advice is to move images to a host
+  built for serving public images.
+- Undocumented workarounds (`lh3.googleusercontent.com/d/<id>`, the
+  `thumbnail?id=` endpoint) circulate in forums with mixed reports. One
+  thumbnail route reportedly started returning 400. We don't add an
+  undocumented Google endpoint to the allowed hosts: it can break org-wide
+  without notice, and a Drive file shared "anyone with the link" is just as
+  public as an imgur link, without imgur's stability.
+
+**What the editor does with Google links:**
+
+| pasted or typed | result |
+|---|---|
+| an image inside pasted Docs content | not kept. The toast names it and says how to get the file |
+| `![…](https://drive.google.com/…)` or any `googleusercontent.com` image | renders as a link, and the image-link check says *"Drive images can't be shown in the app. Upload it to imgur, or keep it as a link."* |
+| a plain Drive / Docs link (`[map](https://drive.google.com/file/d/…)`, a Docs URL) | a **Drive link card** ("Google Drive file ↗", like the loadout card). Readers with access open it in Drive, and nothing is fetched |
+
+Readers who have access to a Drive file can still reach it through the
+link card. That keeps Google's own access list working where it actually
+applies: in Google's UI.
+
+**The real cost is on import.** A handbook with 40 screenshots means 40
+images to re-host by hand. Notion and Docs exports both give the files, but
+re-hosting them by hand is the work an import should remove. **Decided:**
+**Import Markdown (.zip)** stores the zip's images on the server, under the
+quota the org admin sets (see *Import uploads*). The editor stays link-only.
+
+Sources:
+
+- [Google Drive embed images 403](https://justin.poehnelt.com/posts/google-drive-embed-images-403/)
+  and [Embed images from Google Drive in your website](https://dev.to/googleworkspace/embed-images-from-google-drive-in-your-website-11k6)
+  (Google Workspace Developers, 2024-01-11).
+- [Pasting Google Docs content into another platform](https://communities.gainsight.com/customer-communities-cc-17/downside-of-copy-and-pasting-content-from-google-docs-into-cc-articles-30900).
+- [Drive API exported-HTML image links expiring](https://community.apigee.com/gc/Apigee/Google-Drive-API-Service-Account-Exported-HTML-from-Google-Doc/m-p/554112).
+- Forum reports on `lh3` / `thumbnail`:
+  [Google Developer forums](https://discuss.google.dev/t/new-google-drive-url-situation/152976),
+  [MIT App Inventor community](https://community.appinventor.mit.edu/t/url-local-image-for-fancygallery/106840?page=2).
+- The docsz URL expiry window is undocumented, so it's untested here.
 
 ### Discord — publishing to channels
 
@@ -641,7 +789,8 @@ channel, ping and teaser fields as the publish panel.
 
 **Export → Markdown (.zip)**: every ORG entry as a `.md` file with front-matter
 (the same fields Import reads, member feature 7). Linked images stay links.
-Uploaded files would be added only if uploads are ever enabled. Restricted entries only when an admin exports. An org's
+Imported image files are included alongside the entries that use them, with
+the links rewritten to relative paths. Restricted entries only when an admin exports. An org's
 knowledge base is the thing it would least want locked into one tool. This is
 also the migration path if an org later moves to a dedicated wiki.
 
@@ -662,7 +811,10 @@ it shapes the data model, the permission check or the Markdown dialect.
    - clears the patch-staleness warning.
 
    Without the flag, fixing a typo would ping the whole org and make 40
-   members re-acknowledge an SOP. A minor save can still notify Discord when
+   members re-acknowledge an SOP. A major revision **requires a "What
+   changed" note** (user, 2026-10-31). It becomes the history line, the
+   **Revised:** text of the Discord post, and what members see when their
+   read receipt resets. For a minor edit the note is optional. A minor save can still notify Discord when
    the author ticks **Push notification** (user). **Now:**
    `intel_revisions.major`.
 2. **Tags: a fixed activity list plus free tags.** Activity uses the #30
@@ -911,10 +1063,12 @@ Each slice is a shippable PR that's useful on its own.
 7. **Debriefs + required reading**: op **Write debrief →**, event required
    reading, read receipts on signups.
 8. **Images + portability**: one-click image loading per entry,
-   export/import `.zip`, collections, watch, flag queue. The data model for
-   all of these ships in slice 0 (see *Member features*).
-9. _Later, on demand:_ uploads under an org quota, procedure checklists run
-   on a live op, pin to watcher HUD.
+   export/import `.zip` **with import image storage** (chunked upload,
+   admin-set quota + disk floor, WebP re-encode, Pillow), collections, watch,
+   flag queue. The data model for all of these ships in slice 0 (see
+   *Member features*).
+9. _Later, on demand:_ editor uploads (an admin toggle on the same store),
+   procedure checklists run on a live op, pin to watcher HUD.
 
 ## Decided 2026-10-31 (user accepted the recommendations)
 
@@ -935,6 +1089,9 @@ Each slice is a shippable PR that's useful on its own.
    vet" role, shared with the review gate).
 8. **Review gate**: per kind. Reports are exempt by default. Admins and
    reviewers publish their own entries directly.
+9. **Import uploads**: Import Markdown (.zip) stores its images. The editor
+   stays link-only. **The org admin sets the quota** (default 250 MB, any
+   value, or no limit); a 1 GB free-disk floor always applies. See *Images*.
 
 ## Open questions
 
