@@ -71,7 +71,7 @@ who'd happily fill a slot but isn't hosting. Showing both lets the dashboard
 - **Direction** (LFM / LFJ) — required.
 - **Playstyle tags** (multi-select chips): `PvE`, `PvP`, `FPS`, `flight`,
   `hauling`, `mining`, `salvage`, `bunkers`, `bounty`, `exploration`,
-  `medical/rescue`, `RP`, `casual`, `serious`, `new-player-friendly`. Reuse/extend
+  `surveying`, `medical/rescue`, `RP`, `casual`, `serious`, `new-player-friendly`. Reuse/extend
   the activity chips from the online-status model — one shared vocabulary.
 - **Slots needed** (LFM only) + filled count.
 - Short free-text note (what/where, comms expectations).

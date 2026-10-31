@@ -929,6 +929,10 @@ class OnlineRosterTests(unittest.TestCase):
         tags = self.client.get("/api/playstyles").json()["tags"]
         self.assertIn("mining", tags)
         self.assertIn("PvP", tags)
+        # Surveying is its own activity, not exploration (events split them too:
+        # "Survey Op" vs "Exploration").
+        self.assertIn("surveying", tags)
+        self.assertIn("exploration", tags)
 
     def _my_prefs(self):
         return self.client.get("/api/online").json()["me"]
@@ -15841,6 +15845,9 @@ class IntelLibraryTests(unittest.TestCase):
         snip = r[0]["snippet"]
         for noise in ("##", "|", "---", "[ ]", "**"):
             self.assertNotIn(noise, snip)
+        # A table keeps its shape: cells separated, rows apart, not run-on words.
+        self.assertEqual(app._intel_snippet_text("| Role | Ship |\n|---|---|\n| Escort | Arrow |\n\n- [ ] Comms"),
+                         "Role · Ship / Escort · Arrow / Comms")
 
     def test_lists_carry_image_hosts(self):
         # The editor's image-link check reads the allowed hosts from here.
@@ -17204,6 +17211,83 @@ class IntelDebriefReadingTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/events/{ev}").json()["reading"], [])
         self.as_(self.CLEARED)
         self.assertEqual(len(self.client.get(f"/api/events/{ev}").json()["reading"]), 1)
+
+
+class IntelPinTests(unittest.TestCase):
+    """Admins pin entries and #tags; the Feed and Library show them to every
+    member, filtered per viewer."""
+
+    CLEAR_ROLE = IntelReportTests.CLEAR_ROLE
+    AUTHOR, OTHER, ADMIN, CLEARED = (IntelReportTests.AUTHOR, IntelReportTests.OTHER,
+                                     IntelReportTests.ADMIN, IntelReportTests.CLEARED)
+    setUpClass = IntelReportTests.__dict__["setUpClass"]
+    tearDownClass = IntelReportTests.__dict__["tearDownClass"]
+    as_ = IntelReportTests.as_
+    entry = IntelDiscussionTests.entry
+
+    def setUp(self):
+        IntelReportTests.setUp(self)
+        db.set_setting(app.INTEL_PINS_KEY, "{}")
+
+    def pin(self, kind, tid, on=True, expect=200, **kw):
+        r = self.client.put("/api/intel/pins", json={"target_kind": kind, "target_id": str(tid), "on": on, **kw})
+        self.assertEqual(r.status_code, expect, r.text)
+        return r.json()
+
+    def pins(self, section="feed"):
+        return self.client.get("/api/intel/entries", params={"section": section}).json()["pins"]
+
+    def test_only_admins_pin_and_everyone_sees_them(self):
+        sop = self.entry(title="Pre-undock checklist", tags=["basics"])
+        self.entry(title="Comms", tags=["basics"])
+        self.pin("entry", sop["id"], expect=403)
+        self.as_(self.ADMIN)
+        self.pin("entry", sop["id"], note="Read before Friday")
+        self.pin("tag", "#Basics")
+        self.as_(self.OTHER)
+        for section in ("feed", "library"):
+            p = self.pins(section)
+            self.assertEqual([(e["title"], e["pin_note"]) for e in p["entries"]], [("Pre-undock checklist", "Read before Friday")])
+            self.assertEqual(p["tags"][0]["tag"], "basics")
+            self.assertEqual(p["tags"][0]["n"], 2)
+        self.assertTrue(self.client.get(f"/api/intel/entries/{sop['id']}").json()["pinned"])
+        self.as_(self.ADMIN)
+        self.pin("entry", sop["id"], on=False)
+        self.assertEqual(self.pins()["entries"], [])
+
+    def test_a_pin_never_shows_what_the_viewer_cant_open(self):
+        self.as_(self.CLEARED)
+        secret = self.entry(title="Black ops", visibility="restricted", tags=["ops"])
+        self.as_(self.ADMIN)
+        self.pin("entry", secret["id"])
+        self.pin("tag", "ops")
+        self.as_(self.OTHER)
+        p = self.pins()
+        self.assertEqual(p["entries"], [])
+        self.assertEqual((p["tags"][0]["n"], p["tags"][0]["entries"]), (0, []))
+        self.assertNotIn("Black ops", str(p))
+        self.as_(self.CLEARED)
+        self.assertEqual([e["title"] for e in self.pins()["entries"]], ["Black ops"])
+
+    def test_drafts_cant_be_pinned_and_the_list_is_capped(self):
+        self.as_(self.ADMIN)
+        d = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": "WIP"}).json()
+        self.pin("entry", d["id"], expect=409)
+        for i in range(app.INTEL_PIN_MAX):
+            self.pin("tag", f"t{i}")
+        self.pin("tag", "t0", note="still fine")          # re-pinning updates, doesn't add
+        self.pin("tag", "one-more", expect=422)
+
+    def test_an_admin_restores_an_archived_entry(self):
+        sop = self.entry(title="Old checklist")
+        self.assertEqual(self.client.delete(f"/api/intel/entries/{sop['id']}").json(), {"archived": True})
+        self.assertEqual(self.client.post(f"/api/intel/entries/{sop['id']}/restore").status_code, 403)
+        self.as_(self.ADMIN)
+        r = self.client.post(f"/api/intel/entries/{sop['id']}/restore")
+        self.assertEqual((r.status_code, r.json()["status"], r.json()["rev"]), (200, "published", sop["rev"]))
+        lib = self.client.get("/api/intel/entries", params={"section": "library"}).json()["entries"]
+        self.assertIn("Old checklist", [e["title"] for e in lib])
+        self.assertEqual(self.client.post(f"/api/intel/entries/{sop['id']}/restore").status_code, 409)
 
 
 class IntelCollectWatchFlagTests(unittest.TestCase):
