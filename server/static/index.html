@@ -910,6 +910,88 @@
     .ix-tools .sep { display: none; }
     textarea.ti.ix-area, .ix-preview { min-height: 55vh; padding-left: 12px; padding-right: 12px; }
   }
+  /* ---- Intelligence slice 4: dossiers (places + orgs) ---- */
+  .ix-dx-sub { font-size: 13px; color: var(--dim); margin: -4px 0 10px; line-height: 1.5; }
+  .ix-dx-sub b { color: var(--text); font-weight: 400; }
+  /* an org's stance: a glyph AND a colour (colour-blind rule) */
+  .ix-org-stance { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; border: 1px solid currentColor; border-radius: 3px; padding: 0 6px 0 4px; line-height: 18px; white-space: nowrap; }
+  .ix-org-stance .ix-ico { width: 12px; height: 12px; }
+  .ix-org-stance.hostile { color: var(--bad); }
+  .ix-org-stance.allied { color: var(--good); }
+  .ix-org-stance.neutral, .ix-org-stance.unknown { color: var(--dim); }
+  /* the one thing that matters right now, above the hand-written summary */
+  .ix-dx-live { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 8px 10px; margin: 0 22px 4px;
+    padding: 10px 12px; border: 1px solid var(--bad); background: var(--bad-wash); border-radius: 6px; font-size: 12px; line-height: 1.45; }
+  .ix-dx-live .ix-ico { color: var(--bad); }
+  .ix-dx-live b { color: var(--bad); font-size: 11px; letter-spacing: .08em; }
+  .ix-dx-live a { color: var(--bad); text-underline-offset: 3px; white-space: nowrap; }
+  .ix-dx-edited { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; padding: 10px 22px 16px;
+    border-top: 1px solid var(--border-soft); margin-top: 6px; font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .ix-dx-edited b { color: var(--text); font-weight: 400; }
+  .ix-dx-edited a { color: var(--accent); text-underline-offset: 3px; }
+  .ix-dx-roll .ix-panel-h span { font-size: 11px; }
+  .ix-dx-sec + .ix-dx-sec { border-top: 1px solid var(--border); margin-top: 6px; }
+  .ix-dx-sec h3 { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin: 14px 0 4px;
+    font-size: 11px; letter-spacing: 1px; color: var(--dim); font-weight: 400; }
+  .ix-dx-sec:first-of-type h3 { margin-top: 8px; }
+  .ix-dx-sec h3 b { color: var(--text); font-weight: 600; }
+  .ix-dx-sec h3 a { color: var(--accent); letter-spacing: 0; text-decoration: none; white-space: nowrap; }
+  .ix-dx-sec h3 a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .ix-dx-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px; padding: 9px 6px;
+    border-top: 1px solid var(--border-soft); border-radius: 6px; color: inherit; text-decoration: none; }
+  .ix-dx-sec h3 + .ix-dx-row { border-top: none; }
+  .ix-dx-row:hover { background: var(--inset-tint); }
+  .ix-dx-row:hover .t { color: var(--accent); }
+  .ix-dx-row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
+  .ix-dx-row > .ix-ico { width: 15px; height: 15px; margin-top: 2px; color: var(--text); }
+  .ix-dx-row .t { font-size: 13px; line-height: 1.4; color: var(--text); transition: color .12s; overflow-wrap: anywhere; }
+  .ix-dx-row small { display: flex; flex-wrap: wrap; gap: 3px 10px; align-items: center; color: var(--dim); font-size: 11px; margin-top: 4px;
+    font-variant-numeric: tabular-nums; }
+  .ix-dx-row .r { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; font-size: 11px; color: var(--dim);
+    font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ix-dx-row.expired .t, .ix-dx-row.expired > .ix-ico { color: var(--dim); }
+  .ix-dx-row.soon .r { color: var(--accent); }
+  .ix-dx-row .bad { color: var(--bad); }
+  .ix-dx-none { font-size: 12px; color: var(--dim); padding: 6px 6px 10px; line-height: 1.5; margin: 0; }
+  .ix-dx-none a { color: var(--accent); text-underline-offset: 3px; }
+  .ix-dx-foot { font-size: 11px; color: var(--dim); border-top: 1px solid var(--border); margin: 6px 0 0; padding-top: 10px; line-height: 1.5; }
+  .ix-dx-foot code { font-size: 11px; }
+  /* where an org has been seen: a count, drawn to scale */
+  .ix-dx-seen { display: grid; grid-template-columns: minmax(0, 1fr) minmax(60px, 140px) 26px; gap: 10px; align-items: center;
+    padding: 8px 6px; border-top: 1px solid var(--border-soft); font-size: 13px; color: inherit; border-radius: 6px; }
+  .ix-dx-sec h3 + .ix-dx-seen { border-top: none; }
+  .ix-dx-seen small { color: var(--dim); font-size: 11px; margin-left: 6px; }
+  .ix-dx-seen .bar { height: 6px; border-radius: 3px; background: var(--track); overflow: hidden; }
+  .ix-dx-seen .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+  .ix-dx-seen .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+  .ix-dx-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 6px 8px; }
+  .ix-idk { display: grid; grid-template-columns: 74px minmax(0, 1fr); margin: 0; font-size: 12px; line-height: 1.45; }
+  .ix-idk dt, .ix-idk dd { padding: 7px 0; border-top: 1px solid var(--border-soft); margin: 0; }
+  .ix-idk dt { font-size: 11px; color: var(--dim); letter-spacing: 1px; padding-top: 8px; }
+  .ix-idk > :nth-child(-n+2) { border-top: none; padding-top: 0; }
+  .ix-idk dd small { display: block; color: var(--dim); font-size: 11px; margin-top: 2px; }
+  .ix-rule-note { font-size: 11px; color: var(--dim); line-height: 1.5; margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--border); }
+  /* editor: what a dossier is about */
+  /* .ix-lbl / .ix-pick set display, which beats the UA [hidden] rule: restate it here */
+  .ix-dos[hidden], .ix-dos [hidden], .ix-rep [hidden] { display: none !important; }
+  .ix-dos-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; }
+  .ix-dos-grid .ix-rep-wide { grid-column: 1 / -1; }
+  .ix-dos-exists { font-size: 12px; color: var(--warn); margin: 0; }
+  .ix-dos-exists a { color: var(--accent); }
+  /* navigator: the destination's intel chip */
+  #dest-intel:empty { display: none; }
+  #dest-intel a { font-size: 12px; color: var(--accent); text-decoration: none; border: 1px solid var(--accent); border-radius: 3px; padding: 1px 7px; }
+  #dest-intel a:hover { background: var(--accent-wash); }
+  #dest-intel a.quiet { border-color: var(--border); color: var(--dim); }
+  #dest-intel a.quiet:hover { color: var(--accent); border-color: var(--accent); }
+  @media (max-width: 600px) {
+    .ix-dx-live { margin-left: 14px; margin-right: 14px; grid-template-columns: 16px minmax(0, 1fr); align-items: start; }
+    .ix-dx-live a { grid-column: 2; }
+    .ix-dx-edited { padding-left: 14px; padding-right: 14px; }
+    .ix-dx-seen { grid-template-columns: minmax(0, 1fr) 60px 26px; }
+    .ix-dos-grid { grid-template-columns: minmax(0, 1fr); }
+  }
   .intel-hero { display: flex; flex-direction: column; gap: 4px; padding: 20px 22px; margin-bottom: 12px;
     background: var(--panel2); border: 1px solid var(--border); border-radius: 8px;
     text-decoration: none; transition: border-color .12s; }
@@ -4252,6 +4334,7 @@
     <div id="dest-card">
       <span id="dest-name"></span>
       <span id="dest-meta"></span>
+      <span id="dest-intel"></span>
       <button id="dest-clear">clear</button>
     </div>
   </div>
@@ -5566,6 +5649,10 @@
       <symbol id="ix-i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></symbol>
       <symbol id="ix-i-op" viewBox="0 0 24 24"><path d="M12 3l8.5 9-8.5 9-8.5-9z"/><path d="M12 8.5l3.3 3.5-3.3 3.5-3.3-3.5z"/></symbol>
       <symbol id="ix-i-zone" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" stroke-dasharray="3 2.4"/><circle cx="12" cy="12" r="1.6"/></symbol>
+      <symbol id="ix-i-hostile" viewBox="0 0 24 24"><path d="M12 4l9 15.5H3z"/></symbol>
+      <symbol id="ix-i-allied" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M8 12.5l2.8 2.8L16.5 9"/></symbol>
+      <symbol id="ix-i-neutral" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1.5"/></symbol>
+      <symbol id="ix-i-unknown" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M9.6 9.6a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.6"/><path d="M12 16.6v.4"/></symbol>
       <symbol id="ix-i-member" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c.8-3.8 3.6-6 7-6s6.2 2.2 7 6"/></symbol>
     </defs></svg>
     <div class="panel intel-mast" id="intel-mast">
@@ -7787,6 +7874,7 @@ function render(state) {
   } else {
     $("r-bearing").innerHTML = $("r-dist").innerHTML = "—";
   }
+  renderDestIntel(d);
 
   $("r-alt").innerHTML = fmtDist(state.altitude_m);
   $("r-speed").innerHTML = fmtSpeed(state.speed_ms);
@@ -8517,6 +8605,25 @@ async function openZoneInAtlas(zoneId) {
 }
 
 // ---------- destination ----------
+// Intelligence (#50 slice 4): the destination's dossier, or "Start dossier".
+// Fetched once per destination change, not on every state tick.
+let destIntelKey;
+async function renderDestIntel(d) {
+  const el = $("dest-intel");
+  const key = d && d.id != null && !["resource", "harvestable", "wildlife"].includes(d.kind) ? d.id : null;
+  if (key === destIntelKey) return;
+  destIntelKey = key;
+  el.innerHTML = "";
+  if (key == null) return;
+  let x;
+  try { const r = await fetch(`/api/intel/places/poi/${key}`); if (!r.ok) return; x = await r.json(); } catch { return; }
+  if (destIntelKey !== key) return;
+  const n = x.entries, nTxt = `${n} intel entr${n === 1 ? "y" : "ies"}`;
+  el.innerHTML = x.dossier
+    ? `<a href="#/intel/e/${x.dossier.id}-${encodeURIComponent(x.dossier.slug || "dossier")}" title="Open the org's dossier on this place">◆ Dossier${n ? ` · ${nTxt}` : ""}</a>`
+    : `<a class="${n ? "" : "quiet"}" href="#/intel/new/dossier?subject=poi:${key}" ` +
+      `title="${n ? `${nTxt} mention this place. A dossier gathers them on one page.` : "Start the org's page about this place"}">◆ ${n ? `${nTxt} · ` : ""}Start dossier</a>`;
+}
 async function setDestination(id) {
   await postJson("/api/destination", { poi_id: id });
   $("search").value = ""; $("search-results").hidden = true;
@@ -27353,8 +27460,17 @@ function intelParseRoute(sub) {
     intelRoute = { id: +m[1], anchor: m[2] && m[2].startsWith("sec-") ? m[2] : null };
     return m[2] === "history" || m[2] === "edit" ? m[2] : m[2] === "review" ? "reviewing" : "entry";
   }
-  m = /^new\/(procedure|tactic|report)(?:\?w=(\d+))?$/.exec(sub);
-  if (m) { intelRoute = { kind: m[1], warning: m[2] ? +m[2] : null }; return "new"; }
+  m = /^new\/(procedure|tactic|report|dossier)(?:\?(.*))?$/.exec(sub);
+  if (m) {
+    // ?w=<warning> (Write up →) · ?loc=<poi|zone:id> / ?unit=<org dossier id>
+    // (a report from a dossier) · ?subject=<poi|zone:id> / ?org=1 (a new dossier)
+    const q = new URLSearchParams(m[2] || "");
+    const ref = (k) => /^(poi|zone):\d+$/.test(q.get(k) || "") ? q.get(k) : null;
+    intelRoute = { kind: m[1], warning: /^\d+$/.test(q.get("w") || "") ? +q.get("w") : null,
+      loc: ref("loc"), subject: ref("subject"), unit: /^\d+$/.test(q.get("unit") || "") ? +q.get("unit") : null,
+      org: q.get("org") === "1" };
+    return "new";
+  }
   if (sub === "search") { intelRoute = {}; return "search"; }
   return null;
 }
@@ -28100,7 +28216,8 @@ function renderIntel(section) {
   // an entry's kind is known only once it loads (intelSetTab then).
   const tab = INTEL_KNOW_SECS.includes(section) ? section : section === "search" ? null
     : section === "reviewing" && intelAccess().reviewer ? "review"
-    : section === "new" && intelRoute.kind === "report" ? "feed" : "library";
+    : section === "new" && intelRoute.kind === "report" ? "feed"
+    : section === "new" && intelRoute.kind === "dossier" ? "dossiers" : "library";
   // Reviewers see a Review tab while the gate is on (#50 slice 2).
   const ia = intelAccess();
   $("intel-tab-review").hidden = !(ia.reviewer && ia.review_kinds.length) && section !== "review";
@@ -28119,7 +28236,8 @@ function renderIntel(section) {
   $("intel-search-wrap").hidden = !know;
   $("intel-new").hidden = !know;
   // The Feed's natural "new" is a report; everywhere else it's a procedure.
-  $("intel-new").href = tab === "feed" ? "#/intel/new/report" : "#/intel/new/procedure";
+  $("intel-new").href = tab === "feed" ? "#/intel/new/report" : tab === "dossiers" ? "#/intel/new/dossier"
+    : "#/intel/new/procedure";
   document.querySelectorAll("#intel-tabs a").forEach(a => {
     const on = a.dataset.sec === tab;
     a.classList.toggle("on", on);
@@ -28170,8 +28288,6 @@ function renderIntel(section) {
 // keep their slice-0 empty states. The server renders + sanitizes every body
 // (intel_md.py); this module only hydrates the markers it emits.
 const INTEL_KNOW_EMPTY = {
-  dossiers: ["DOSSIERS", "No dossiers yet.",
-    "One page per place or rival org, filled in automatically from the reports, warnings and ops that mention it."],
   rfi: ["RFI", "No questions yet.",
     "Requests for information: ask the org something, and the accepted answer stays where the next person can find it."],
 };
@@ -28186,7 +28302,15 @@ const INTEL_TEMPLATE = {
   tactic: "## Situation\nWhat you're up against, and where.\n\n## Most likely\nWhat they usually do.\n\n" +
     "## Most dangerous\nThe worst case worth planning for.\n\n## Counter\n- What to do about it\n\n## Loadout\n",
   report: "## What happened\nWhat you saw, in the order it happened.\n\n## What to do\n- \n",
+  dossier: "## Overview\nWhat this place is, and what crews should know before they go.\n\n## Approach\n- \n\n" +
+    "## Who uses it\n\n## Nearest help\n",
+  org: "## Who they are\nWhat kind of outfit this is, and where they operate.\n\n## How they operate\n- \n\n" +
+    "## What works against them\n",
 };
+// A dossier's body template depends on what it's about.
+const intelTemplateFor = (kind, dosKind) => kind === "dossier" && dosKind === "org" ? INTEL_TEMPLATE.org : INTEL_TEMPLATE[kind];
+const INTEL_STANCE = { hostile: "Hostile", neutral: "Neutral", allied: "Allied", unknown: "Unknown" };
+const intelStanceChip = (st) => st ? `<span class="ix-org-stance ${esc(st)}">${intelIco(st)}${esc(INTEL_STANCE[st] || st)}</span>` : "";
 let intelPlaystyles = null;      // /api/playstyles, fetched once
 let intelImageHosts = [];        // IMAGE_PREVIEW_HOSTS (from /api/intel/entries)
 let intelEd = null;              // the open editor's state (null = none open)
@@ -28285,7 +28409,7 @@ function renderIntelKnow(section) {
       `<p class="note">Arrives in a later Intelligence update.</p></div>`;
     return;
   }
-  ({ feed: intelFeed, library: intelLibrary, search: intelSearchView, entry: intelEntryView,
+  ({ feed: intelFeed, library: intelLibrary, dossiers: intelDossiers, search: intelSearchView, entry: intelEntryView,
      history: intelHistory, edit: intelEditor, new: intelEditor,
      review: intelReviewQueue, reviewing: intelReviewView })[section](box);
 }
@@ -28339,10 +28463,10 @@ async function intelFeed(box) {
   const opt = (list, cur, none) => `<option value="">${none}</option>` +
     list.map(x => `<option value="${esc(x)}"${x === cur ? " selected" : ""}>${esc(x)}</option>`).join("");
   box.innerHTML = `<div class="ix-grid" id="ix-feed-grid"><div class="panel"><div class="ix-panel-h"><h2>FEED</h2>` +
-    `<span class="muted">Reports, and procedures and tactics when they're published or revised</span></div>` +
+    `<span class="muted">Reports, and procedures, tactics and dossiers when they're published or revised</span></div>` +
     `<div class="ix-filters" role="group" aria-label="Filter the feed">` +
     chip("", "All") + chip("report", "Reports", "report") + chip("procedure", "Procedures", "procedure") + chip("tactic", "Tactics", "tactic") +
-    `<span class="sp"></span>` +
+    chip("dossier", "Dossiers", "dossier") + `<span class="sp"></span>` +
     `<select class="ti" id="ix-f-sys" aria-label="System">${opt(INTEL_SYSTEM_OPTS, f.system, "Every system")}</select>` +
     `<select class="ti" id="ix-f-act" aria-label="Activity">${opt(tags, f.activity, "Every activity")}</select>` +
     `<label class="ix-chip ix-check"><input type="checkbox" id="ix-f-exp"${f.expired ? " checked" : ""}> Show expired</label></div>` +
@@ -28460,6 +28584,212 @@ async function intelLibrary(box) {
   } catch (err) { const el = $("ix-lib"); if (el) el.innerHTML = intelStatus(err.message, true); }
 }
 
+// ---- DOSSIERS (#50 slice 4) ----
+// One page per place (a POI or survey zone) or per other org. Open edit; the
+// FROM ORG RECORDS half fills itself from what references the subject.
+let intelDosFilter = { kind: "", q: "" };
+function intelDossierRow(e) {
+  const d = e.dossier || {}, isOrg = d.subject_kind === "org";
+  const meta = [intelMarkTags(e),
+    isOrg ? intelStanceChip(d.stance) : "",
+    isOrg && d.aliases && d.aliases.length ? `<span>aka ${d.aliases.slice(0, 3).map(esc).join(", ")}</span>` : "",
+    !isOrg && d.subject_label && d.subject_label !== e.title ? `<span class="ix-loc">${intelIco(d.subject_ref && d.subject_ref.startsWith("zone:") ? "zone" : "pin")}${esc(d.subject_label)}</span>` : "",
+    e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "",
+    `<span>rev ${e.rev}</span>`, intelPatchChip(e.patch)].filter(Boolean).join("");
+  return `<a class="ix-row" href="${intelHref(e)}">` +
+    `<span class="ix-kind">${intelIco(isOrg ? "dossier" : (d.subject_ref || "").startsWith("zone:") ? "zone" : "pin")}${isOrg ? "Org" : "Place"}</span>` +
+    `<span class="ix-body"><span class="ix-t">${esc(e.title || "Untitled")}</span>` +
+    (e.summary ? `<div class="ix-teaser">${esc(e.summary)}</div>` : "") +
+    `<span class="ix-meta">${meta}</span></span>` +
+    `<span class="ix-when">${esc(intelWhen(e.revised_at || e.published_at))}</span></a>`;
+}
+async function intelDossiers(box) {
+  const f = intelDosFilter;
+  const chip = (k, label, ico) => `<button type="button" class="ix-chip" data-k="${k}" aria-pressed="${f.kind === k}">` +
+    `${ico ? intelIco(ico) : ""}${label}</button>`;
+  box.innerHTML = `<div class="panel"><div class="ix-panel-h"><h2>DOSSIERS</h2>` +
+    `<span class="muted">One page per place or other org, filled in from the reports, warnings and ops that mention it</span></div>` +
+    `<div class="ix-filters" role="group" aria-label="Filter dossiers">` +
+    chip("", "All") + chip("place", "Places", "pin") + chip("org", "Orgs", "dossier") + `<span class="sp"></span>` +
+    `<input class="ti" id="ix-dos-q" type="search" autocomplete="off" placeholder="Name or alias" aria-label="Filter dossiers by name or alias" value="${esc(f.q)}">` +
+    `</div><div class="ix-list" id="ix-dos">${intelStatus("Loading…")}</div></div>`;
+  box.querySelectorAll(".ix-chip[data-k]").forEach(b => b.onclick = () => { f.kind = b.dataset.k; intelDossiers(box); });
+  let rows = [];
+  const draw = () => {
+    const el = $("ix-dos"); if (!el) return;
+    const q = f.q.trim().toLowerCase();
+    const list = rows.filter(e => (!f.kind || (e.dossier || {}).subject_kind === f.kind) &&
+      (!q || e.title.toLowerCase().includes(q) || ((e.dossier || {}).aliases || []).some(a => a.toLowerCase().includes(q))));
+    if (!rows.length) {
+      el.innerHTML = `<div class="intel-know-empty" style="padding:14px 8px"><p class="lead">No dossiers yet.</p>` +
+        `<p class="muted">A dossier is the org's page about one place or one other org. Write what crews should know; ` +
+        `the reports, warnings and events that mention it gather underneath on their own.</p>` +
+        `<p style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">` +
+        `<a class="ix-primary" href="#/intel/new/dossier">${intelIco("pin")}Start a place dossier</a>` +
+        `<a class="ix-btn" href="#/intel/new/dossier?org=1">${intelIco("dossier")}Start an org dossier</a></p>` +
+        `<p class="muted" style="margin-top:10px">Or pick a place as your destination in the navigator and use ◆ Start dossier there.</p></div>`;
+      return;
+    }
+    if (!list.length) { el.innerHTML = intelStatus("Nothing matches that filter."); return; }
+    const places = list.filter(e => (e.dossier || {}).subject_kind !== "org"), orgs = list.filter(e => (e.dossier || {}).subject_kind === "org");
+    el.innerHTML = [[places, "PLACES"], [orgs, "ORGS"]].filter(([g]) => g.length)
+      .map(([g, h]) => `<div class="ix-group-h"><span>${h}</span><span>${g.length}</span></div>` + g.map(intelDossierRow).join("")).join("");
+  };
+  $("ix-dos-q").oninput = (ev) => { f.q = ev.target.value; draw(); };
+  try {
+    const d = await intelApi("/api/intel/entries?section=dossiers");
+    intelImageHosts = d.image_hosts || intelImageHosts;
+    rows = d.entries;
+    draw();
+  } catch (err) { const el = $("ix-dos"); if (el) el.innerHTML = intelStatus(err.message, true); }
+}
+// One row of a dossier's rollup: an entry that references the subject.
+function intelDxRow(x, opts = {}) {
+  const r = x.report, c = x.counts || {};
+  const small = [];
+  if (r) {
+    small.push(`<span>${esc(x.author_name || "?")}</span>`);
+    if (opts.loc && r.location) small.push(`<span>${esc(r.location)}</span>`);
+    small.push(r.valid_until ? `<span class="${r.expired ? "" : "ix-ttl"}">${esc(intelTtl(r.valid_until))}</span>` : `<span>no expiry</span>`);
+    if (c.corroborate) small.push(`<span>${c.corroborate} corroborated</span>`);
+    if (c.dispute) small.push(`<span class="bad">${c.dispute} disputed</span>`);
+  } else {
+    if (x.doctrine) small.push(`<span class="ix-tag doctrine">Doctrine</span>`);
+    const kw = x.kind === "dossier" ? `${(x.dossier || {}).subject_kind === "org" ? "org" : "place"} dossier`
+      : (INTEL_KIND[x.kind] || x.kind).toLowerCase();
+    small.push(`<span>${esc(kw)}${x.rev ? ` · rev ${x.rev}` : ""}` +
+      `${x.kind !== "dossier" && x.owner && x.owner.name ? ` · owner ${esc(x.owner.name)}` : ""}</span>`);
+    if (x.patch && x.patch.stale) small.push(intelPatchChip(x.patch));
+  }
+  if (x.visibility === "restricted") small.push(`<span class="ix-tag restricted">Restricted</span>`);
+  const kindIco = x.kind === "dossier" && x.dossier && x.dossier.subject_kind !== "org" ? "pin" : x.kind;
+  return `<a class="ix-dx-row${r && r.expired ? " expired" : ""}" href="${intelHref(x)}">${intelIco(kindIco)}` +
+    `<span><span class="t">${esc(x.title)}</span><small>${small.join("")}</small></span>` +
+    `<span class="r">${r ? intelGradeChip(r.grade) : ""}<span>${esc(intelWhen(x.revised_at || x.published_at))}</span></span></a>`;
+}
+function intelDossierView(box, e) {
+  const d = e.dossier || {}, isOrg = d.subject_kind === "org";
+  const subj = e.subject || {}, ro = e.rollup || {}, p = e.patch;
+  const isZone = (d.subject_ref || "").startsWith("zone:");
+  const kindWord = isOrg ? "org" : "place";
+  const sub = isOrg
+    ? [d.aliases && d.aliases.length ? `Also known as ${d.aliases.map(a => `<b>${esc(a)}</b>`).join(", ")}` : "",
+       d.sid ? `RSI SID <b>${esc(d.sid)}</b>` : "", e.system ? `active in ${esc(e.system)}` : ""].filter(Boolean).join(" · ")
+    : [subj.sub ? esc(subj.sub) : isZone ? "survey zone" : "place",
+       subj.state === "missing" ? "no longer in the navigator catalog" : subj.state === "hidden" ? "a private place you can't see"
+         : isZone ? "an org survey zone" : "from the navigator catalog"].join(" · ");
+  const repHref = isOrg ? `#/intel/new/report?unit=${e.id}`
+    : d.subject_ref ? `#/intel/new/report?loc=${encodeURIComponent(d.subject_ref)}` : "#/intel/new/report";
+  const warns = ro.warnings || [];
+  const w0 = warns[0];
+  const live = w0 ? `<div class="ix-dx-live" role="status">${intelIco("alert")}<span><b>ACTIVE ON THE DANGER BOARD</b> · ` +
+    `${esc(w0.severity)} · ${w0.threat === "pvp" ? "players" : "NPC pirates"}` +
+    `${w0.confirm_count ? ` · confirmed ${w0.confirm_count}×` : ""} · ${esc(intelDur(w0.age_s * 1000))} ago` +
+    `${warns.length > 1 ? ` · ${warns.length - 1} more` : ""}</span><a href="#/pirates">Open the board →</a></div>` : "";
+  const confirm = p.stale ? `<button type="button" class="ix-btn" id="ix-confirm" title="Clears the warning without editing">Still valid on ${esc(intelMinor(p.current))}</button>` : "";
+  const actions = `<div class="ix-actions">` +
+    `<a class="ix-primary" href="${intelHref(e)}/edit">${intelIco("edit")}Edit</a>` +
+    `<a class="ix-btn" href="${repHref}">${intelIco("report")}${isOrg ? "Report a sighting" : "Report from here"}</a>` +
+    `<a class="ix-btn" href="${intelHref(e)}/history">${intelIco("history")}History</a>` +
+    `<button type="button" class="ix-btn" id="ix-copy">${intelIco("link")}Copy link</button><span class="sp"></span>` +
+    (e.can_manage ? `<button type="button" class="ix-btn" id="ix-archive">Archive</button>` : "") + `</div>`;
+  const edited = `<div class="ix-dx-edited"><span>open edit · any member</span>` +
+    `<span>rev ${e.rev}${e.last_editor ? ` by <b>${esc(e.last_editor)}</b>` : ""} · ${esc(intelWhen(e.updated_at || e.revised_at || e.published_at))}</span>` +
+    `<span>${e.editors} editor${e.editors === 1 ? "" : "s"}</span>` +
+    (p.written ? (p.stale ? intelPatchChip(p) : `<span>checked on ${esc(intelMinor(p.written))}</span>`) : "") + confirm +
+    `<a href="${intelHref(e)}/history">History</a></div>`;
+  const sec = (title, count, rows, extra = "") => `<div class="ix-dx-sec"><h3><span><b>${title}</b>${count ? ` · ${count}` : ""}</span>${extra}</h3>${rows}</div>`;
+  const reports = ro.reports || [];
+  const repCount = ro.reports_total ? `${ro.reports_week ? `${ro.reports_week} this week · ` : ""}${ro.reports_total} in all` : "";
+  const repRows = reports.length ? reports.map(x => intelDxRow(x, { loc: isOrg })).join("") +
+      (ro.reports_total > reports.length ? `<p class="ix-dx-none">Showing the newest ${reports.length}. Search finds the rest.</p>` : "")
+    : `<p class="ix-dx-none">No reports ${isOrg ? "name this org" : "name this place"} yet. <a href="${repHref}">${isOrg ? "Report a sighting" : "Report from here"}</a></p>`;
+  const lib = ro.library || [], other = ro.other || [];
+  let roll = "";
+  if (isOrg) {
+    const seen = e.seen_at || [];
+    const max = Math.max(1, ...seen.map(x => x.n));
+    roll += sec("SEEN AT", e.sightings ? `from ${e.sightings} report${e.sightings === 1 ? "" : "s"} that name them` : "",
+      seen.length ? seen.map(x => `<div class="ix-dx-seen"><span class="t">${x.ref ? `<span class="intel-ref" data-ref-kind="${esc(x.ref.split(":")[0])}" data-ref-id="${esc(x.ref.split(":")[1])}"></span>` : esc(x.label)}` +
+        `<small>last ${esc(intelWhen(x.last))}</small></span><span class="bar"><i style="width:${Math.round(100 * x.n / max)}%"></i></span><span class="n">${x.n}</span></div>`).join("")
+        : `<p class="ix-dx-none">No sightings yet. A report counts when its UNIT line links this dossier.</p>`);
+  }
+  roll += sec("REPORTS", repCount, repRows);
+  if (lib.length) roll += sec(isOrg ? "TACTICS AND PROCEDURES" : "PROCEDURES AND TACTICS", `${lib.length} reference ${isOrg ? "them" : "it"}`, lib.map(x => intelDxRow(x)).join(""));
+  if (other.length) roll += sec("ALSO MENTIONED IN", String(other.length), other.map(x => intelDxRow(x)).join(""));
+  const evs = ro.events || [];
+  if (evs.length) {
+    const up = evs.filter(x => x.upcoming).length;
+    roll += sec("EVENTS HERE", [up ? `${up} coming up` : "", evs.length - up ? `${evs.length - up} past` : ""].filter(Boolean).join(" · "),
+      evs.map(x => `<a class="ix-dx-row${x.upcoming ? " soon" : ""}" href="#/events/${x.id}">${intelIco("cal")}` +
+        `<span><span class="t">${esc(x.title || "Event")}</span><small><span>${esc(x.status)}</span></small></span>` +
+        `<span class="r"><span>${esc(x.start_at ? new Date(x.start_at).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "")}</span></span></a>`).join(""));
+  }
+  const foot = isOrg ? "Seen at counts only reports whose UNIT line links this dossier. A mention anywhere else lists the report, but isn't a sighting. The RSI SID is plain text and isn't matched against anything."
+    : `Entries are listed when they reference ${esc(e.title)} with a reference chip or name it as a report's location.` +
+      (isZone ? "" : " Events are matched by their rally point or location name.");
+  const rollPanel = `<section class="panel ix-dx-roll" aria-label="Gathered from org records"><div class="ix-panel-h"><h2>FROM ORG RECORDS</h2>` +
+    `<span class="muted">gathered automatically · newest first</span></div>${roll}<p class="ix-dx-foot">${foot}</p></section>`;
+  // rail
+  let rail = "";
+  if (isOrg) {
+    const st = e.stance || {};
+    rail += `<div class="panel"><h2>IDENTITY</h2><dl class="ix-idk"><dt>STANCE</dt><dd>${intelStanceChip(d.stance)}` +
+      (st.since ? `<small>since ${esc(intelWhen(st.since))}${st.was ? ` · was ${esc(st.was)}` : ""}${st.by ? ` · set by ${esc(st.by)}` : ""}</small>` : "") + `</dd>` +
+      `<dt>ALIASES</dt><dd>${d.aliases && d.aliases.length ? d.aliases.map(esc).join(", ") + "<small>search finds the dossier by any of these</small>" : `<span class="muted">none</span>`}</dd>` +
+      `<dt>RSI SID</dt><dd>${d.sid ? esc(d.sid) : `<span class="muted">not set</span>`}</dd></dl>` +
+      `<p class="ix-rule-note">Describe the org, its ships and how it behaves. Don't name individual players.</p></div>`;
+  } else {
+    const ok = subj.state === "ok";
+    rail += `<div class="panel"><h2>LOCATION</h2><p class="ix-loc-name">${subj.state === "missing" ? `<s>${esc(subj.label || d.subject_label || "A deleted place")}</s>` : esc(subj.label || d.subject_label || "A place you can't see")}</p>` +
+      (subj.sub ? `<div class="ix-loc-sub">${esc(subj.sub)}</div>` : "") +
+      (ok && subj.poi_id ? `<button type="button" class="ix-primary" id="ix-loc-go">${intelIco("nav")}Set destination</button>`
+        : ok && subj.href ? `<a class="ix-btn" href="${subj.href}">${intelIco("zone")}Open in Prospector</a>` : "") + `</div>`;
+    const sv = ro.survey;
+    if (sv) {
+      const chips = (list) => list.map(o => `<span class="ix-tag">${esc(o.name)}${o.n ? ` · ${o.n}` : ""}</span>`).join("");
+      rail += `<div class="panel"><h2>SURVEY</h2>` + (sv.kind === "deep"
+        ? `<p class="muted" style="font-size:12px;margin:0 0 8px">${sv.marks} mark${sv.marks === 1 ? "" : "s"} · ${sv.positive} with rock</p>`
+        : `<p class="muted" style="font-size:12px;margin:0 0 8px">${sv.records} record${sv.records === 1 ? "" : "s"} on ${esc(sv.body)}</p>`) +
+        (sv.ores.length ? `<div class="ix-dx-chips" style="padding-left:0">${chips(sv.ores)}</div>` : "") +
+        (sv.harvestables && sv.harvestables.length ? `<div class="ix-dx-chips" style="padding-left:0">${chips(sv.harvestables)}</div>` : "") +
+        (!sv.ores.length && !(sv.harvestables || []).length ? `<p class="ix-dx-none" style="padding:0">Nothing logged here yet.</p>` : "") + `</div>`;
+    }
+  }
+  rail += `<div class="panel"><h2>DETAILS</h2><dl class="ix-dl"><dt>KIND</dt><dd>${isOrg ? "Org dossier" : "Place dossier"}</dd>` +
+    (e.system ? `<dt>SYSTEM</dt><dd>${esc(e.system)}</dd>` : "") +
+    `<dt>STARTED</dt><dd>${esc(e.published_at ? new Date(e.published_at).toLocaleDateString() : "")} by ${esc(e.author_name || "?")}</dd>` +
+    `<dt>MARKING</dt><dd>${e.visibility === "restricted" ? "Restricted: cleared members only" : "Org: every member"}</dd>` +
+    (e.tags.length ? `<dt>TAGS</dt><dd>${e.tags.map(t => `<span class="ix-tag free">#${esc(t)}</span>`).join("")}</dd>` : "") + `</dl></div>`;
+  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/dossiers">Dossiers</a><span>/</span>` +
+    `<span>${isOrg ? "Orgs" : "Places"}</span></nav>` +
+    `<div class="ix-grid"><div style="display:grid;gap:14px;min-width:0"><article class="panel ix-article"><div class="ix-head">` +
+    `<div class="ix-kindline">${intelIco("dossier")}Dossier · ${kindWord}${intelMarkTags(e)}${isOrg ? intelStanceChip(d.stance) : ""}` +
+    (e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "") + `</div>` +
+    `<h1 class="ix-title">${esc(e.title)}</h1>` + (sub ? `<p class="ix-dx-sub">${sub}</p>` : "") +
+    (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") + `${actions}</div>${live}` +
+    `<div class="ix-prose" id="ix-prose">${e.body_html || `<p class="muted">Nobody has written anything here yet. <a href="${intelHref(e)}/edit">Add what you know</a>.</p>`}</div>` +
+    `${edited}</article>${rollPanel}</div><aside class="ix-rail">${rail}</aside></div>`;
+  intelHydrate($("ix-prose"), e);
+  const rp = box.querySelector(".ix-dx-roll"); if (rp) intelHydrate(rp, null);
+  intelSetTab("dossiers");
+  if (intelRoute.anchor) { const t = document.getElementById(intelRoute.anchor); if (t) t.scrollIntoView({ block: "start" }); }
+  else window.scrollTo(0, 0);
+  const fail = (err) => intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000);
+  $("ix-copy").onclick = () => intelCopy(location.origin + location.pathname + intelHref(e), "Link copied");
+  if ($("ix-loc-go")) $("ix-loc-go").onclick = () => intelSetDest(subj.poi_id, subj.label);
+  if ($("ix-confirm")) $("ix-confirm").onclick = async () => {
+    try { await intelApi(`/api/intel/entries/${e.id}/confirm`, { method: "POST" }); intelEntryView(box); } catch (err) { fail(err); }
+  };
+  if ($("ix-archive")) $("ix-archive").onclick = async () => {
+    const ok = await confirmDialog(`“${e.title}” leaves Dossiers and search. Its history is kept and an admin can still see it.`,
+      { title: "Archive this dossier?", confirmLabel: "Archive", danger: true });
+    if (!ok) return;
+    try { await intelApi(`/api/intel/entries/${e.id}`, { method: "DELETE" }); location.hash = "#/intel/dossiers"; }
+    catch (err) { fail(err); }
+  };
+}
+
 // ---- SEARCH (masthead box; results at #/intel/search) ----
 let intelSearchT = null;
 function intelSearchInput() {
@@ -28563,7 +28893,8 @@ function intelRefChip(key, info) {
   } else el = document.createElement("span");
   el.className = "ix-ref" + (ok ? "" : " " + info.state);
   if (kind === "warning" && ok && info.severity) el.classList.add("sev-" + info.severity);
-  el.innerHTML = intelIco(INTEL_REF_ICO[kind] || "ref");
+  el.innerHTML = intelIco(kind === "entry" && ok && info.kind ? (info.kind === "dossier" && !info.stance ? "pin" : info.kind)
+    : INTEL_REF_ICO[kind] || "ref");
   if (info.state === "missing") {
     const s = document.createElement("s"); s.textContent = info.label || `deleted ${noun}`;
     el.append(s); el.title = `This ${noun} no longer exists`;
@@ -28619,6 +28950,7 @@ async function intelEntryView(box) {
   catch (err) { box.innerHTML = `<div class="panel">${intelStatus(err.status === 404 ? "This entry doesn't exist, or it was archived." : err.message, true)}</div>`; return; }
   if (intelCurSec !== "entry" || intelRoute.id !== id) return;
   if (e.status === "draft") { history.replaceState(null, "", `${intelHref(e)}/edit`); applyView(); return; }
+  if (e.kind === "dossier" && e.status === "published") { intelDossierView(box, e); return; }
   const isReport = e.kind === "report";
   const p = e.patch;
   const inReview = e.status === "in_review";
@@ -28667,7 +28999,7 @@ async function intelEntryView(box) {
   const salute = isReport ? `<dl class="ix-salute" aria-label="SALUTE report">` +
     sal("S", "SIZE", esc(h.size)) + sal("A", "ACTIVITY", esc(h.activity)) +
     sal("L", "LOCATION", (h.location_ref ? `<span class="intel-ref" data-ref-kind="${esc(h.location_ref.split(":")[0])}" data-ref-id="${esc(h.location_ref.split(":")[1])}"></span> ` : "") + esc(h.location)) +
-    sal("U", "UNIT", esc(h.unit)) +
+    sal("U", "UNIT", (h.unit_ref ? `<span class="intel-ref" data-ref-kind="entry" data-ref-id="${esc(h.unit_ref.split(":")[1])}"></span> ` : "") + esc(h.unit)) +
     sal("T", "TIME", h.time ? esc(new Date(h.time).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })) : "") +
     sal("E", "EQUIPMENT", esc(h.equipment)) + `</dl>` : "";
   const updates = isReport ? `<section class="ix-updates" aria-label="Updates"><h2>UPDATES${e.updates.length ? ` · ${e.updates.length}` : ""}</h2>` +
@@ -28686,6 +29018,7 @@ async function intelEntryView(box) {
       `<button type="submit" class="ix-primary" id="ix-upd-go">Post update</button></div>` +
       `<p class="ix-save-err" id="ix-upd-err" role="alert" hidden></p></form>` : "") + `</section>` : "";
   const crumb = isReport ? `<a href="#/intel/feed">Feed</a><span>/</span><span>Report</span>`
+    : e.kind === "dossier" ? `<a href="#/intel/dossiers">Dossiers</a><span>/</span><span>${(e.dossier || {}).subject_kind === "org" ? "Orgs" : "Places"}</span>`
     : `<a href="#/intel/library">Library</a><span>/</span><span>${esc(e.activity || "General")}</span>`;
   const linked = (e.linked_from || []).length ? `<div class="panel"><div class="ix-panel-h"><h2>LINKED FROM</h2><span class="muted">${e.linked_from.length}</span></div>` +
     `<ul class="ix-rl">${e.linked_from.map(b => `<li>${intelIco(b.kind)}<span><a href="${intelHref(b)}">${esc(b.title)}</a>` +
@@ -28932,7 +29265,9 @@ async function intelHistory(box) {
   try { [e, h] = await Promise.all([intelApi(`/api/intel/entries/${id}`), intelApi(`/api/intel/entries/${id}/revisions`)]); }
   catch (err) { box.innerHTML = `<div class="panel">${intelStatus(err.message, true)}</div>`; return; }
   if (intelCurSec !== "history" || intelRoute.id !== id) return;
-  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/library">Library</a><span>/</span>` +
+  const home = e.kind === "report" ? ["feed", "Feed"] : e.kind === "dossier" ? ["dossiers", "Dossiers"] : ["library", "Library"];
+  intelSetTab(home[0]);
+  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/${home[0]}">${home[1]}</a><span>/</span>` +
     `<a href="${intelHref(e)}">${esc(e.title)}</a><span>/</span><span>History</span></nav>` +
     `<div class="ix-grid"><div class="panel"><div class="ix-panel-h"><h2>CHANGES</h2><span class="muted" id="ix-diff-n"></span></div>` +
     `<div id="ix-diff-box">${intelStatus("Pick a revision to see what it changed.")}</div></div>` +
@@ -29055,15 +29390,24 @@ function intelEdValues() {
     v.header = { size: $("ix-r-size").value, activity: $("ix-r-act").value,
       location_ref: intelEd.locRef ? intelEd.locRef.key : null, location_label: intelEd.locRef ? intelEd.locRef.label : null,
       location: $("ix-r-loc").value, unit: $("ix-r-unit").value,
-      time: t ? new Date(t).toISOString() : null, equipment: $("ix-r-eq").value, warning_id: intelEd.warningId || null };
+      time: t ? new Date(t).toISOString() : null, equipment: $("ix-r-eq").value, warning_id: intelEd.warningId || null,
+      unit_ref: intelEd.unitRef ? intelEd.unitRef.key : null, unit_label: intelEd.unitRef ? intelEd.unitRef.label : null };
     v.grade_rel = $("ix-r-rel").value || null;
     v.grade_cred = $("ix-r-cred").value ? +$("ix-r-cred").value : null;
     v.valid_until = intelEd.validUntil || null;
   }
+  if (intelEd && intelEd.kind === "dossier" && $("ix-dos") && intelEd.dos) {
+    const org = intelEd.dos.kind === "org";
+    v.dossier = { subject_kind: intelEd.dos.kind, subject_ref: !org && intelEd.dos.ref ? intelEd.dos.ref.key : null,
+      subject_label: !org && intelEd.dos.ref ? intelEd.dos.ref.label : null,
+      stance: org ? $("ix-d-stance").value : "unknown",
+      aliases: org ? $("ix-d-alias").value.split(",").map(x => x.trim()).filter(Boolean).slice(0, 8) : [],
+      sid: org ? $("ix-d-sid").value : "" };
+  }
   return v;
 }
 const INTEL_TITLE_PH = { procedure: "e.g. Hull-C escort formation", tactic: "e.g. Countering a gate camp at Pyro Gateway",
-  report: "e.g. Gate camp on the Pyro side of the jump point" };
+  report: "e.g. Gate camp on the Pyro side of the jump point", dossier: "e.g. Pyro Gateway, or Red Wake Syndicate" };
 // ISO → the value a datetime-local input wants (local time, minutes).
 function intelLocalInput(iso) {
   const d = iso ? new Date(iso) : null;
@@ -29076,6 +29420,7 @@ function intelLocalInput(iso) {
 function intelEdMountReport(v) {
   const ed = intelEd, h = v.header || {};
   ed.locRef = h.location_ref ? { key: h.location_ref, label: h.location_label || h.location_ref } : null;
+  ed.unitRef = h.unit_ref ? { key: h.unit_ref, label: h.unit_label || "an org dossier" } : null;
   ed.validUntil = v.valid_until || null;
   if (h.warning_id) ed.warningId = h.warning_id;
   const inp = (id, lbl, val, ph, max) => `<label class="ix-lbl"><span>${lbl}</span><input class="ti" id="${id}" maxlength="${max}" autocomplete="off" ` +
@@ -29095,7 +29440,10 @@ function intelEdMountReport(v) {
     `<button type="button" id="ix-r-now">Now</button></span></label>` +
     inp("ix-r-size", "SIZE", h.size, "e.g. 5 ships, 2 crewed heavies", 120) +
     inp("ix-r-act", "WHAT THEY'RE DOING", h.activity, "e.g. Interdicting anything over 96 SCU", 200) +
-    inp("ix-r-unit", "UNIT", h.unit, "Who: an org, ship tags", 200) +
+    `<div class="ix-lbl"><span>UNIT · their org dossier</span><div id="ix-r-unitchip"></div>` +
+    `<div class="ix-pick" id="ix-r-upick"><input class="ti" id="ix-r-unitq" autocomplete="off" placeholder="Find an org dossier…" aria-label="Link an org dossier">` +
+    `<ul id="ix-r-unitres" hidden></ul></div></div>` +
+    inp("ix-r-unit", "UNIT DETAILS", h.unit, "Ship tags, how you knew it was them", 200) +
     inp("ix-r-eq", "EQUIPMENT", h.equipment, "e.g. 3× Polaris, 2× Hornet Mk II", 300) +
     `<label class="ix-lbl"><span>SOURCE</span><select class="ti" id="ix-r-rel">${rel}</select></label>` +
     `<label class="ix-lbl"><span>INFORMATION</span><select class="ti" id="ix-r-cred">${cred}</select></label>` +
@@ -29120,12 +29468,94 @@ function intelEdMountReport(v) {
   intelRefPicker($("ix-r-locq"), $("ix-r-locres"), ["poi", "zone"], (it) => {
     ed.locRef = { key: it.key, label: it.label }; chip(); intelEdChanged();
   });
+  // UNIT: linking an org dossier makes this report a sighting of that org.
+  const uchip = () => {
+    const c = $("ix-r-unitchip");
+    c.innerHTML = ed.unitRef ? `<span class="ix-person">${intelIco("dossier", "ix-ico sm")}${esc(ed.unitRef.label)}` +
+      `<button type="button" id="ix-r-unitx" aria-label="Unlink the org dossier">×</button></span>` : "";
+    $("ix-r-upick").hidden = !!ed.unitRef;
+    if ($("ix-r-unitx")) $("ix-r-unitx").onclick = () => { ed.unitRef = null; uchip(); intelEdChanged(); $("ix-r-unitq").focus(); };
+  };
+  uchip();
+  intelRefPicker($("ix-r-unitq"), $("ix-r-unitres"), (x) => !!x.org, (it) => {
+    ed.unitRef = { key: it.key, label: it.label }; uchip(); intelEdChanged();
+  });
   $("ix-r-now").onclick = () => { $("ix-r-time").value = intelLocalInput(new Date().toISOString()); intelEdChanged(); };
   $("ix-r-valid").onchange = (ev) => {
     const val = ev.target.value;
     if (val !== "cur") ed.validUntil = val ? new Date(Date.now() + (+val) * 3600000).toISOString() : null;
     hint(); intelEdChanged();
   };
+}
+// A dossier's subject (#50 slice 4): a place (picked from the navigator
+// catalog or the survey zones) or another org (stance, aliases, RSI SID). The
+// subject is fixed once published; an org's name is its title.
+function intelEdMountDossier(v) {
+  const ed = intelEd, d = v.dossier || { subject_kind: "place" };
+  const locked = ed.status === "published";
+  ed.dos = { kind: d.subject_kind === "org" ? "org" : "place",
+    ref: d.subject_ref ? { key: d.subject_ref, label: d.subject_label || d.subject_ref } : null };
+  const stOpts = Object.entries(INTEL_STANCE).map(([k, t]) => `<option value="${k}"${(d.stance || "unknown") === k ? " selected" : ""}>${t}</option>`).join("");
+  const wrap = $("ix-dos");
+  wrap.innerHTML = `<div class="ix-rep-h"><span>ABOUT</span><small id="ix-d-hint"></small></div>` +
+    (locked ? "" : `<div class="seg" id="ix-d-kind" role="group" aria-label="What it's about" style="margin-bottom:10px">` +
+      `<button type="button" data-dk="place">A PLACE</button><button type="button" data-dk="org">AN ORG</button></div>`) +
+    `<div class="ix-dos-grid">` +
+    `<div class="ix-lbl ix-rep-wide" id="ix-d-place"><span>PLACE · a place or survey zone</span><div id="ix-d-chip"></div>` +
+    `<div class="ix-pick" id="ix-d-pick"><input class="ti" id="ix-d-q" autocomplete="off" placeholder="Find a place or survey zone…" aria-label="Find the place">` +
+    `<ul id="ix-d-res" hidden></ul></div></div>` +
+    `<label class="ix-lbl ix-d-org"><span>STANCE</span><select class="ti" id="ix-d-stance">${stOpts}</select></label>` +
+    `<label class="ix-lbl ix-d-org"><span>ALIASES · comma-separated</span><input class="ti" id="ix-d-alias" maxlength="330" autocomplete="off" ` +
+    `placeholder="e.g. RWS, Red Wake" value="${esc((d.aliases || []).join(", "))}"></label>` +
+    `<label class="ix-lbl ix-d-org"><span>RSI SID</span><input class="ti" id="ix-d-sid" maxlength="40" autocomplete="off" placeholder="e.g. REDWAKE" value="${esc(d.sid || "")}"></label>` +
+    `<p class="ix-dos-exists ix-rep-wide" id="ix-d-exists" role="status" hidden></p></div>`;
+  const draw = () => {
+    const org = ed.dos.kind === "org";
+    wrap.querySelectorAll("[data-dk]").forEach(b => { const on = b.dataset.dk === ed.dos.kind; b.classList.toggle("on", on); b.setAttribute("aria-pressed", on); });
+    $("ix-d-place").hidden = org;
+    wrap.querySelectorAll(".ix-d-org").forEach(x => { x.hidden = !org; });
+    $("ix-d-hint").textContent = org
+      ? "Its name is the title. Describe the org, its ships and how it behaves; don't name individual players."
+      : locked ? "A dossier stays about its place." : "Pick the place. Its reports, warnings and events gather on the page by themselves.";
+    const c = $("ix-d-chip");
+    c.innerHTML = ed.dos.ref ? `<span class="ix-person">${intelIco(ed.dos.ref.key.startsWith("zone:") ? "zone" : "pin", "ix-ico sm")}${esc(ed.dos.ref.label)}` +
+      (locked ? "" : `<button type="button" id="ix-d-x" aria-label="Clear the place">×</button>`) + `</span>` : "";
+    $("ix-d-pick").hidden = !!ed.dos.ref;
+    if ($("ix-d-x")) $("ix-d-x").onclick = () => { ed.dos.ref = null; draw(); intelEdChanged(); $("ix-d-q").focus(); };
+    if (ed.kind === "dossier") $("ix-ed-title").placeholder = org ? "e.g. Red Wake Syndicate" : "e.g. Pyro Gateway";
+  };
+  // "There's already a dossier for this": say so before anyone writes a page.
+  const exists = (dd) => {
+    const el = $("ix-d-exists"); if (!el) return;
+    el.hidden = !dd || (ed.id && dd.id === ed.id);
+    if (!el.hidden) el.innerHTML = `There's already a dossier for this: <a href="${intelHref(dd)}">${esc(dd.title)}</a>. Add to it instead.`;
+  };
+  ed.dosCheck = async () => {
+    if (locked || ed.kind !== "dossier") return;
+    try {
+      if (ed.dos.kind === "org") {
+        const name = $("ix-ed-title").value.trim();
+        exists(name.length > 1 ? (await intelApi(`/api/intel/orgs?name=${encodeURIComponent(name)}`)).dossier : null);
+      } else if (ed.dos.ref) {
+        const [k, i] = ed.dos.ref.key.split(":");
+        exists((await intelApi(`/api/intel/places/${k}/${i}`)).dossier);
+      } else exists(null);
+    } catch { exists(null); }
+  };
+  wrap.querySelectorAll("[data-dk]").forEach(b => b.onclick = () => {
+    if (b.dataset.dk === ed.dos.kind) return;
+    const ta = $("ix-area"), swap = ed.templated && ta.value === intelTemplateFor("dossier", ed.dos.kind);
+    ed.dos.kind = b.dataset.dk;
+    if (swap) ta.value = intelTemplateFor("dossier", ed.dos.kind);
+    draw(); intelEdChanged(); ed.dosCheck();
+  });
+  intelRefPicker($("ix-d-q"), $("ix-d-res"), ["poi", "zone"], (it) => {
+    ed.dos.ref = { key: it.key, label: it.label };
+    if (!$("ix-ed-title").value.trim()) $("ix-ed-title").value = it.label;
+    draw(); intelEdChanged(); ed.dosCheck();
+  });
+  draw();
+  ed.dosCheck();
 }
 // A search-as-you-type picker over /api/intel/refs/search (the reference
 // inserter, and the report's location). `kinds` narrows what it offers.
@@ -29143,7 +29573,7 @@ function intelRefPicker(input, list, kinds, onPick) {
       let d;
       try { d = await intelApi(`/api/intel/refs/search?q=${encodeURIComponent(q)}`); } catch { return; }
       if (input.value.trim() !== q) return;
-      items = d.results.filter(x => !kinds || kinds.includes(x.kind)).slice(0, 12);
+      items = d.results.filter(x => !kinds || (typeof kinds === "function" ? kinds(x) : kinds.includes(x.kind))).slice(0, 12);
       list.innerHTML = items.length ? items.map((x, i) => `<li role="option"><button type="button" data-i="${i}">` +
         `${intelIco(INTEL_REF_ICO[x.kind] || "ref", "ix-ico sm")}<span>${esc(x.label)}<small>${esc(x.sub || "")}</small></span></button></li>`).join("")
         : `<li class="none">Nothing matches “${esc(q)}”.</li>`;
@@ -29195,6 +29625,7 @@ async function intelEditor(box) {
   }
   if (intelCurSec !== (isNew ? "new" : "edit") || (!isNew && intelRoute.id !== id)) return;
   if (e && e.kind === "report") intelSetTab("feed");
+  if (e && e.kind === "dossier") intelSetTab("dossiers");
   // "Write up →" from a danger-board warning: a report pre-filled with where,
   // what and when, citing the warning.
   let pre = null;
@@ -29218,23 +29649,46 @@ async function intelEditor(box) {
       body: `Written up from the danger board: [[warning:${wid}]]\n\n` + INTEL_TEMPLATE.report,
       header: { time: new Date().toISOString(), warning_id: wid } };
   }
+  // A report from a dossier (?loc= / ?unit=), or a dossier started from a
+  // place (?subject=, the navigator's "Start dossier") or as an org (?org=1).
+  if (isNew && !pre && (intelRoute.loc || intelRoute.unit || intelRoute.subject || intelRoute.org)) {
+    const keys = [intelRoute.loc, intelRoute.subject, intelRoute.unit ? `entry:${intelRoute.unit}` : null].filter(Boolean);
+    let refs = {};
+    if (keys.length) { try { refs = (await intelApi(`/api/intel/refs?keys=${keys.join(",")}`)).refs; } catch {} }
+    if (intelCurSec !== "new") return;
+    const label = (k) => k && refs[k] && refs[k].state === "ok" ? refs[k].label : null;
+    if (kind === "report") {
+      const u = intelRoute.unit ? `entry:${intelRoute.unit}` : null;
+      pre = { title: "", summary: "", activity: null, system: null, tags: [], body: INTEL_TEMPLATE.report,
+        header: { time: new Date().toISOString(),
+          location_ref: label(intelRoute.loc) ? intelRoute.loc : null, location_label: label(intelRoute.loc),
+          unit_ref: label(u) ? u : null, unit_label: label(u), unit: "" } };
+    } else if (kind === "dossier") {
+      const org = intelRoute.org && !intelRoute.subject;
+      const lab = label(intelRoute.subject);
+      pre = { title: lab || "", summary: "", activity: null, system: null, tags: [], body: intelTemplateFor("dossier", org ? "org" : "place"),
+        dossier: { subject_kind: org ? "org" : "place", subject_ref: lab ? intelRoute.subject : null, subject_label: lab } };
+    }
+  }
   intelEd = { key: isNew ? `n${kind}` : `e${id}`, id, kind: e ? e.kind : kind, status: e ? e.status : "draft",
     rev: e ? e.rev : 0, entry: e, major: false, timer: null, saving: false, dirty: false,
-    templated: isNew && !pre, visibility: e ? e.visibility : "org", locRef: null, validUntil: null, warningId: null,
+    templated: isNew && (!pre || pre.body === intelTemplateFor(kind, pre.dossier && pre.dossier.subject_kind)),
+    visibility: e ? e.visibility : "org", locRef: null, unitRef: null, validUntil: null, warningId: null, dos: null,
     // The marking control shows to cleared members, and on an entry that's
     // already RESTRICTED (whoever can open it is cleared anyway).
     canMark: intelAccess().cleared || (e && e.visibility === "restricted") };
   const published = intelEd.status === "published";
   const v = e ? { title: e.title, summary: e.summary, body: e.body_md, activity: e.activity, system: e.system, tags: e.tags,
-      header: e.header, grade_rel: e.grade_rel, grade_cred: e.grade_cred, valid_until: e.valid_until }
+      header: e.header, grade_rel: e.grade_rel, grade_cred: e.grade_cred, valid_until: e.valid_until, dossier: e.dossier }
     : pre || { title: "", summary: "", body: INTEL_TEMPLATE[kind], activity: null, system: null, tags: [],
-      header: kind === "report" ? { time: new Date().toISOString() } : null };
+      header: kind === "report" ? { time: new Date().toISOString() } : null, dossier: { subject_kind: "place" } };
   const opt = (list, cur, none) => `<option value="">${none}</option>` +
     list.map(x => `<option value="${esc(x)}"${x === cur ? " selected" : ""}>${esc(x)}</option>`).join("");
   const tb = (md, label, inner, kbd) => `<button type="button" class="ix-tb" data-md="${md}" title="${label}${kbd ? ` (${kbd})` : ""}" aria-label="${label}">${inner}</button>`;
   const crumbTail = e ? `<a href="${published ? intelHref(e) : "#/intel/library"}">${esc(e.title)}</a><span>/</span><span>${e.kind === "report" && published ? "Correct" : "Edit"}</span>`
     : `<span id="ix-crumb-t">New ${esc(INTEL_KIND[kind].toLowerCase())}</span>`;
-  const home = (k) => k === "report" ? `<a href="#/intel/feed" id="ix-crumb-home">Feed</a>` : `<a href="#/intel/library" id="ix-crumb-home">Library</a>`;
+  const home = (k) => k === "report" ? `<a href="#/intel/feed" id="ix-crumb-home">Feed</a>`
+    : k === "dossier" ? `<a href="#/intel/dossiers" id="ix-crumb-home">Dossiers</a>` : `<a href="#/intel/library" id="ix-crumb-home">Library</a>`;
   box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb">${home(intelEd.kind)}<span>/</span>${crumbTail}</nav>` +
     `<div class="ix-ed-grid"><div class="panel ix-ed">` +
     `<div class="ix-restore" id="ix-restore" hidden><span id="ix-restore-msg"></span>` +
@@ -29245,7 +29699,7 @@ async function intelEditor(box) {
       `major revision is waiting for review. You're editing the live text${e.pending.mine ? "; submitting again replaces your earlier one" : ""}.</span></div>` : "") +
     `<div class="ix-ed-head">` +
     (isNew ? `<div class="seg" id="ix-ed-kind" role="group" aria-label="Kind">` +
-      ["procedure", "tactic", "report"].map(k => `<button type="button" data-k="${k}" class="${k === kind ? "on" : ""}" aria-pressed="${k === kind}">${INTEL_KIND[k].toUpperCase()}</button>`).join("") + `</div>` : "") +
+      ["procedure", "tactic", "report", "dossier"].map(k => `<button type="button" data-k="${k}" class="${k === kind ? "on" : ""}" aria-pressed="${k === kind}">${INTEL_KIND[k].toUpperCase()}</button>`).join("") + `</div>` : "") +
     `<input class="ti ix-ed-title" id="ix-ed-title" maxlength="140" autocomplete="off" aria-label="Title" ` +
     `placeholder="${INTEL_TITLE_PH[intelEd.kind]}" value="${esc(v.title)}">` +
     `<label class="ix-lbl"><span>SUMMARY <i id="ix-sum-n"></i></span>` +
@@ -29254,7 +29708,8 @@ async function intelEditor(box) {
     `<label class="ix-lbl"><span>ACTIVITY</span><select class="ti" id="ix-ed-act">${opt(tags, v.activity, "General")}</select></label>` +
     `<label class="ix-lbl"><span>SYSTEM</span><select class="ti" id="ix-ed-sys">${opt(INTEL_SYSTEM_OPTS, v.system, "Any system")}</select></label>` +
     `<label class="ix-lbl"><span>TAGS</span><input class="ti" id="ix-ed-tags" autocomplete="off" placeholder="escort, hull-c" value="${esc(v.tags.join(", "))}"></label>` +
-    `</div><div class="ix-rep" id="ix-rep"${intelEd.kind === "report" ? "" : " hidden"}></div></div>` +
+    `</div><div class="ix-rep" id="ix-rep"${intelEd.kind === "report" ? "" : " hidden"}></div>` +
+    `<div class="ix-rep ix-dos" id="ix-dos"${intelEd.kind === "dossier" ? "" : " hidden"}></div></div>` +
     `<div class="ix-tools" role="toolbar" aria-label="Formatting">` +
     tb("h", "Heading", "<b>H</b>") + tb("b", "Bold", "<b>B</b>", "Ctrl+B") + tb("i", "Italic", "<i>I</i>", "Ctrl+I") +
     tb("u", "Underline", "<u>U</u>") + tb("s", "Strikethrough", "<s>S</s>") + `<span class="sep"></span>` +
@@ -29283,11 +29738,19 @@ async function intelEditor(box) {
   const ta = $("ix-area");
   ta.value = v.body || "";
   intelEdMountReport(v);
-  $("ix-rep").addEventListener("input", (ev) => { if (ev.target.id !== "ix-r-locq") intelEdChanged(); });
+  intelEdMountDossier(v);
+  $("ix-dos").addEventListener("input", (ev) => { if (ev.target.id !== "ix-d-q") intelEdChanged(); });
+  $("ix-dos").addEventListener("change", (ev) => { if (ev.target.tagName === "SELECT") intelEdChanged(); });
+  $("ix-ed-title").addEventListener("input", () => {
+    if (intelEd && intelEd.kind === "dossier" && intelEd.dos && intelEd.dos.kind === "org") {
+      clearTimeout(intelEd.dosT); intelEd.dosT = setTimeout(() => intelEd && intelEd.dosCheck && intelEd.dosCheck(), 500);
+    }
+  });
+  $("ix-rep").addEventListener("input", (ev) => { if (!["ix-r-locq", "ix-r-unitq"].includes(ev.target.id)) intelEdChanged(); });
   $("ix-rep").addEventListener("change", (ev) => { if (ev.target.tagName === "SELECT" && ev.target.id !== "ix-r-valid") intelEdChanged(); });
   intelEdCounts();
   intelEdRenderSave();
-  if (e && e.can_manage && published) intelEdRenderPeople();
+  if (e && e.can_manage && published && e.kind !== "dossier") intelEdRenderPeople();   // dossiers are open edit
   // Restore an unsaved local copy (a published entry's edit, or a new entry
   // that never got a title, so never reached the server).
   let bk = null;
@@ -29301,18 +29764,21 @@ async function intelEditor(box) {
       $("ix-ed-title").value = bk.title || ""; $("ix-ed-sum").value = bk.summary || ""; ta.value = bk.body || "";
       $("ix-ed-act").value = bk.activity || ""; $("ix-ed-sys").value = bk.system || ""; $("ix-ed-tags").value = (bk.tags || []).join(", ");
       if (intelEd.kind === "report" && bk.header) intelEdMountReport(bk);
+      if (intelEd.kind === "dossier" && bk.dossier) intelEdMountDossier(bk);
       $("ix-restore").hidden = true; intelEd.templated = false; intelEdChanged();
     };
     $("ix-restore-x").onclick = () => { try { localStorage.removeItem(intelEdBackupKey()); } catch {} $("ix-restore").hidden = true; };
   }
   if (isNew) $("ix-ed-kind").querySelectorAll("button").forEach(b => b.onclick = () => {
     if (b.dataset.k === intelEd.kind) return;
-    const swap = intelEd.templated && ta.value === INTEL_TEMPLATE[intelEd.kind];
+    const swap = intelEd.templated && ta.value === intelTemplateFor(intelEd.kind, intelEd.dos && intelEd.dos.kind);
     intelEd.kind = b.dataset.k; intelEd.key = `n${intelEd.kind}`;
     $("ix-ed-kind").querySelectorAll("button").forEach(x => { const on = x === b; x.classList.toggle("on", on); x.setAttribute("aria-pressed", on); });
-    if (swap) ta.value = INTEL_TEMPLATE[intelEd.kind];
+    if (swap) ta.value = intelTemplateFor(intelEd.kind, intelEd.dos && intelEd.dos.kind);
     $("ix-ed-title").placeholder = INTEL_TITLE_PH[intelEd.kind];
     $("ix-rep").hidden = intelEd.kind !== "report";
+    $("ix-dos").hidden = intelEd.kind !== "dossier";
+    if (intelEd.kind === "dossier") intelEdMountDossier({ dossier: intelEd.dos ? { subject_kind: intelEd.dos.kind } : null });
     $("ix-crumb-home").outerHTML = home(intelEd.kind);
     intelEdRenderSave(true);
     history.replaceState(null, "", `#/intel/new/${intelEd.kind}`);
@@ -29450,7 +29916,7 @@ function intelEdCounts() {
 function intelEdChanged() {
   if (!intelEd) return;
   intelEd.dirty = true;
-  if (intelEd.templated && $("ix-area").value !== INTEL_TEMPLATE[intelEd.kind]) intelEd.templated = false;
+  if (intelEd.templated && $("ix-area").value !== intelTemplateFor(intelEd.kind, intelEd.dos && intelEd.dos.kind)) intelEd.templated = false;
   intelEdCounts();
   const vals = intelEdValues();
   try { localStorage.setItem(intelEdBackupKey(), JSON.stringify({ ...vals, rev: intelEd.rev, at: new Date().toISOString() })); } catch {}
@@ -29496,7 +29962,11 @@ async function intelEdAutosave(leaving) {
       intelEdRenderSave();
     }
   } catch (err) {
-    if (intelEd === ed && $("ix-saved")) $("ix-saved").textContent = `Not saved: ${err.message}`;
+    if (intelEd === ed && $("ix-saved")) {
+      $("ix-saved").textContent = `Not saved: ${err.message}`;
+      if (err.detail && err.detail.existing)
+        $("ix-saved").insertAdjacentHTML("beforeend", ` <a href="${intelHref(err.detail.existing)}">Open it</a>`);
+    }
   } finally { ed.saving = false; }
 }
 function intelEdRenderSave(keepNote) {
@@ -29522,6 +29992,7 @@ function intelEdRenderSave(keepNote) {
       `<p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 12px">` +
       (gated ? `Only you can see a draft. ${INTEL_KIND[ed.kind]}s are reviewed before they're published: a reviewer approves it, or sends it back with a note.`
         : isReport ? `Only you can see a draft. A report is a record of what you saw: once it's published you can correct it for 15 minutes, then you add updates.`
+        : ed.kind === "dossier" ? `Only you can see a draft. Once it's published any member can edit it, and every change is kept.`
         : `Only you can see a draft. Publishing puts it in the Library, the Feed and search, stamped with the game patch.`) + `</p>` +
       `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-publish">${gated ? "Submit for review" : isReport ? "Publish report" : "Publish"}</button>` +
       (ed.id ? `<button type="button" class="ix-btn" id="ix-del">Delete draft</button>` : "") + `</div>` +
@@ -29559,11 +30030,13 @@ function intelEdRenderSave(keepNote) {
     `<div class="ix-fld"><span>KIND OF CHANGE</span><div class="seg" role="group" aria-label="Kind of change">` +
     `<button type="button" data-major="0" class="${major ? "" : "on"}" aria-pressed="${!major}">MINOR</button>` +
     `<button type="button" data-major="1" class="${major ? "on" : ""}" aria-pressed="${major}">MAJOR</button></div>` +
-    `<small>${toReview ? `The procedure itself changed. A reviewer approves it first; readers keep seeing rev ${ed.rev} until then.`
-      : major ? "The procedure itself changed. Shows as revised in the Feed and re-stamps the patch."
+    `<small>${toReview ? `The substance changed. A reviewer approves it first; readers keep seeing rev ${ed.rev} until then.`
+      : major ? "The substance changed. Shows as revised in the Feed and re-stamps the patch."
       : "Typos and wording. Doesn't show in the Feed or change the patch stamp."}</small></div>` +
     `<label class="ix-fld"><span>WHAT CHANGED${major ? " · required" : " · optional"}</span>` +
-    `<input class="ti" id="ix-note" maxlength="300" autocomplete="off" placeholder="${major ? "e.g. Escorts now break at QT exit" : "e.g. Fixed typos"}" value="${esc(noteVal)}"></label>` +
+    `<input class="ti" id="ix-note" maxlength="300" autocomplete="off" placeholder="${major ? (ed.kind === "dossier" ? "e.g. Hold 10 km on arrival, not 8" : "e.g. Escorts now break at QT exit") : "e.g. Fixed typos"}" value="${esc(noteVal)}"></label>` +
+    (ed.kind === "dossier" && ed.dos && ed.dos.kind === "org" && ed.entry.dossier && $("ix-d-stance") && $("ix-d-stance").value !== ed.entry.dossier.stance
+      ? `<small class="muted" style="display:block;margin:-6px 0 10px">History records it as “Stance: ${esc(ed.entry.dossier.stance)} → ${esc($("ix-d-stance").value)}”.</small>` : "") +
     `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-save">${toReview ? "Submit for review" : `Save rev ${ed.rev + 1}`}</button>` +
     `<a class="ix-btn" href="${intelHref(ed.entry)}">Cancel</a></div>` +
     `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
@@ -29583,6 +30056,9 @@ async function intelEdSave(extra) {
     intelEdErr("Add where it was (pick a place, or describe it) and when you saw it.");
     (vals.header.time ? $("ix-r-locq") : $("ix-r-time")).focus(); return;
   }
+  if (ed.kind === "dossier" && vals.dossier && vals.dossier.subject_kind === "place" && !vals.dossier.subject_ref) {
+    intelEdErr("Pick the place this dossier is about."); $("ix-d-q").focus(); return;
+  }
   clearTimeout(ed.timer); ed.timer = null;
   const btn = $("ix-publish") || $("ix-save"); if (btn) btn.disabled = true;
   try {
@@ -29597,7 +30073,8 @@ async function intelEdSave(extra) {
     intelEd = null;
     const msg = d.status === "in_review" ? "Submitted for review. You'll see it in your drafts until it's approved."
       : d.pending && d.pending.mine && extra.major ? "Revision submitted for review."
-      : extra.publish ? (d.kind === "report" ? "Report published. You can correct it for 15 minutes." : "Published.")
+      : extra.publish ? (d.kind === "report" ? "Report published. You can correct it for 15 minutes."
+        : d.kind === "dossier" ? "Dossier published. Any member can add to it now." : "Published.")
       : d.kind === "report" ? "Correction saved." : `Saved rev ${d.rev}.`;
     intelToast(`<span>${msg}</span>`, 6000);
     location.hash = intelHref(d);
@@ -29612,6 +30089,9 @@ async function intelEdSave(extra) {
         `Check their changes in History (opens in a new tab), then save again to put yours on top as rev ${ed.rev + 1}.`);
       const h = $("ix-save-err");
       h.insertAdjacentHTML("beforeend", ` <a href="${intelHref(ed.entry)}/history" target="_blank" rel="noopener">Open History</a>`);
+    } else if (err.status === 409 && err.detail && err.detail.existing) {
+      intelEdErr(err.message);   // one dossier per subject: point at the existing one
+      $("ix-save-err").insertAdjacentHTML("beforeend", ` <a href="${intelHref(err.detail.existing)}">Open it</a>`);
     } else intelEdErr(err.message);
   }
 }

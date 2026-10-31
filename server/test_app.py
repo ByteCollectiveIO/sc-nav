@@ -15715,8 +15715,8 @@ class IntelLibraryTests(unittest.TestCase):
         self.assertEqual(lib[0]["owner"]["name"], "Owner")
 
     def test_only_writable_kinds_can_be_written(self):
-        # Reports arrive in slice 3; dossiers, RFIs and debriefs come later.
-        r = self.client.post("/api/intel/entries", json={"kind": "dossier", "title": "x"})
+        # Reports arrived in slice 3, dossiers in slice 4; RFIs and debriefs come later.
+        r = self.client.post("/api/intel/entries", json={"kind": "rfi", "title": "x"})
         self.assertEqual(r.status_code, 422)
         r = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": "x",
                                                          "activity": "not-a-playstyle"})
@@ -16414,6 +16414,176 @@ class IntelReportTests(unittest.TestCase):
             self.assertEqual(refs[f"warning:{wid}"]["label"], "Pyro Gateway")
         finally:
             app.hub.warnings.pop(wid, None)
+
+class IntelDossierTests(unittest.TestCase):
+    """Intelligence slice 4 (#50): place + org dossiers. One per subject, open
+    edit, stance changes as revisions, rollups from org records, the
+    navigator's place lookup."""
+
+    CLEAR_ROLE = IntelReportTests.CLEAR_ROLE
+    AUTHOR, OTHER, ADMIN, CLEARED = (IntelReportTests.AUTHOR, IntelReportTests.OTHER,
+                                     IntelReportTests.ADMIN, IntelReportTests.CLEARED)
+    setUpClass = IntelReportTests.__dict__["setUpClass"]
+    tearDownClass = IntelReportTests.__dict__["tearDownClass"]
+    setUp = IntelReportTests.setUp
+    as_ = IntelReportTests.as_
+    header = IntelReportTests.header
+    report = IntelReportTests.report
+
+    def dossier(self, title, dossier, body="Notes.", publish=True, expect=200):
+        r = self.client.post("/api/intel/entries", json={"kind": "dossier", "title": title,
+                                                        "body": body, "dossier": dossier})
+        if not publish:
+            self.assertEqual(r.status_code, expect, r.text)
+            return r.json()
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()
+        r = self.client.put(f"/api/intel/entries/{d['id']}", json={"title": title, "body": body,
+                                                                   "dossier": dossier, "publish": True})
+        self.assertEqual(r.status_code, expect, r.text)
+        return r.json()
+
+    def place(self, **kw):
+        return {"subject_kind": "place", "subject_ref": f"poi:{self.poi.id}", **kw}
+
+    def save(self, d, rev, expect=200, **kw):
+        r = self.client.put(f"/api/intel/entries/{d['id']}", json={
+            "title": d["title"], "body": d["body_md"], "base_rev": rev, **kw})
+        self.assertEqual(r.status_code, expect, r.text)
+        return r.json()
+
+    def test_one_dossier_per_place(self):
+        a = self.dossier(self.poi.name, self.place())
+        self.assertEqual(a["dossier"]["subject_label"], self.poi.name)
+        self.assertEqual(a["subject"]["poi_id"], self.poi.id)
+        # Creating a second one points at the first.
+        r = self.client.post("/api/intel/entries", json={"kind": "dossier", "title": "Dup",
+                                                        "dossier": self.place()})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.json()["detail"]["existing"]["id"], a["id"])
+        # A place dossier must name its place to publish.
+        b = self.dossier("No place", {"subject_kind": "place"}, publish=False)
+        r = self.client.put(f"/api/intel/entries/{b['id']}", json={"title": "No place", "publish": True,
+                                                                   "dossier": {"subject_kind": "place"}})
+        self.assertEqual(r.status_code, 422)
+
+    def test_two_drafts_race_and_the_second_publish_is_refused(self):
+        other_poi = next(p for p in app.nav.pois.values() if p.id != self.poi.id
+                         and not p.private and app.nav_core.poi_active(p))
+        a = self.dossier("Draft A", {"subject_kind": "place", "subject_ref": f"poi:{other_poi.id}"}, publish=False)
+        self.as_(self.OTHER)
+        b = self.dossier("Draft B", {"subject_kind": "place", "subject_ref": f"poi:{other_poi.id}"})
+        self.as_(self.AUTHOR)
+        r = self.client.put(f"/api/intel/entries/{a['id']}", json={
+            "title": "Draft A", "publish": True,
+            "dossier": {"subject_kind": "place", "subject_ref": f"poi:{other_poi.id}"}})
+        self.assertEqual(r.status_code, 409)
+        self.assertEqual(r.json()["detail"]["existing"]["id"], b["id"])
+
+    def test_open_edit_and_a_fixed_subject(self):
+        d = self.dossier(self.poi.name, self.place(), body="Watch the exit.")
+        self.as_(self.OTHER)
+        self.assertTrue(self.client.get(f"/api/intel/entries/{d['id']}").json()["can_edit"])
+        zone_ref = "zone:999999"
+        e = self.save(d, d["rev"], body="Watch the exit. Hold 10 km.",
+                      dossier={"subject_kind": "place", "subject_ref": zone_ref})
+        self.assertEqual(e["rev"], 2)
+        self.assertEqual(e["dossier"]["subject_ref"], f"poi:{self.poi.id}")   # a place dossier stays put
+        self.assertEqual(e["editors"], 2)
+        r = self.client.delete(f"/api/intel/entries/{d['id']}")
+        self.assertEqual(r.status_code, 403)   # archiving is the author's or an admin's
+        self.as_(self.ADMIN)
+        self.assertEqual(self.client.delete(f"/api/intel/entries/{d['id']}").status_code, 200)
+
+    def test_org_stance_is_a_revision(self):
+        org = {"subject_kind": "org", "stance": "unknown", "aliases": ["RWS", "rws", " Red  Wake "], "sid": "REDWAKE"}
+        d = self.dossier("Red Wake Syndicate", org, body="Camps chokepoints.")
+        self.assertEqual(d["dossier"]["aliases"], ["RWS", "Red Wake"])
+        self.assertNotIn("subject_ref", {k: v for k, v in d["dossier"].items() if v})
+        self.as_(self.OTHER)
+        e = self.save(d, 1, dossier={**org, "stance": "hostile"})
+        self.assertEqual(e["stance"]["stance"], "hostile")
+        self.assertEqual(e["stance"]["was"], "unknown")
+        self.assertEqual(e["stance"]["by"], "Other")
+        revs = self.client.get(f"/api/intel/entries/{d['id']}/revisions").json()["revisions"]
+        self.assertEqual(revs[0]["note"], "Stance: unknown → hostile")
+        # Reverting that revision restores the old stance.
+        e = self.client.post(f"/api/intel/entries/{d['id']}/revert", json={"rev": 1, "base_rev": 2}).json()
+        self.assertEqual(e["dossier"]["stance"], "unknown")
+        # One dossier per org, by name (case/space-folded), renames included.
+        self.as_(self.AUTHOR)
+        r = self.client.post("/api/intel/entries", json={"kind": "dossier", "title": "red wake  SYNDICATE",
+                                                        "dossier": {"subject_kind": "org"}})
+        self.assertEqual(r.status_code, 409)
+        other = self.dossier("Blue Fang", {"subject_kind": "org"})
+        self.save({**other, "title": "Red Wake Syndicate"}, 1, expect=409, dossier={"subject_kind": "org"})
+        self.assertEqual(self.client.get("/api/intel/orgs?name=RED WAKE syndicate").json()["dossier"]["id"], d["id"])
+
+    def test_aliases_are_searchable(self):
+        d = self.dossier("Red Wake Syndicate", {"subject_kind": "org", "aliases": ["Crimsonwake"]})
+        res = self.client.get("/api/intel/search?q=crimsonwake").json()["results"]
+        self.assertEqual([x["id"] for x in res], [d["id"]])
+        refs = self.client.get("/api/intel/refs/search?q=crimson").json()["results"]
+        self.assertEqual(refs[0]["key"], f"entry:{d['id']}")
+        self.assertEqual(refs[0]["sub"], "org dossier · unknown")
+
+    def test_place_rollup(self):
+        d = self.dossier(self.poi.name, self.place())
+        rep = self.report()                                   # location = the place
+        mention = self.report(title="Mentioned it", header=self.header(location_ref=None, location="elsewhere"),
+                              body=f"See [[poi:{self.poi.id}]].")
+        hidden = self.report(title="Secret")
+        db.intel_set_fields(hidden["id"], {"visibility": "restricted"})
+        w = self.client.post("/api/warnings", json={"anchor_a": self.poi.id, "severity": "deadly"}).json()
+        wid = w["id"] if "id" in w else w["entry"]["id"]
+        try:
+            v = self.client.get(f"/api/intel/entries/{d['id']}").json()
+            ids = [x["id"] for x in v["rollup"]["reports"]]
+            self.assertEqual(sorted(ids), sorted([rep["id"], mention["id"]]))
+            self.assertEqual(v["rollup"]["reports_total"], 2)
+            self.assertEqual([x["id"] for x in v["rollup"]["warnings"]], [wid])
+            self.as_(self.CLEARED)
+            v = self.client.get(f"/api/intel/entries/{d['id']}").json()
+            self.assertIn(hidden["id"], [x["id"] for x in v["rollup"]["reports"]])
+            # The navigator's lookup: the dossier, and the entries that mention the place.
+            self.as_(self.AUTHOR)
+            pl = self.client.get(f"/api/intel/places/poi/{self.poi.id}").json()
+            self.assertEqual(pl["dossier"]["id"], d["id"])
+            self.assertEqual(pl["entries"], 2)
+        finally:
+            app.hub.warnings.pop(wid, None)
+
+    def test_org_seen_at_counts_only_the_unit_line(self):
+        d = self.dossier("Red Wake Syndicate", {"subject_kind": "org", "stance": "hostile"})
+        seen = self.report(header=self.header(unit_ref=f"entry:{d['id']}"))
+        self.assertEqual(seen["header"]["unit_label"], "Red Wake Syndicate")
+        like = self.report(title="Looks like their trick", body=f"Same as [[entry:{d['id']}]].")
+        v = self.client.get(f"/api/intel/entries/{d['id']}").json()
+        self.assertEqual(sorted(x["id"] for x in v["rollup"]["reports"]), sorted([seen["id"], like["id"]]))
+        self.assertEqual(v["sightings"], 1)
+        self.assertEqual(v["seen_at"][0]["n"], 1)
+        self.assertEqual(v["seen_at"][0]["label"], self.poi.name)
+        r = self.client.post("/api/intel/entries", json={"kind": "report", "title": "x",
+                                                        "header": self.header(unit_ref="poi:1")})
+        self.assertEqual(r.status_code, 422)
+
+    def test_places_lookup_hides_a_restricted_dossier(self):
+        d = self.dossier(self.poi.name, self.place())
+        db.intel_set_fields(d["id"], {"visibility": "restricted"})
+        self.assertIsNone(self.client.get(f"/api/intel/places/poi/{self.poi.id}").json()["dossier"])
+        self.as_(self.CLEARED)
+        self.assertEqual(self.client.get(f"/api/intel/places/poi/{self.poi.id}").json()["dossier"]["id"], d["id"])
+        self.assertEqual(self.client.get("/api/intel/places/poi/999999999").status_code, 404)
+
+    def test_dossiers_list(self):
+        self.dossier("Red Wake Syndicate", {"subject_kind": "org", "stance": "hostile"})
+        self.dossier(self.poi.name, self.place())
+        rows = self.client.get("/api/intel/entries?section=dossiers").json()["entries"]
+        self.assertEqual(len(rows), 2)
+        org = next(x for x in rows if x["dossier"]["subject_kind"] == "org")
+        self.assertEqual(org["dossier"]["stance"], "hostile")
+        lib = self.client.get("/api/intel/entries?section=library").json()["entries"]
+        self.assertEqual(lib, [])
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

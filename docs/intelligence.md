@@ -4,7 +4,9 @@
 renderer, FTS5 probe); slice 1, the Library, built 2026-10-31; slice 2, access +
 review (RESTRICTED, the review gate, Doctrine), built 2026-10-31; slice 3, reports +
 the Feed (SALUTE, grading, corroborate/dispute, updates, valid-until, reference
-chips + backlinks, danger board **Write up →**), built 2026-10-31 (as-built detail in
+chips + backlinks, danger board **Write up →**), built 2026-10-31; slice 4, dossiers
+(place + org, open edit, stance revisions, rollups, the navigator's ◆ chip), built
+2026-10-31 (as-built detail in
 [implementation-notes.md](implementation-notes.md#intelligence-50)). Settled
 calls are marked **(user)**. Everything else is a recommendation open to change.
 

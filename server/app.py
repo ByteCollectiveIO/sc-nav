@@ -17296,7 +17296,9 @@ async def intel_render(body: IntelRenderIn, user: dict = Depends(require_session
 
 
 INTEL_LIBRARY_KINDS = ("procedure", "tactic")
-INTEL_WRITABLE_KINDS = ("procedure", "tactic", "report")   # dossiers, RFIs, debriefs: later slices
+INTEL_WRITABLE_KINDS = ("procedure", "tactic", "report", "dossier")   # RFIs, debriefs: later slices
+# Org dossiers carry a stance. Each has a glyph as well as a colour in the UI.
+INTEL_STANCES = ("hostile", "neutral", "allied", "unknown")
 INTEL_SYSTEMS = ("Stanton", "Nyx", "Pyro")
 # A report is a record of what someone saw at a time: its author can fix typos
 # for 15 minutes after publishing, then it only takes updates (addenda).
@@ -17304,6 +17306,7 @@ INTEL_REPORT_EDIT_S = 15 * 60
 INTEL_GRADE_REL = "ABCDEF"              # source reliability (Admiralty scale)
 INTEL_GRADE_CRED = range(1, 7)          # information credibility
 _INTEL_LOC_REF_RE = re.compile(r"^(poi|zone):(\d{1,20})$")
+_INTEL_UNIT_REF_RE = re.compile(r"^entry:(\d{1,20})$")
 _INTEL_TAG_RE = re.compile(r"[^a-z0-9-]+")
 _INTEL_MAX_TAGS = 10
 
@@ -17342,6 +17345,16 @@ class IntelReportHeader(BaseModel):
     time: str | None = Field(None, max_length=40)
     equipment: str = Field("", max_length=300)
     warning_id: int | None = None       # written up from this danger-board warning
+    unit_ref: str | None = Field(None, max_length=30)    # entry:<org dossier id> (slice 4)
+
+    @field_validator("unit_ref")
+    @classmethod
+    def _unit_ref(cls, v):
+        if v in (None, ""):
+            return None
+        if not _INTEL_UNIT_REF_RE.match(v):
+            raise ValueError("the unit must be an org dossier")
+        return v
 
     @field_validator("location_ref")
     @classmethod
@@ -17358,6 +17371,50 @@ class IntelReportHeader(BaseModel):
         return _intel_iso(v, "time")
 
 
+class IntelDossierHeader(BaseModel):
+    """What a dossier is about (slice 4): a place (a POI or survey zone) or
+    another org. Org dossiers carry a stance, aliases and the RSI SID (plain
+    text, never matched against anything). There are no player dossiers."""
+    subject_kind: str = "place"
+    subject_ref: str | None = Field(None, max_length=30)    # place: poi:<id> | zone:<id>
+    stance: str = "unknown"
+    aliases: list[str] = Field(default_factory=list, max_length=8)
+    sid: str = Field("", max_length=40)
+
+    @field_validator("subject_kind")
+    @classmethod
+    def _skind(cls, v):
+        if v not in ("place", "org"):
+            raise ValueError("a dossier is about a place or an org")
+        return v
+
+    @field_validator("subject_ref")
+    @classmethod
+    def _sref(cls, v):
+        if v in (None, ""):
+            return None
+        if not _INTEL_LOC_REF_RE.match(v):
+            raise ValueError("a place dossier is about a place or a survey zone")
+        return v
+
+    @field_validator("stance")
+    @classmethod
+    def _stance(cls, v):
+        if v not in INTEL_STANCES:
+            raise ValueError("stance is hostile, neutral, allied or unknown")
+        return v
+
+    @field_validator("aliases")
+    @classmethod
+    def _aliases(cls, v):
+        out: list[str] = []
+        for a in v:
+            a = " ".join(str(a).split())[:40]
+            if a and a.lower() not in (x.lower() for x in out):
+                out.append(a)
+        return out
+
+
 class IntelEntryFields(BaseModel):
     title: str = Field("", max_length=140)
     summary: str = Field("", max_length=300)
@@ -17368,6 +17425,7 @@ class IntelEntryFields(BaseModel):
     visibility: str | None = None      # org | restricted; None = leave as is
     # Reports only (ignored on other kinds):
     header: IntelReportHeader | None = None
+    dossier: IntelDossierHeader | None = None   # dossiers only
     grade_rel: str | None = None       # A–F, or None = ungraded
     grade_cred: int | None = None      # 1–6
     valid_until: str | None = None
@@ -17500,6 +17558,9 @@ def _intel_can_edit(e: dict, user: dict) -> bool:
     if e["kind"] == "report":
         # No silent rewrites: the author's typo window, then updates only.
         return e["author_id"] == uid and _intel_report_editable(e)
+    if e["kind"] == "dossier":
+        # Open edit, wiki-style: shared knowledge, every change kept + revertable.
+        return True
     return (bool(user.get("is_admin")) or e.get("owner_id") == uid
             or uid in (e.get("maintainers") or []))
 
@@ -17541,6 +17602,51 @@ def _intel_report_brief(e: dict) -> dict:
             "location_ref": h.get("location_ref"), "time": h.get("time"),
             "grade": _intel_grade(e), "valid_until": vu,
             "expired": bool(vu and vu <= _now_iso())}
+
+
+def _intel_dossier_head(e: dict) -> dict:
+    h = _intel_header(e)
+    return {"subject_kind": h.get("subject_kind") or "place", "subject_ref": h.get("subject_ref"),
+            "subject_label": h.get("subject_label"), "stance": h.get("stance") or "unknown",
+            "aliases": h.get("aliases") or [], "sid": h.get("sid") or ""}
+
+
+def _intel_dossier_brief(e: dict) -> dict:
+    h = _intel_dossier_head(e)
+    out = {"subject_kind": h["subject_kind"], "subject_ref": h["subject_ref"],
+           "subject_label": h["subject_label"]}
+    if h["subject_kind"] == "org":
+        out.update(stance=h["stance"], aliases=h["aliases"], sid=h["sid"])
+    return out
+
+
+def _intel_org_key(title: str) -> str:
+    """An org dossier's subject key: its name, case- and space-folded, so a
+    second "Red Wake Syndicate" opens the first."""
+    return " ".join((title or "").split()).casefold()[:140]
+
+
+def _intel_subject(kind: str, header: str | None, title: str) -> tuple[str, str] | None:
+    """(subject_kind, subject_ref) for the one-per-subject index, or None."""
+    if kind != "dossier":
+        return None
+    h = _intel_header({"header": header})
+    if h.get("subject_kind") == "org":
+        key = _intel_org_key(title)
+        return ("org", key) if key else None
+    return ("place", h["subject_ref"]) if h.get("subject_ref") else None
+
+
+def _intel_subject_free(subject: tuple[str, str] | None, entry_id: int | None) -> None:
+    """409 (with the existing dossier) when another dossier holds this subject."""
+    if not subject:
+        return
+    held = db.intel_subject_holder(*subject)
+    if held and held["id"] != entry_id:
+        what = "this org" if subject[0] == "org" else "this place"
+        raise HTTPException(status_code=409, detail={
+            "message": f"There's already a dossier for {what}: “{held['title']}”. Add to it instead.",
+            "existing": {"id": held["id"], "slug": held["slug"], "title": held["title"]}})
 
 
 def _intel_can_manage(e: dict, user: dict) -> bool:
@@ -17606,6 +17712,7 @@ def _intel_summary(e: dict, current: str | None) -> dict:
         "doctrine": bool(e.get("doctrine_at")),
         "submitted_at": e.get("submitted_at"),
         **({"report": _intel_report_brief(e)} if e["kind"] == "report" else {}),
+        **({"dossier": _intel_dossier_brief(e)} if e["kind"] == "dossier" else {}),
     }
 
 
@@ -17663,11 +17770,174 @@ def _intel_entry_view(e: dict, user: dict) -> dict:
                           "mine": c["author_id"] == uid})
         out["updates"] = items
         out["stances"] = {**counts, "mine": mine}
+    if e["kind"] == "dossier":
+        out.update(_intel_dossier_view(e, user))
     if e["status"] == "published":
         out["linked_from"] = [
             {"id": b["id"], "kind": b["kind"], "title": b["title"], "slug": b["slug"]}
             for b in db.intel_backlinks("entry", [e["id"]], intel_cleared(user), limit=20)
             if b["id"] != e["id"]]
+    return out
+
+
+# ---- dossiers (#50 slice 4) ----
+_INTEL_ROLLUP_REPORTS = 10
+
+
+def _intel_rollup_rows(ids: list[int], user: dict, current: str | None) -> list[dict]:
+    """Entry summaries (newest first) for a rollup, with report counts."""
+    rows = [_intel_summary(x, current) for x in
+            db.intel_list(ids=ids, order="recent", restricted_ok=intel_cleared(user))]
+    counts = db.intel_comment_counts(x["id"] for x in rows if x["kind"] == "report")
+    for x in rows:
+        if x["id"] in counts:
+            c = counts[x["id"]]
+            x["counts"] = {k: c.get(k, 0) for k in ("corroborate", "dispute", "addendum")}
+    return rows
+
+
+def _intel_report_split(rows: list[dict]) -> dict:
+    week = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="seconds")
+    reps = [x for x in rows if x["kind"] == "report"]
+    return {"reports": reps[:_INTEL_ROLLUP_REPORTS], "reports_total": len(reps),
+            "reports_week": sum(1 for x in reps if (x.get("published_at") or "") >= week),
+            "library": [x for x in rows if x["kind"] in INTEL_LIBRARY_KINDS],
+            "other": [x for x in rows if x["kind"] not in INTEL_LIBRARY_KINDS + ("report",)]}
+
+
+def _intel_place_warnings(poi) -> list[dict]:
+    """Live danger-board warnings whose hazard volume holds this place (or
+    that are anchored on it)."""
+    ws = list(hub.warnings.values())
+    if not ws:
+        return []
+    hit = {w["id"] for w in ws if poi.id in (w.get("anchor_a_poi"), w.get("anchor_b_poi"))}
+    try:
+        t = time.time()
+        g = nav_core.poi_global_m(nav, poi, t)
+        if g is not None:
+            for v in nav_core.hazard_volumes(nav, ws, t, radius_m=hazard_radius_km() * 1000.0):
+                if v.get("warning_id") is not None and v["system"] == poi.system \
+                        and nav_core._point_in_volume(g, v):
+                    hit.add(v["warning_id"])
+    except Exception:   # geometry is best effort; the anchor match still stands
+        pass
+    out = []
+    for w in ws:
+        if w["id"] not in hit:
+            continue
+        info = _intel_ref_info("warning", str(w["id"]), None)
+        out.append({"id": w["id"], "severity": w["severity"], "threat": w["threat"],
+                    "label": info.get("label"), "confirm_count": len(w.get("confirmations") or []),
+                    "age_s": max(0.0, time.time() - w["created"])})
+    rank = {"deadly": 0, "active": 1, "sighted": 2}
+    return sorted(out, key=lambda x: (rank.get(x["severity"], 9), x["age_s"]))
+
+
+def _intel_zone_survey(zone_id: int) -> dict | None:
+    """What the org has logged in a survey zone, for its dossier."""
+    z = db.get_survey_zone(zone_id)
+    if not z:
+        return None
+    try:
+        if z.get("body"):
+            container = nav.resolve_container(z["system"], z["body"])
+            radius = float(getattr(container, "body_radius", 0.0) or 0.0)
+            lanes = {}
+            for lane in ("resource", "harvestable"):
+                field = nav_core._category_field(lane)
+                tally: dict[str, int] = {}
+                for o in nav_core.surface_zone_members(nav, z, radius, category=lane):
+                    t = o.data.get(field)
+                    if t:
+                        tally[t] = tally.get(t, 0) + 1
+                lanes[lane] = sorted(tally.items(), key=lambda kv: -kv[1])[:6]
+            return {"kind": "surface", "body": z["body"], "system": z["system"],
+                    "records": sum(n for lane in lanes.values() for _, n in lane),
+                    "ores": [{"name": k, "n": n} for k, n in lanes["resource"]],
+                    "harvestables": [{"name": k, "n": n} for k, n in lanes["harvestable"]]}
+        row = next((r for r in _survey_zones_view(z["system"]) if r.get("zone_id") == zone_id), None)
+        if not row:
+            return None
+        ores = [o if isinstance(o, str) else (o.get("ore") or o.get("name")) for o in row.get("ores") or []]
+        return {"kind": "deep", "system": z["system"], "marks": row.get("marks") or 0,
+                "positive": row.get("positive") or 0, "status": row.get("status"),
+                "ores": [{"name": o} for o in ores if o][:6]}
+    except Exception:
+        return None
+
+
+def _intel_stance_meta(e: dict) -> dict:
+    """Since when the current stance holds, what it was before, who set it."""
+    cur = _intel_dossier_head(e)["stance"]
+    since = was = by = None
+    prev = None
+    for r in db.intel_revision_trail(e["id"]):
+        st = _intel_header(r).get("stance") or "unknown"
+        if st != prev:
+            if prev is not None or st != "unknown":
+                since, was, by = r["created_at"], prev, r.get("editor_name")
+            prev = st
+    if prev != cur:
+        since = was = by = None
+    return {"stance": cur, "since": since, "was": was, "by": by}
+
+
+def _intel_dossier_view(e: dict, user: dict) -> dict:
+    """A dossier's subject, identity and FROM ORG RECORDS rollup: the reports,
+    procedures and tactics that reference it, live warnings over it, survey
+    records in it and events held there. RESTRICTED entries only for the
+    cleared (the SQL filters them)."""
+    h = _intel_dossier_head(e)
+    current = _intel_patch_now()
+    trail = db.intel_revision_trail(e["id"]) if e["status"] == "published" else []
+    out: dict = {"dossier": {**_intel_dossier_brief(e)},
+                 "editors": len({r["editor_id"] for r in trail}),
+                 "last_editor": trail[-1].get("editor_name") if trail else None}
+    if e["status"] != "published":
+        return out
+    restricted_ok = intel_cleared(user)
+    rollup: dict = {}
+    if h["subject_kind"] == "place" and h["subject_ref"]:
+        sk, si = h["subject_ref"].split(":")
+        info = _intel_ref_info(sk, si, user)
+        if info["state"] in ("missing", "expired"):
+            info["label"] = h.get("subject_label")
+        out["subject"] = {"kind": sk, "id": si, **info}
+        links = [r for r in db.intel_link_rows_to(sk, [si], restricted_ok) if r["entry_id"] != e["id"]]
+        rollup.update(_intel_report_split(_intel_rollup_rows(
+            list({r["entry_id"] for r in links}), user, current)))
+        if sk == "poi" and info["state"] == "ok":
+            poi = nav.pois.get(int(si))
+            if poi is not None:
+                rollup["warnings"] = _intel_place_warnings(poi)
+                now = _now_iso()
+                rollup["events"] = [{"id": ev["id"], "title": ev["title"], "start_at": ev["start_at"],
+                                     "status": ev["status"], "upcoming": (ev["start_at"] or "") >= now}
+                                    for ev in db.events_named_at(poi.name)]
+        if sk == "zone":
+            rollup["survey"] = _intel_zone_survey(int(si))
+    elif h["subject_kind"] == "org":
+        out["stance"] = _intel_stance_meta(e)
+        links = db.intel_link_rows_to("entry", [e["id"]], restricted_ok)
+        rows = _intel_rollup_rows(list({r["entry_id"] for r in links}), user, current)
+        rollup.update(_intel_report_split(rows))
+        # "Seen at" counts ONLY reports whose SALUTE unit line names this org:
+        # "we saw them" and "this is like what they do" are different claims.
+        unit_ids = {r["entry_id"] for r in links if r["field"] == "salute_unit"}
+        seen: dict[str, dict] = {}
+        for x in rows:
+            if x["id"] not in unit_ids or x["kind"] != "report":
+                continue
+            rep = x.get("report") or {}
+            key = rep.get("location_ref") or f"text:{(rep.get('location') or '?').casefold()}"
+            s_ = seen.setdefault(key, {"label": rep.get("location") or "Somewhere unnamed",
+                                       "ref": rep.get("location_ref"), "n": 0, "last": None})
+            s_["n"] += 1
+            s_["last"] = max(s_["last"] or "", x.get("published_at") or "")
+        out["seen_at"] = sorted(seen.values(), key=lambda v: (-v["n"], v["label"]))[:10]
+        out["sightings"] = len(unit_ids)
+    out["rollup"] = rollup
     return out
 
 
@@ -17724,12 +17994,26 @@ def _intel_ref_info(kind: str, rid: str, user: dict | None) -> dict:
                     else {"state": "hidden"})
         if not _intel_visible(e, user):
             return {"state": "hidden", "label": "An entry you can't open"}
-        return {"state": "ok", "label": e["title"], "sub": e["kind"], "kind": e["kind"],
-                "href": f"#/intel/e/{e['id']}-{e['slug']}"}
+        return {"state": "ok", "label": e["title"], "sub": _intel_entry_sub(e), "kind": e["kind"],
+                "href": f"#/intel/e/{e['id']}-{e['slug']}",
+                **({"stance": _intel_dossier_head(e)["stance"]} if _intel_is_org(e) else {})}
     if kind == "member":
         name = _resolve_member_name(str(n), None)
         return {"state": "ok", "label": name} if name else {"state": "missing"}
     return {"state": "missing"}
+
+
+def _intel_is_org(e: dict) -> bool:
+    return e["kind"] == "dossier" and _intel_header(e).get("subject_kind") == "org"
+
+
+def _intel_entry_sub(e: dict) -> str:
+    """An entry chip's sub-line: its kind, or "org dossier · hostile"."""
+    if e["kind"] != "dossier":
+        return e["kind"]
+    if _intel_is_org(e):
+        return f"org dossier · {_intel_dossier_head(e)['stance']}"
+    return "place dossier"
 
 
 def _intel_ref_label(kind: str, rid: str) -> str | None:
@@ -17753,10 +18037,24 @@ def _intel_fields(body: IntelEntryFields, kind: str,
         if h.get("location_ref"):
             lk, li = h["location_ref"].split(":")
             h["location_label"] = _intel_ref_label(lk, li)
+        h["unit_label"] = _intel_ref_label("entry", h["unit_ref"].split(":")[1]) if h.get("unit_ref") else None
         header = json.dumps(h)
         fields.update(header=header, grade_rel=body.grade_rel,
                       grade_cred=body.grade_cred if body.grade_rel else None,
                       valid_until=body.valid_until)
+    elif kind == "dossier":
+        d = (body.dossier or IntelDossierHeader()).model_dump()
+        if d["subject_kind"] == "org":
+            d["subject_ref"] = None
+        else:   # stance, aliases and SID describe an org, not a place
+            d.update(stance=None, aliases=[], sid="")
+        d["sid"] = " ".join(d["sid"].split())
+        d["subject_label"] = None
+        if d.get("subject_ref"):
+            sk, si = d["subject_ref"].split(":")
+            d["subject_label"] = _intel_ref_label(sk, si)
+        header = json.dumps(d)
+        fields["header"] = header
     return fields, _intel_tags(body.tags), _intel_link_rows(r["refs"], header)
 
 
@@ -17771,6 +18069,11 @@ def _intel_link_rows(body_refs, header: str | None) -> list[tuple]:
         rows.append((lk, li, "salute_location", h.get("location_label") or _intel_ref_label(lk, li)))
     if h.get("warning_id"):
         rows.append(("warning", str(h["warning_id"]), "salute_warning", None))
+    if h.get("unit_ref"):        # a report's UNIT names an org dossier: a sighting of it
+        rows.append(("entry", h["unit_ref"].split(":")[1], "salute_unit", h.get("unit_label")))
+    if h.get("subject_ref"):     # a place dossier points at its place
+        sk, si = h["subject_ref"].split(":")
+        rows.append((sk, si, "subject", h.get("subject_label") or _intel_ref_label(sk, si)))
     return rows
 
 
@@ -17807,6 +18110,8 @@ def intel_entries(section: str = "library", kind: str = "", activity: str = "",
              "written": _intel_patch_state(e, current)["written"]}
             for e in db.intel_list(kinds=INTEL_LIBRARY_KINDS, order="recent", restricted_ok=restricted_ok)
             if _intel_patch_state(e, current)["stale"]][:5]
+    elif section == "dossiers":
+        rows = db.intel_list(kinds=["dossier"], order="title", **kw)
     elif section == "drafts":
         # Your own drafts and submissions; restricted ones too (they're yours).
         rows = db.intel_list(kinds=kinds, status=("draft", "in_review"), author_id=user["id"],
@@ -17855,6 +18160,7 @@ def intel_create(body: IntelCreateIn, user: dict = Depends(require_session)):
     if not body.title.strip():
         raise HTTPException(status_code=422, detail="Give it a title first.")
     fields, tags, refs = _intel_fields(body, body.kind)
+    _intel_subject_free(_intel_subject(body.kind, fields.get("header"), fields["title"]), None)
     uid, now = str(user["id"]), _now_iso()
     eid = db.intel_create_entry({
         **fields, "kind": body.kind, "status": "draft",
@@ -17890,7 +18196,23 @@ def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_se
         raise HTTPException(status_code=422, detail="The title can't be empty.")
     if e["kind"] == "report" and e["status"] == "published":
         body.major = False              # a report's typo window: minor fixes, never a re-publish
+    prev_dossier = _intel_dossier_head(e) if e["kind"] == "dossier" else None
+    if prev_dossier and e["status"] == "published":
+        # A dossier stays about what it was published about (an org can be renamed).
+        body.dossier = (body.dossier or IntelDossierHeader()).model_copy(update={
+            "subject_kind": prev_dossier["subject_kind"], "subject_ref": prev_dossier["subject_ref"]})
     fields, tags, refs = _intel_fields(body, e["kind"])
+    subject = _intel_subject(e["kind"], fields.get("header"), fields["title"])
+    if e["kind"] == "dossier" and (body.publish or e["status"] == "published"):
+        if not subject:
+            raise HTTPException(status_code=422, detail="Pick the place this dossier is about.")
+        _intel_subject_free(subject, entry_id)
+    if prev_dossier and e["status"] == "published" and prev_dossier["subject_kind"] == "org":
+        new_stance = json.loads(fields["header"]).get("stance")
+        if new_stance != prev_dossier["stance"]:
+            # A stance change is a revision like any other, named in History.
+            line = f"Stance: {prev_dossier['stance']} → {new_stance}"
+            body.note = f"{line}. {body.note.strip()}" if body.note.strip() else line
     if e["kind"] == "report" and (body.publish or e["status"] == "published"):
         _intel_report_ready(fields)
     uid, now = str(user["id"]), _now_iso()
@@ -17929,7 +18251,8 @@ def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_se
             db.intel_set_fields(entry_id, {"visibility": marking})
         db.intel_submit_pending(entry_id, {
             "title": fields["title"], "summary": fields["summary"], "body_md": fields["body_md"],
-            "header": e.get("header"), "editor_id": uid, "editor_name": _resolve_member_name(uid, None),
+            "header": fields.get("header", e.get("header")), "editor_id": uid,
+            "editor_name": _resolve_member_name(uid, None),
             "note": note, "created_at": now, "base_rev": e["rev"],
             "fields": {"activity": fields["activity"], "system": fields["system"], "tags": tags}})
         return _intel_entry_view(db.intel_get_entry(entry_id), user)
@@ -17940,6 +18263,8 @@ def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_se
     if first:
         fields.update(status="published", published_at=now)
         note = note or "First published"
+    if subject and (first or e["status"] == "published"):
+        fields.update(subject_kind=subject[0], subject_ref=subject[1])
     if major:
         fields.update(patch=_intel_patch_now(), patch_confirmed=None, revised_at=now)
     try:
@@ -18089,6 +18414,10 @@ def intel_revert(entry_id: int, body: IntelRevertIn, user: dict = Depends(requir
     fields = {"title": old["title"], "slug": intel_md.section_slug(old["title"] or "untitled"),
               "summary": old.get("summary") or "", "body_md": old["body_md"] or "",
               "body_html": r["html"], "header": old.get("header"), "updated_at": now}
+    subject = _intel_subject(e["kind"], fields["header"], fields["title"])
+    if subject:
+        _intel_subject_free(subject, entry_id)
+        fields.update(subject_kind=subject[0], subject_ref=subject[1])
     try:
         db.intel_save_revision(entry_id, body.base_rev, fields, e["tags"],
                                _intel_link_rows(r["refs"], fields.get("header", e.get("header"))), {
@@ -18166,9 +18495,12 @@ def intel_approve(entry_id: int, user: dict = Depends(require_session)):
     approver = {"approved_by": uid, "approved_at": now}
     if e["status"] == "in_review":
         r = intel_md.render(e["body_md"] or "", IMAGE_PREVIEW_HOSTS)
+        subject = _intel_subject(e["kind"], e.get("header"), e["title"])
+        _intel_subject_free(subject, entry_id)
         db.intel_save_revision(entry_id, None, {
             "status": "published", "published_at": now, "revised_at": now, "updated_at": now,
             "submitted_at": None, "patch": _intel_patch_now(), "patch_confirmed": None,
+            **({"subject_kind": subject[0], "subject_ref": subject[1]} if subject else {}),
             "body_html": r["html"]}, e["tags"], _intel_link_rows(r["refs"], e.get("header")), {
             "editor_id": e["author_id"], "editor_name": e.get("author_name"),
             "note": "First published", "major": True, "created_at": now, **approver})
@@ -18178,12 +18510,16 @@ def intel_approve(entry_id: int, user: dict = Depends(require_session)):
         raise HTTPException(status_code=409, detail="Nothing is waiting for review.")
     r = intel_md.render(pend["body_md"] or "", IMAGE_PREVIEW_HOSTS)
     f = pend["fields"]
+    header = pend.get("header") if pend.get("header") is not None else e.get("header")
+    subject = _intel_subject(e["kind"], header, pend["title"])
+    _intel_subject_free(subject, entry_id)
     db.intel_save_revision(entry_id, e["rev"], {
         "title": pend["title"], "slug": intel_md.section_slug(pend["title"] or "untitled"),
         "summary": pend.get("summary") or "", "body_md": pend["body_md"] or "", "body_html": r["html"],
-        "activity": f.get("activity"), "system": f.get("system"),
+        "activity": f.get("activity"), "system": f.get("system"), "header": header,
+        **({"subject_kind": subject[0], "subject_ref": subject[1]} if subject else {}),
         "patch": _intel_patch_now(), "patch_confirmed": None, "revised_at": now, "updated_at": now,
-    }, f.get("tags") or [], _intel_link_rows(r["refs"], e.get("header")), {
+    }, f.get("tags") or [], _intel_link_rows(r["refs"], header), {
         "editor_id": pend["editor_id"], "editor_name": pend.get("editor_name"),
         "note": pend.get("note"), "major": True, "created_at": now, **approver})
     db.intel_set_revision_status(pend["id"], "approved")
@@ -18308,6 +18644,38 @@ def intel_stance(entry_id: int, body: IntelStanceIn, user: dict = Depends(requir
     return _intel_entry_view(db.intel_get_entry(entry_id), user)
 
 
+@app.get("/api/intel/places/{kind}/{ref_id}")
+def intel_place(kind: str, ref_id: int, user: dict = Depends(require_session)):
+    """The navigator's "◆ N intel entries" chip and "Start dossier": the
+    place's dossier (if any) and how many published entries mention it."""
+    if kind not in ("poi", "zone"):
+        raise HTTPException(status_code=404, detail="Unknown place kind.")
+    if kind == "poi":
+        poi = nav.pois.get(ref_id)
+        if poi is None or not nav_core.poi_visible_to(poi, viewer_owner_ids(user)):
+            raise HTTPException(status_code=404, detail="Unknown place.")
+    elif not db.get_survey_zone(ref_id):
+        raise HTTPException(status_code=404, detail="Unknown survey zone.")
+    held = db.intel_subject_holder("place", f"{kind}:{ref_id}")
+    dossier = None
+    if held and held["status"] == "published" and (held["visibility"] == "org" or intel_cleared(user)):
+        dossier = {"id": held["id"], "slug": held["slug"], "title": held["title"]}
+    links = db.intel_link_rows_to(kind, [ref_id], intel_cleared(user))
+    entries = {r["entry_id"] for r in links} - ({held["id"]} if held else set())
+    return {"dossier": dossier, "entries": len(entries)}
+
+
+@app.get("/api/intel/orgs")
+def intel_org_lookup(name: str = "", user: dict = Depends(require_session)):
+    """Is there already a dossier for this org name? (the editor's early
+    "it exists, open it" hint before anyone types a whole page)."""
+    key = _intel_org_key(name)
+    held = db.intel_subject_holder("org", key) if key else None
+    if not held or held["status"] != "published" or (held["visibility"] != "org" and not intel_cleared(user)):
+        return {"dossier": None}
+    return {"dossier": {"id": held["id"], "slug": held["slug"], "title": held["title"]}}
+
+
 _INTEL_REF_KEY_RE = re.compile(r"^(" + "|".join(intel_md.REF_KINDS) + r"):(\d{1,20})$")
 
 
@@ -18363,7 +18731,8 @@ def intel_ref_search(q: str = "", user: dict = Depends(require_session)):
     for op in rows["op"]:
         res.append({"key": f"op:{op['id']}", "kind": "op", "label": op["name"], "sub": f"op · {op['phase']}"})
     for e in db.intel_title_matches(q, intel_cleared(user)):
-        res.append({"key": f"entry:{e['id']}", "kind": "entry", "label": e["title"], "sub": e["kind"]})
+        res.append({"key": f"entry:{e['id']}", "kind": "entry", "label": e["title"], "sub": _intel_entry_sub(e),
+                    **({"org": True} if _intel_is_org(e) else {})})
     return {"results": res[:30]}
 
 
