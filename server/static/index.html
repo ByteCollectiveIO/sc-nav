@@ -564,6 +564,13 @@
   .intel-mast-row + .intel-mast-row { border-top: 1px solid var(--border); }
   .intel-mast-row[hidden] { display: none; }   /* author display: beats UA [hidden] */
   .intel-half button { font-size: 11px; font-weight: 700; letter-spacing: .08em; padding: 7px 14px; }
+  #intel-know-row { flex-wrap: nowrap; }
+  #intel-tabs { min-width: 0; }
+  .intel-guide-link { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: 12px;
+    color: var(--dim); text-decoration: none; padding: 6px 10px; border-radius: 6px; border: 1px solid transparent; }
+  .intel-guide-link:hover { color: var(--accent); }
+  .intel-guide-link.on { color: var(--accent); border-color: var(--accent); background: var(--accent-wash); }
+  .intel-guide-link:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
   .intel-know-empty { padding: 26px 22px 24px; }
   .intel-know-empty .lead { font-size: 15px; color: var(--text); margin: 6px 0 6px; }
   .intel-know-empty p { margin: 0; max-width: 62ch; font-size: 13px; line-height: 1.6; }
@@ -572,8 +579,14 @@
     .intel-mast-row { padding: 9px 12px; }
     .intel-half { flex: 1; display: flex; }
     .intel-half button { flex: 1; padding: 8px 6px; }
-    #intel-tabs { width: 100%; overflow-x: auto; }
-    #intel-tabs .rm-tab { white-space: nowrap; padding: 6px 10px; }
+    #intel-tabs { flex: 1 1 auto; overflow-x: auto; scrollbar-width: none;
+      /* the fade says "more tabs this way" when the row is cut off */
+      mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+    #intel-tabs::-webkit-scrollbar { display: none; }
+    #intel-tabs .rm-tab { white-space: nowrap; padding: 10px 12px; }
+    #intel-tabs::after { content: ""; flex: 0 0 24px; }   /* the last tab scrolls clear of the fade */
+    .intel-guide-link { padding: 10px; }
+    .intel-guide-link span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   }
 
   /* ---- Intelligence: lists, reading view, editor, history (#50 slice 1) ---- */
@@ -682,6 +695,24 @@
   .ix-by button { padding: 2px 9px; font-size: 11px; }
   .ix-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
   .ix-actions .sp { flex: 1; }
+  /* More: the entry's less-used actions (copy, collect, flag, archive, hide). */
+  .ix-more { position: relative; display: inline-flex; }
+  .ix-more .ix-caret { width: 12px; height: 12px; }
+  #ix-more[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+  .ix-more-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 200px; display: grid; gap: 2px; padding: 4px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 28px rgba(0, 0, 0, .45); }
+  .ix-more-menu[hidden] { display: none; }
+  .ix-more-menu > .ix-btn { width: 100%; justify-content: flex-start; border-color: transparent; background: none; padding: 9px 10px; border-radius: 5px; }
+  .ix-more-menu > .ix-btn:hover, .ix-more-menu > .ix-btn:focus-visible { background: var(--panel2); border-color: transparent; outline: none; }
+  .ix-more-menu > #ix-hide, .ix-more-menu > #ix-archive { color: var(--warn); }
+  /* Publish names where it posts, on the button that commits. */
+  button.ix-pub { flex-direction: column; gap: 1px; line-height: 1.25; }
+  button.ix-pub small { font-size: 11px; font-weight: 400; opacity: .85; }
+  /* Phone + touch: Intelligence controls reach a usable tap size. */
+  @media (pointer: coarse) {
+    #intel-know .ix-link, #intel-know select.ti, #intel-know .ix-btn, #intel-know .ix-primary, #intel-know .ix-chip { min-height: 40px; }
+    #intel-know .ix-gd-toc a { padding-top: 9px; padding-bottom: 9px; }
+  }
   .ix-prose { padding: 18px 22px 24px; font-size: 14px; line-height: 1.7; }
   .ix-prose > * { max-width: 72ch; }
   .ix-prose p { margin: 0 0 1em; }
@@ -969,17 +1000,56 @@
     .ix-ol > .ix-row > .ix-body { grid-column: 2 / 4; grid-row: 2; }
   }
   /* Writing guide (#/intel/guide) */
-  .ix-gd-sec { scroll-margin-top: 16px; padding-top: 6px; }
-  .ix-gd-sec + .ix-gd-sec { border-top: 1px solid var(--border-soft); margin-top: 26px; padding-top: 22px; }
-  .ix-gd-sec > h2:first-child { margin-top: 0; }
-  .ix-prose.ix-gd > * { max-width: none; }
-  .ix-gd-sec > p, .ix-gd-sec > ul, .ix-gd-sec > ol, .ix-gd-sec > h3 { max-width: 72ch; }
+  /* One panel per section, stacked: a long guide reads as separate tiles. */
+  .ix-gd { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; min-width: 0; }
+  .panel.ix-gd-hero { padding: 18px 22px 16px; }
+  .ix-gd-hero .ix-actions { margin-top: 4px; }
+  .panel.ix-gd-sec { padding: 0; scroll-margin-top: 14px; min-width: 0; }
+  .ix-gd-sec:focus { outline: none; }
+  .ix-gd-sec:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+  .ix-gd-sec .ix-prose > h2:first-child { font-size: 13px; padding-bottom: 12px; margin-bottom: 14px; border-bottom: 1px solid var(--border-soft);
+    max-width: none; }
+  .ix-gd-sec .ix-prose > .ix-gd-md, .ix-gd-sec .ix-prose > .ix-gd-kinds { max-width: none; }
+  /* "Which kind to write": each row is a link to the section that explains it. */
+  .ix-gd-kinds { list-style: none; padding: 0 !important; margin: 0 0 14px; border: 1px solid var(--border); border-radius: 6px; }
+  .ix-gd-kinds li { margin: 0; }
+  .ix-gd-kinds li + li { border-top: 1px solid var(--border-soft); }
+  .ix-gd-kinds a { display: grid; grid-template-columns: 130px minmax(0, 1.4fr) minmax(0, 1fr) 16px; gap: 4px 16px; align-items: baseline;
+    padding: 11px 14px; color: var(--text); text-decoration: none; font-size: 13px; line-height: 1.55; }
+  .ix-gd-kinds a:hover { background: var(--panel2); }
+  .ix-gd-kinds a:hover .go, .ix-gd-kinds a:focus-visible .go { color: var(--accent); transform: translateX(2px); }
+  .ix-gd-kinds a:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); border-radius: 6px; }
+  .ix-gd-kinds .ix-gd-kind { font-weight: 600; align-self: center; }
+  .ix-gd-kinds .ex { color: var(--dim); font-size: 12px; }
+  .ix-gd-kinds .go { color: var(--dim); transition: transform .15s ease-out, color .15s ease-out; }
+  @media (prefers-reduced-motion: reduce) { .ix-gd-kinds .go { transition: none; } }
+  /* The rail TOC + the phone chip row share the scroll-spy's .on state. */
+  .ix-toc a.on { color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); padding-left: 10px; }
+  .ix-gd-toc .ix-toc a { padding: 5px 0 5px 10px; }
+  .ix-toc a:focus-visible, .ix-gd-chips a:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); border-radius: 4px; }
+  .ix-gd-chips { display: none; }
+  .ix-gd-chips ul { list-style: none; margin: 0; padding: 2px 0 8px; display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
+  .ix-gd-chips ul::-webkit-scrollbar { display: none; }
+  .ix-gd-chips ul { mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
+  .ix-gd-chips ul::after { content: ""; flex: 0 0 16px; }
+  .ix-gd-chips a { display: inline-flex; align-items: center; min-height: 36px; padding: 0 12px; white-space: nowrap; font-size: 12px;
+    color: var(--dim); text-decoration: none; border: 1px solid var(--border); border-radius: 18px; background: var(--panel); }
+  .ix-gd-chips a.on { color: var(--accent); border-color: var(--accent); background: var(--accent-wash); }
+  @media (max-width: 860px) {
+    /* The rail drops below the content here, so the chips take over at the top. */
+    .ix-gd-chips { display: block; position: sticky; top: 0; z-index: 5; margin: 0 -2px; padding: 6px 2px 0; background: var(--bg); }
+    .ix-grid:has(> .ix-gd) > .ix-rail { display: none; }
+    .ix-gd-kinds a { grid-template-columns: minmax(0, 1fr) 16px; }
+    .ix-gd-kinds .ix-gd-kind { grid-column: 1; }
+    .ix-gd-kinds .use, .ix-gd-kinds .ex { grid-column: 1; }
+    .ix-gd-kinds .go { grid-column: 2; grid-row: 1; }
+    .panel.ix-gd-sec { scroll-margin-top: 58px; }
+  }
   .ix-gd-steps { counter-reset: gd; list-style: none; padding-left: 0 !important; }
   .ix-gd-steps > li { counter-increment: gd; display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 8px; margin: .55em 0; }
   .ix-gd-steps > li::before { content: counter(gd); font-size: 11px; color: var(--accent); border: 1px solid var(--accent);
     border-radius: 50%; width: 20px; height: 20px; display: grid; place-items: center; margin-top: 3px; font-variant-numeric: tabular-nums; }
   .ix-gd-kind { display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
-  .ix-gd-table td { vertical-align: top; }
   .ix-gd-salute { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 6px 14px; margin: 14px 0 18px; max-width: 72ch; font-size: 13px; }
   .ix-gd-salute dt { display: flex; gap: 8px; align-items: baseline; color: var(--text); }
   .ix-gd-salute dt .k { color: var(--accent); font-weight: 600; width: 12px; }
@@ -995,7 +1065,7 @@
   .ix-gd-ex-h { display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: baseline; font-size: 13px; margin-bottom: 8px; }
   .ix-gd-ex-h .muted { font-size: 12px; }
   .ix-gd-ex-b { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
-  .ix-gd-lbl { display: block; font-size: 10px; letter-spacing: 1px; color: var(--dim); margin-bottom: 4px; }
+  .ix-gd-lbl { display: block; font-size: 11px; letter-spacing: 1px; color: var(--dim); margin-bottom: 4px; }
   .ix-gd-ex pre, .ix-gd-pre { margin: 0; padding: 8px 10px; border-radius: 4px; background: var(--inset-tint); border: 1px solid var(--border-soft);
     font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
   .ix-gd-pre { margin: 6px 0 14px; max-width: 72ch; }
@@ -1024,7 +1094,9 @@
   .ix-rep { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
   .ix-rep[hidden] { display: none; }
   .ix-rep-h { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 11px; letter-spacing: 1px; color: var(--text); }
-  .ix-rep-h small { letter-spacing: 0; color: var(--dim); }
+  .ix-rep-h small { letter-spacing: 0; color: var(--dim); font-size: 12px; }
+  .ix-rep-help { margin-left: auto; letter-spacing: 0; font-size: 12px; color: var(--accent); text-decoration: none; }
+  .ix-rep-help:hover { text-decoration: underline; text-underline-offset: 3px; }
   .ix-rep-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .ix-rep-wide { grid-column: 1 / -1; }
   .ix-r-time { display: flex; gap: 6px; }
@@ -1230,8 +1302,11 @@
   th { text-align: left; color: var(--dim); font-weight: normal; font-size: 11px;
     letter-spacing: 1px; padding: 4px 8px; border-bottom: 1px solid var(--border); }
   td { padding: 6px 8px; border-bottom: 1px solid var(--border-soft); }
-  tbody tr { cursor: pointer; }
-  tbody tr:hover { background: var(--panel2); }
+  /* Only rows that DO something look clickable: clickable() gives a row
+     role="button"; the ATLAS zone rows carry data-zrow. A plain data table (a
+     leaderboard, a table in an Intelligence entry) has no pointer, no hover. */
+  tbody tr[role="button"], tbody tr[data-zrow] { cursor: pointer; }
+  tbody tr[role="button"]:hover, tbody tr[data-zrow]:hover { background: var(--panel2); }
   tbody tr.selected { background: var(--sel-wash); box-shadow: inset 2px 0 0 var(--sel); }
   tbody tr.selected td, tbody tr.selected td.muted { color: var(--sel); }
   /* A numeric column's HEADER right-aligns with its numbers. `th` above sets
@@ -5894,6 +5969,7 @@
       <symbol id="ix-i-watch" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></symbol>
       <symbol id="ix-i-flag" viewBox="0 0 24 24"><path d="M5.5 21V4"/><path d="M5.5 4.5h11l-2.5 4 2.5 4h-11"/></symbol>
       <symbol id="ix-i-collection" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="1.5"/><path d="M6.5 5h11M9 2.5h6"/></symbol>
+      <symbol id="ix-i-guide" viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11v16H5.5A1.5 1.5 0 0 1 4 18.5z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H13v16h5.5a1.5 1.5 0 0 0 1.5-1.5z"/><path d="M6.5 8h2.5M6.5 11h2.5M15 8h2.5M15 11h2.5"/></symbol>
       <symbol id="ix-i-hidden" viewBox="0 0 24 24"><path d="M4 4l16 16"/><path d="M9.6 5.8A9.5 9.5 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-3 3.6M6.2 7.7A16 16 0 0 0 2.5 12S6 18.5 12 18.5c1.3 0 2.5-.3 3.6-.8"/></symbol>
     </defs></svg>
     <div class="panel intel-mast" id="intel-mast">
@@ -5916,9 +5992,11 @@
           <a class="rm-tab" href="#/intel/feed" data-sec="feed">Feed</a>
           <a class="rm-tab" href="#/intel/library" data-sec="library">Library</a>
           <a class="rm-tab" href="#/intel/dossiers" data-sec="dossiers">Dossiers</a>
-          <a class="rm-tab" href="#/intel/rfi" data-sec="rfi">RFI</a>
+          <a class="rm-tab" href="#/intel/rfi" data-sec="rfi">Questions</a>
           <a class="rm-tab" href="#/intel/review" data-sec="review" id="intel-tab-review" hidden>Review <span class="ix-count" id="intel-review-n"></span></a>
         </nav>
+        <a class="intel-guide-link" id="intel-guide-link" href="#/intel/guide" data-sec="guide" title="How to write procedures, reports, dossiers and questions">
+          <svg class="ix-ico" aria-hidden="true"><use href="#ix-i-guide"/></svg><span>Writing guide</span></a>
       </div>
       <div class="intel-mast-row" id="intel-act-row" hidden>
     <nav class="intel-nav" id="intel-nav" aria-label="Org Intel sections">
@@ -28686,7 +28764,7 @@ function renderIntel(section) {
   // Deeper routes keep the Library tab lit (search lights none).
   // Deeper views sit under Library, except a report's (it lives in the Feed);
   // an entry's kind is known only once it loads (intelSetTab then).
-  const tab = INTEL_KNOW_SECS.includes(section) ? section : section === "search" || section === "guide" ? null
+  const tab = INTEL_KNOW_SECS.includes(section) ? section : section === "search" ? null : section === "guide" ? "guide"
     : section === "reviewing" && intelAccess().reviewer ? "review"
     : section === "new" && intelRoute.kind === "report" ? "feed"
     : section === "new" && intelRoute.kind === "dossier" ? "dossiers"
@@ -28712,7 +28790,7 @@ function renderIntel(section) {
   // The Feed's natural "new" is a report; everywhere else it's a procedure.
   $("intel-new").href = tab === "feed" ? "#/intel/new/report" : tab === "dossiers" ? "#/intel/new/dossier"
     : tab === "rfi" ? "#/intel/new/rfi" : "#/intel/new/procedure";
-  document.querySelectorAll("#intel-tabs a").forEach(a => {
+  document.querySelectorAll("#intel-tabs a, #intel-guide-link").forEach(a => {
     const on = a.dataset.sec === tab;
     a.classList.toggle("on", on);
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
@@ -28764,7 +28842,7 @@ function renderIntel(section) {
 const INTEL_KNOW_EMPTY = {
 };
 const INTEL_KIND = { procedure: "Procedure", tactic: "Tactic", report: "Report", dossier: "Dossier",
-  debrief: "Debrief", rfi: "RFI" };
+  debrief: "Debrief", rfi: "Question" };
 const INTEL_SYSTEM_OPTS = ["Stanton", "Nyx", "Pyro"];
 // Kind templates: a new entry starts from its kind's skeleton, so a procedure
 // reads like every other procedure. Swapped freely until the author types.
@@ -29011,7 +29089,7 @@ async function intelFeed(box) {
           `<p style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">` +
           `<a class="ix-primary" href="#/intel/new/report">${intelIco("report")}Write a report</a>` +
           `<a class="ix-btn" href="#/intel/new/procedure">${intelIco("procedure")}New procedure</a>` +
-          `<a class="ix-btn" href="#/intel/guide">${intelIco("edit")}How to write one</a></p></div>`;
+          `<a class="ix-btn" href="#/intel/guide">${intelIco("guide")}How to write one</a></p></div>`;
     } else {
       const fresh = seen ? d.entries.filter(e => (e.revised_at || e.published_at) > seen).length : 0;
       let html = fresh ? `<div class="ix-since">${fresh} NEW SINCE YOU LOOKED · ${esc(intelWhen(seen).toUpperCase())}</div>` : "";
@@ -29075,7 +29153,7 @@ async function intelLibrary(box) {
     `${ico ? intelIco(ico) : ""}${label}</button>`;
   box.innerHTML = `<div class="panel" id="ix-drafts" hidden></div><div class="panel" id="ix-cols-p" hidden></div>` +
     `<div class="panel"><div class="ix-panel-h"><h2>LIBRARY</h2>` +
-    `<span class="muted">The org's procedures and tactics, by activity · <a href="#/intel/guide">Writing guide</a> · ` +
+    `<span class="muted">The org's procedures and tactics, by activity · ` +
     `<a href="/api/intel/export" download title="Every published entry you can open, as Markdown with its images (a .zip)">Export (.zip)</a></span></div>` +
     `<div class="ix-filters" role="group" aria-label="Filter the library">` +
     chip("", "All") + chip("procedure", "Procedures", "procedure") + chip("tactic", "Tactics", "tactic") +
@@ -29108,7 +29186,7 @@ async function intelLibrary(box) {
           `<p style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">` +
           `<a class="ix-primary" href="#/intel/new/procedure">${intelIco("plus")}New procedure</a>` +
           `<a class="ix-btn" href="#/intel/new/tactic">${intelIco("tactic")}New tactic</a>` +
-          `<a class="ix-btn" href="#/intel/guide">${intelIco("edit")}How to write one</a></p></div>`;
+          `<a class="ix-btn" href="#/intel/guide">${intelIco("guide")}How to write one</a></p></div>`;
       return;
     }
     const groups = new Map();
@@ -29129,8 +29207,9 @@ async function intelLibrary(box) {
 // server renderer an entry goes through (/api/intel/render), so the "looks
 // like" column can't drift from what readers actually see.
 const INTEL_GUIDE_SECS = [["kinds", "Which kind to write"], ["procedure", "Write a procedure"],
-  ["report", "Write a report"], ["markdown", "Formatting"], ["images", "Add an image"],
-  ["links", "Link places, ops and entries"], ["paste", "Bring in an existing doc"], ["revise", "Change it later"]];
+  ["report", "Write a report"], ["dossier", "Start a dossier"], ["question", "Ask a question"], ["markdown", "Formatting"],
+  ["images", "Add an image"], ["links", "Link places, ops and entries"], ["paste", "Bring in an existing doc"], ["revise", "Change it later"]];
+let intelGuideSpy = null;   // the guide's scroll-spy, disconnected on every re-render
 const INTEL_GUIDE_MD = [
   ["Headings", "Split a long entry into sections. Each one gets a link you can share and a line in ON THIS PAGE.", "## Loadout\n### Ships"],
   ["Bold, italic, underline, strikethrough", "Underline is two underscores, the same as Discord.", "**Bold**, *italic*, __underline__ and ~~struck out~~"],
@@ -29143,32 +29222,36 @@ const INTEL_GUIDE_MD = [
   ["Time", "A Discord timestamp. Everyone sees it in their own time zone.", "Op starts <t:1767225600:f>"]];
 async function intelGuide(box) {
   const sec = intelRoute.sec;
-  const g = (id, title, body) => `<section class="ix-gd-sec" id="gd-${id}"><h2>${esc(title)}</h2>${body}</section>`;
+  // Each section is its own panel, focusable so a jump moves keyboard focus too.
+  const g = (id, title, body) => `<section class="panel ix-gd-sec" id="gd-${id}" tabindex="-1" aria-labelledby="gd-${id}-h">` +
+    `<div class="ix-prose"><h2 id="gd-${id}-h">${esc(title)}</h2>${body}</div></section>`;
   const step = (items) => `<ol class="ix-gd-steps">${items.map(s => `<li><span>${s}</span></li>`).join("")}</ol>`;
-  const kinds = `<div class="table-x"><table class="ix-gd-table"><thead><tr><th>Kind</th><th>Use it for</th><th>For example</th></tr></thead><tbody>` +
-    [["procedure", "How the org does something, step by step. It stays useful for months and has an owner who keeps it current.", "Hull-C escort formation · Pre-undock checklist"],
-     ["tactic", "How to beat a threat or win a kind of fight: the situation, what they usually do, the worst case, the counter.", "Breaking a gate camp at Pyro Gateway"],
-     ["report", "Something you saw, right now: who, where, when. It can expire after a few hours.", "Gate camp at the Stanton jump point, 5 ships"],
-     ["dossier", "Everything the org knows about one place or one other org. Anyone can add to it.", "Ruin Station · Red Wake Syndicate"],
-     ["rfi", "A question for the org. Whoever knows answers it.", "Where do the Pyro bunkers spawn?"]]
-      .map(([k, use, ex]) => `<tr><td><span class="ix-gd-kind">${intelIco(k)}${esc(k === "rfi" ? "Question" : INTEL_KIND[k])}</span></td><td>${esc(use)}</td><td class="muted">${esc(ex)}</td></tr>`).join("") +
-    `</tbody></table></div><p>Debriefs are written from the op itself: open the finished op and pick <b>Write debrief →</b>.</p>`;
+  // Each kind jumps to the section that explains it (the rows ARE links).
+  const kinds = `<ul class="ix-gd-kinds">` +
+    [["procedure", "procedure", "How the org does something, step by step. It stays useful for months and has an owner who keeps it current.", "Hull-C escort formation · Pre-undock checklist"],
+     ["tactic", "procedure", "How to beat a threat or win a kind of fight: the situation, what they usually do, the worst case, the counter.", "Breaking a gate camp at Pyro Gateway"],
+     ["report", "report", "Something you saw, right now: who, where, when. It drops off the live feed after a few hours.", "Gate camp at the Stanton jump point, 5 ships"],
+     ["dossier", "dossier", "Everything the org knows about one place or one other org. Anyone can add to it.", "Ruin Station · Red Wake Syndicate"],
+     ["rfi", "question", "A question for the org. Whoever knows answers it.", "Where do the Pyro bunkers spawn?"]]
+      .map(([k, s, use, ex]) => `<li><a href="#/intel/guide/${s}" data-sec="gd-${s}"><span class="ix-gd-kind">${intelIco(k)}${esc(INTEL_KIND[k])}</span>` +
+        `<span class="use">${esc(use)}</span><span class="ex">e.g. ${esc(ex)}</span><span class="go" aria-hidden="true">→</span></a></li>`).join("") +
+    `</ul><p>Debriefs are written from the op itself: open the finished op and pick <b>Write debrief →</b>.</p>`;
   const procedure = step([
-    `Pick <b>+ New</b> at the top of Intelligence, then <b>Procedure</b> (or <b>Tactic</b>).`,
+    `Pick <b>New</b> at the top of Intelligence (on the Library it starts a procedure). In the editor, the kind buttons along the top switch it to <b>Tactic</b>.`,
     `Give it a <b>title</b> people would search for, and a one-line <b>summary</b>: it shows in lists and search.`,
     `Set the <b>activity</b> (it decides where it sits in the Library), the <b>system</b> if it only applies to one, and a few <b>tags</b> (<code>escort, hull-c</code>).`,
-    `Fill in the body. A new procedure starts with headings to fill: Purpose, When to use it, Steps, Loadout, Notes. Delete the ones you don't need.`,
+    `Fill in the body. A new procedure starts with headings to fill: Purpose, When to use it, Steps, Loadout, Notes. A tactic's are Situation, Most likely, Most dangerous, Counter, Loadout. Delete the ones you don't need.`,
     `Use <b>PREVIEW</b> to see it exactly as readers will.`,
     `Pick <b>Publish</b>. Tick <b>Announce in Discord</b> if the org should hear about it. If your org reviews procedures first, the button says <b>Submit for review</b> and a reviewer publishes it.`]) +
     `<p>Your draft saves itself while you type, on the server, so you can start it on your phone and finish it at your desk. Only you can see a draft.</p>` +
     `<p>A procedure is stamped with the game patch it was written for. When a new patch lands, it shows <b>written 4.3 · now 4.4</b> until someone saves a major revision or picks <b>Still valid on 4.4</b>.</p>` +
     `<div class="ix-gd-tip">${intelIco("task")}<span><b>Write for a second screen.</b> People read procedures on a phone next to the game. Short steps, one action each, the important number first ("Hold 8 km", not "Hold back a good distance").</span></div>`;
   const report = step([
-    `Pick <b>+ New → Report</b> (on the Feed, <b>+ New</b> starts a report). From the danger board, <b>Write up →</b> on a warning starts one already filled in.`,
+    `On the Feed, pick <b>New</b>: it starts a report. From the danger board, <b>Write up →</b> on a warning starts one already filled in.`,
     `Fill in the <b>SALUTE</b> block. <b>Where</b> and <b>when</b> are required; the rest helps whoever reads it next.`,
-    `Grade it if you can (see below), and choose how long it stays <b>valid</b>. A gate camp is old news in a couple of hours.`,
+    `Grade it if you can (see below), and check how long it stays <b>valid</b>: a new report is set to 6 hours. A gate camp is old news in a couple of hours.`,
     `Write what happened in the body, in the order it happened, and what others should do about it.`,
-    `Pick <b>Publish report</b>. Reports never wait for review.`]) +
+    `Pick <b>Publish report</b>. Reports never wait for review. If the button says <b>+ post to …</b>, it also goes to that Discord channel; untick <b>Announce in Discord</b> to keep it in the app.`]) +
     `<dl class="ix-gd-salute">` +
     [["S", "Size", "How many: “5 ships, 2 crewed heavies”."], ["A", "What they're doing", "“Interdicting anything over 96 SCU”."],
      ["L", "Location", "Find the place or survey zone, then say where exactly: “8 km off the Pyro-side exit”."],
@@ -29180,6 +29263,19 @@ async function intelGuide(box) {
     `<h3>After you publish</h3><p>You have <b>15 minutes</b> to correct a typo. After that, add an <b>update</b> instead (“One Polaris left”), which can also extend or end how long it stays valid. ` +
     `Others can <b>Corroborate</b> or <b>Dispute</b> it from the report.</p>` +
     `<div class="ix-gd-tip warn">${intelIco("alert")}<span><b>Describe ships, orgs and behaviour, not individual players.</b> “3 Polaris flying Red Wake tags” is intel; a page about one named player isn't, and members can flag it.</span></div>`;
+  const dossier = step([
+    `In the navigator, set the place as your destination and pick <b>◆ Start dossier</b>. Or pick <b>New</b> on the Dossiers tab and choose <b>A PLACE</b> or <b>AN ORG</b>.`,
+    `For an org, set its <b>stance</b> (hostile, neutral, allied, unknown) and any <b>aliases</b> people know it by: search finds the dossier by every one of them.`,
+    `Write what crews should know before they go. The headings to fill are there already.`,
+    `Pick <b>Publish</b>.`]) +
+    `<p>There's one dossier per place and per org: if one exists, the editor says so and links it. Once it's published any member can edit it, and every change is kept in <b>History</b>.</p>` +
+    `<p>You don't have to list reports by hand: the dossier gathers every report, procedure, live warning and event that mentions it. An org's <b>Seen at</b> counts the reports that name it as the unit.</p>`;
+  const question = step([
+    `On the Questions tab, pick <b>New</b>. On a place's dossier, <b>Ask about it</b> starts one about that place.`,
+    `Ask it as a title (“Where do the Pyro bunkers spawn?”), then add what you already know and what would help.`,
+    `Pick <b>Post question</b>. Anyone can answer it, and anyone can reply to an answer.`,
+    `When an answer does it, pick <b>Accept this answer</b>. The question shows as answered.`]) +
+    `<p>A good answer is worth keeping: under an accepted answer, <b>Promote to</b> turns it into a procedure or adds it to the place's dossier, crediting both of you.</p>`;
   const md = `<p>Entries use <b>Markdown</b>: plain text with a few marks for formatting, close to what Discord uses. You don't have to learn it: the toolbar buttons above the text box insert it for you ` +
     `(select some text first and they wrap it). Ctrl/⌘+B is bold, +I italic, +K a link.</p>` +
     `<div class="ix-gd-md" id="ix-gd-md">${INTEL_GUIDE_MD.map(([t, note, src], i) => `<div class="ix-gd-ex"><div class="ix-gd-ex-h"><b>${esc(t)}</b><span class="muted">${esc(note)}</span></div>` +
@@ -29210,25 +29306,67 @@ async function intelGuide(box) {
     `<li><b>Major</b>: the substance changed. Say <b>what changed</b> in one line (it's required): it shows in the Feed and History, goes in the Discord post, ` +
     `and members who had read it as required reading are asked to read it again.</li></ul>` +
     `<p>A report can't be rewritten after its 15 minutes: add an update instead.</p>`;
-  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/library">Intelligence</a><span>/</span><span>Writing guide</span></nav>` +
-    `<div class="ix-grid"><article class="panel ix-article"><div class="ix-head"><div class="ix-kindline">${intelIco("edit")}Guide</div>` +
-    `<h1 class="ix-title">Writing procedures and reports</h1>` +
-    `<p class="ix-lead">How to write the two kinds you'll use most, the formatting the editor takes, and how to get a screenshot in.</p>` +
+  const body = { kinds, procedure, report, dossier, question, markdown: md, images, links, paste, revise };
+  const navLinks = INTEL_GUIDE_SECS.map(([id, t]) => `<li><a href="#/intel/guide/${id}" data-sec="gd-${id}">${esc(t)}</a></li>`).join("");
+  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/feed">Intelligence</a><span>/</span><span>Writing guide</span></nav>` +
+    `<div class="ix-grid"><div class="ix-gd">` +
+    `<header class="panel ix-gd-hero"><div class="ix-kindline">${intelIco("edit")}Guide</div>` +
+    `<h1 class="ix-title">Writing guide</h1>` +
+    `<p class="ix-lead">Which kind to write, step by step for each, the formatting the editor takes, and how to get a screenshot in.</p>` +
     `<div class="ix-actions"><a class="ix-primary" href="#/intel/new/procedure">${intelIco("procedure")}New procedure</a>` +
-    `<a class="ix-btn" href="#/intel/new/report">${intelIco("report")}New report</a></div></div>` +
-    `<div class="ix-prose ix-gd">${g("kinds", "Which kind to write", kinds)}${g("procedure", "Write a procedure", procedure)}${g("report", "Write a report", report)}` +
-    `${g("markdown", "Formatting", md)}${g("images", "Add an image", images)}${g("links", "Link places, ops and entries", links)}` +
-    `${g("paste", "Bring in an existing doc", paste)}${g("revise", "Change it later", revise)}</div></article>` +
-    `<aside class="ix-rail"><div class="panel ix-gd-toc"><h2>ON THIS PAGE</h2><ul class="ix-toc">${INTEL_GUIDE_SECS.map(([id, t]) =>
-      `<li><a href="#/intel/guide/${id}" data-sec="gd-${id}">${esc(t)}</a></li>`).join("")}</ul></div></aside></div>`;
-  box.querySelectorAll(".ix-gd-toc a").forEach(a => a.onclick = (ev) => {
+    `<a class="ix-btn" href="#/intel/new/report">${intelIco("report")}New report</a></div></header>` +
+    // Phone: the page's sections as a chip row at the top (the rail drops below).
+    `<nav class="ix-gd-chips" aria-label="Guide sections"><ul>${navLinks}</ul></nav>` +
+    INTEL_GUIDE_SECS.map(([id, t]) => g(id, t, body[id])).join("") + `</div>` +
+    `<aside class="ix-rail"><nav class="panel ix-gd-toc" aria-label="On this page"><h2>ON THIS PAGE</h2><ul class="ix-toc">${navLinks}</ul></nav></aside></div>`;
+  // A picked link moves focus into its section (keyboard users carry on
+  // from there); arriving by a deep link only scrolls.
+  const jump = (id, picked) => {
+    const s = document.getElementById(id); if (!s) return;
+    s.scrollIntoView({ behavior: picked && !matchMedia("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto", block: "start" });
+    if (picked) s.focus({ preventScroll: true });
+  };
+  box.querySelectorAll("a[data-sec]").forEach(a => a.onclick = (ev) => {
     ev.preventDefault(); history.replaceState(null, "", a.getAttribute("href"));
-    const t = document.getElementById(a.dataset.sec); if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
+    jump(a.dataset.sec, true);
   });
-  intelSetTab(null);
-  const target = sec && document.getElementById(`gd-${sec}`);
-  if (target) target.scrollIntoView({ block: "start" }); else window.scrollTo(0, 0);
-  // One render call for every example, split back apart on the rules.
+  // Scroll-spy: the current section is the last one whose top has passed a
+  // line just under the top of the viewport (under the sticky chip row on a
+  // phone), in both the rail and the chip row.
+  if (intelGuideSpy) intelGuideSpy();
+  const mark = (id) => box.querySelectorAll(".ix-toc a, .ix-gd-chips a").forEach(a => {
+    const on = a.dataset.sec === id;
+    if (on === a.classList.contains("on")) return;
+    a.classList.toggle("on", on);
+    if (on) {
+      a.setAttribute("aria-current", "location");
+      const row = a.closest(".ix-gd-chips ul");   // keep the current chip in view, sideways only
+      if (row && row.offsetParent) row.scrollLeft = Math.max(0, a.offsetLeft - row.clientWidth / 2 + a.offsetWidth / 2);
+    } else a.removeAttribute("aria-current");
+  });
+  const secs = [...box.querySelectorAll(".ix-gd-sec")];
+  let raf = 0;
+  const spy = () => {
+    raf = 0;
+    if (!secs[0].isConnected) return intelGuideSpy && intelGuideSpy();
+    const line = matchMedia("(max-width: 860px)").matches ? 72 : 24;
+    let cur = secs[0];
+    for (const s of secs) { if (s.getBoundingClientRect().top <= line) cur = s; else break; }
+    // At the very bottom the last short sections can't reach the line: the end wins.
+    if (innerHeight + scrollY >= document.documentElement.scrollHeight - 2) cur = secs[secs.length - 1];
+    mark(cur.id);
+  };
+  const onScroll = () => { if (!raf) raf = requestAnimationFrame(spy); };
+  addEventListener("scroll", onScroll, { passive: true });
+  intelGuideSpy = () => { removeEventListener("scroll", onScroll); intelGuideSpy = null; };
+  intelSetTab("guide");
+  if (sec && document.getElementById(`gd-${sec}`)) jump(`gd-${sec}`, false);
+  else window.scrollTo(0, 0);
+  spy();
+  // One render call for every example, split back apart on the rules. The
+  // examples grow when they fill in, so a deep link to a later section is
+  // re-aimed afterwards (unless the reader has scrolled since).
+  const aimedY = scrollY;
   try {
     const d = await intelApi("/api/intel/render", { method: "POST", body: { body: INTEL_GUIDE_MD.map(x => x[2]).join("\n\n---\n\n") } });
     const parts = d.html.split(/<hr\s*\/?>/);
@@ -29239,6 +29377,7 @@ async function intelGuide(box) {
   } catch {
     box.querySelectorAll(".ix-gd-out").forEach(el => { el.innerHTML = `<p class="muted">Preview unavailable right now.</p>`; });
   }
+  if (sec && Math.abs(scrollY - aimedY) < 4 && document.getElementById(`gd-${sec}`)) jump(`gd-${sec}`, false);
 }
 
 // ---- COLLECTIONS (#50 slice 8b): ordered reading lists ----
@@ -29702,6 +29841,51 @@ function intelFlagForm(host, target, mine, onDone) {
   };
   const first = f.querySelector(`[data-r="${reason}"]`) || f.querySelector("[data-r]"); first.focus();
 }
+// The entry action bar keeps the page's own actions (Edit, Corroborate,
+// Dispute, Add update, Answer…) and History/Watch in view; the rest share one
+// More menu, so Flag and Archive never sit at Corroborate's weight. Nodes are
+// MOVED, so the handlers bound by id keep working; safe to call again.
+const INTEL_MORE_IDS = ["ix-copy", "ix-collect", "ix-flag", "ix-archive", "ix-hide"];
+function intelGroupMore(acts) {
+  if (!acts) return;
+  const items = INTEL_MORE_IDS.map(id => acts.querySelector(`#${id}`)).filter(Boolean);
+  if (!items.length) return;
+  let wrap = acts.querySelector(".ix-more");
+  if (!wrap) {
+    acts.insertAdjacentHTML("beforeend", `<span class="ix-more"><button type="button" class="ix-btn" id="ix-more" aria-haspopup="menu" ` +
+      `aria-expanded="false" aria-controls="ix-more-menu">More<svg class="ix-ico sm ix-caret" aria-hidden="true" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>` +
+      `<span class="ix-more-menu" id="ix-more-menu" role="menu" hidden></span></span>`);
+    wrap = acts.querySelector(".ix-more");
+  }
+  const menu = wrap.querySelector(".ix-more-menu"), btn = wrap.querySelector("#ix-more");
+  items.forEach(el => { el.setAttribute("role", "menuitem"); menu.appendChild(el); });
+  acts.querySelectorAll(".sp").forEach((s, i, all) => { if (i < all.length - 1) s.remove(); });
+  const close = (focus) => {
+    if (menu.hidden) return;
+    menu.hidden = true; btn.setAttribute("aria-expanded", "false");
+    document.removeEventListener("pointerdown", outside, true); document.removeEventListener("keydown", key, true);
+    if (focus) btn.focus();
+  };
+  const outside = (ev) => { if (!wrap.contains(ev.target)) close(false); };
+  const key = (ev) => {
+    const its = [...menu.querySelectorAll("[role=menuitem]")], i = its.indexOf(document.activeElement);
+    if (ev.key === "Escape") { ev.preventDefault(); close(true); }
+    else if (ev.key === "ArrowDown" || ev.key === "ArrowUp") { ev.preventDefault(); its[(i + (ev.key === "ArrowDown" ? 1 : its.length - 1)) % its.length].focus(); }
+    else if (ev.key === "Tab") close(false);
+  };
+  btn.onclick = () => {
+    if (!menu.hidden) return close(false);
+    menu.hidden = false; btn.setAttribute("aria-expanded", "true");
+    // Open toward the side with room: under a More that wrapped to the left
+    // edge (phone), right-aligning would push the menu off screen.
+    const r = btn.getBoundingClientRect(), left = r.right - menu.offsetWidth < 8;
+    menu.style.left = left ? "0" : ""; menu.style.right = left ? "auto" : "";
+    document.addEventListener("pointerdown", outside, true); document.addEventListener("keydown", key, true);
+    const first = menu.querySelector("[role=menuitem]"); if (first) first.focus();
+  };
+  // Picking an item closes the menu first; the item's own handler still runs.
+  menu.onclick = (ev) => { if (ev.target.closest("[role=menuitem]")) close(false); };
+}
 function intelBindMember(box, e, rerender) {
   const fail = (err) => intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000);
   const acts = box.querySelector(".ix-head .ix-actions");
@@ -29726,6 +29910,7 @@ function intelBindMember(box, e, rerender) {
   };
   if ($("ix-hide")) $("ix-hide").onclick = () => hideIt(true);
   if ($("ix-unhide")) $("ix-unhide").onclick = () => hideIt(false);
+  intelGroupMore(acts);
   if (!e.watching || !acts) return;
   if (!$("ix-member-pops")) acts.insertAdjacentHTML("afterend", `<div id="ix-member-pops"><div class="ix-inpop" id="ix-collect-pop" hidden></div>` +
     `<div class="ix-inpop" id="ix-flag-pop" hidden></div></div>`);
@@ -29912,7 +30097,7 @@ function intelRfiRow(e) {
     `<span class="ix-meta">${meta}</span></span><span class="ix-when">${esc(intelWhen(e.published_at))}</span></a>`;
 }
 async function intelRfiList(box) {
-  box.innerHTML = `<div class="panel"><div class="ix-panel-h"><h2>RFI</h2><span class="muted">Questions for the org. Open ones first, then answered</span></div>` +
+  box.innerHTML = `<div class="panel"><div class="ix-panel-h"><h2>QUESTIONS</h2><span class="muted">Asked by members, answered by whoever knows. Open ones first, then answered</span></div>` +
     `<div class="ix-list" id="ix-rfi">${intelStatus("Loading…")}</div></div>`;
   try {
     const d = await intelApi("/api/intel/entries?section=rfi");
@@ -29951,7 +30136,7 @@ async function intelRfiView(box, e) {
   const linked = (e.linked_from || []).length ? `<div class="panel"><div class="ix-panel-h"><h2>LINKED FROM</h2><span class="muted">${e.linked_from.length}</span></div>` +
     `<ul class="ix-rl">${e.linked_from.map(b => `<li>${intelIco(b.kind)}<span><a href="${intelHref(b)}">${esc(b.title)}</a>` +
     `<small>${esc((INTEL_KIND[b.kind] || b.kind).toLowerCase())}</small></span></li>`).join("")}</ul></div>` : "";
-  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/rfi">RFI</a><span>/</span><span>${answered ? "Answered" : "Open"}</span></nav>` +
+  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/rfi">Questions</a><span>/</span><span>${answered ? "Answered" : "Open"}</span></nav>` +
     `<div class="ix-grid"><article class="panel ix-article"><div class="ix-head">` +
     `<div class="ix-kindline">${intelIco("rfi")}Question${intelMarkTags(e)}` +
     (answered ? `<span class="ix-tag ok">${intelIco("check", "ix-ico sm")}Answered</span>` : `<span class="ix-tag draft">Open</span>`) +
@@ -29976,7 +30161,7 @@ async function intelRfiView(box, e) {
   $("ix-answer-go").onclick = (ev) => { ev.preventDefault(); const t = $("ix-cmt-body"); if (t) { t.scrollIntoView({ block: "center" }); t.focus(); } };
   $("ix-copy").onclick = () => intelCopy(location.origin + location.pathname + intelHref(e), "Link copied");
   if ($("ix-archive")) $("ix-archive").onclick = async () => {
-    const ok = await confirmDialog(`“${e.title}” leaves the RFI list and search. Its answers are kept and an admin can still see it.`,
+    const ok = await confirmDialog(`“${e.title}” leaves Questions and search. Its answers are kept and an admin can still see it.`,
       { title: "Archive this question?", confirmLabel: "Archive", danger: true });
     if (!ok) return;
     try { await intelApi(`/api/intel/entries/${e.id}`, { method: "DELETE" }); location.hash = "#/intel/rfi"; }
@@ -30383,7 +30568,7 @@ async function intelEntryView(box) {
   intelBindThread(box, e, () => intelEntryView(box));
 }
 function intelSetTab(tab) {
-  document.querySelectorAll("#intel-tabs a").forEach(a => {
+  document.querySelectorAll("#intel-tabs a, #intel-guide-link").forEach(a => {
     const on = a.dataset.sec === tab;
     a.classList.toggle("on", on);
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
@@ -30720,7 +30905,9 @@ function intelEdValues() {
       unit_ref: intelEd.unitRef ? intelEd.unitRef.key : null, unit_label: intelEd.unitRef ? intelEd.unitRef.label : null };
     v.grade_rel = $("ix-r-rel").value || null;
     v.grade_cred = $("ix-r-cred").value ? +$("ix-r-cred").value : null;
-    v.valid_until = intelEd.validUntil || null;
+    // A picked duration counts from the save, so a report written slowly still
+    // gets its full 6 hours from publish.
+    v.valid_until = intelEd.validHours ? new Date(Date.now() + intelEd.validHours * 3600000).toISOString() : (intelEd.validUntil || null);
   }
   if (intelEd && intelEd.kind === "dossier" && $("ix-dos") && intelEd.dos) {
     const org = intelEd.dos.kind === "org";
@@ -30739,7 +30926,7 @@ function intelEdMountRfi(v) {
   const ed = intelEd, h = (v && v.header) || {};
   ed.rfiLoc = h.location_ref ? { key: h.location_ref, label: h.location_label || h.location_ref } : null;
   const wrap = $("ix-rfi");
-  wrap.innerHTML = `<div class="ix-rep-h"><span>WHERE</span><small>Optional. A question about a place shows on its dossier while it's open.</small></div>` +
+  wrap.innerHTML = `<div class="ix-rep-h"><span>WHERE</span><small>Optional. A question about a place shows on its dossier while it's open.</small><a class="ix-rep-help" href="#/intel/guide/question" target="_blank" rel="noopener">How to fill this in</a></div>` +
     `<div class="ix-lbl"><span>LOCATION · a place or survey zone</span><div id="ix-q-locchip"></div>` +
     `<div class="ix-pick" id="ix-q-pick"><input class="ti" id="ix-q-locq" autocomplete="off" placeholder="Find a place or survey zone…" aria-label="Find a place">` +
     `<ul id="ix-q-locres" hidden></ul></div></div>`;
@@ -30832,6 +31019,9 @@ function intelEdMountReport(v) {
   ed.locRef = h.location_ref ? { key: h.location_ref, label: h.location_label || h.location_ref } : null;
   ed.unitRef = h.unit_ref ? { key: h.unit_ref, label: h.unit_label || "an org dossier" } : null;
   ed.validUntil = v.valid_until || null;
+  // A brand-new report defaults to 6 hours: a sighting is old news by then
+  // (the writing guide says so too). "No expiry" stays one pick away.
+  ed.validHours = (!ed.entry && !ed.validUntil) ? 6 : null;
   if (h.warning_id) ed.warningId = h.warning_id;
   const inp = (id, lbl, val, ph, max) => `<label class="ix-lbl"><span>${lbl}</span><input class="ti" id="${id}" maxlength="${max}" autocomplete="off" ` +
     `placeholder="${esc(ph)}" value="${esc(val || "")}"></label>`;
@@ -30840,7 +31030,7 @@ function intelEdMountReport(v) {
   const cred = `<option value="">—</option>` + Object.entries(INTEL_CRED).map(([k, t]) =>
     `<option value="${k}"${String(v.grade_cred) === k ? " selected" : ""}>${k} · ${esc(t)}</option>`).join("");
   const wrap = $("ix-rep");
-  wrap.innerHTML = `<div class="ix-rep-h"><span>SALUTE</span><small>Where and when are required. The rest helps whoever reads it next.</small></div>` +
+  wrap.innerHTML = `<div class="ix-rep-h"><span>SALUTE</span><small>Where and when are required. The rest helps whoever reads it next.</small><a class="ix-rep-help" href="#/intel/guide/report" target="_blank" rel="noopener">How to fill this in</a></div>` +
     `<div class="ix-rep-grid">` +
     `<div class="ix-lbl ix-rep-wide"><span>LOCATION · a place or survey zone</span><div id="ix-r-locchip"></div>` +
     `<div class="ix-pick" id="ix-r-pick"><input class="ti" id="ix-r-locq" autocomplete="off" placeholder="Find a place or survey zone…" aria-label="Find a place">` +
@@ -30859,11 +31049,11 @@ function intelEdMountReport(v) {
     `<label class="ix-lbl"><span>INFORMATION</span><select class="ti" id="ix-r-cred">${cred}</select></label>` +
     `<label class="ix-lbl"><span>VALID FOR</span><select class="ti" id="ix-r-valid">` +
     (ed.validUntil ? `<option value="cur" selected>Until ${esc(new Date(ed.validUntil).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" }))}</option>` : "") +
-    `<option value=""${ed.validUntil ? "" : " selected"}>No expiry</option><option value="2">2 hours</option><option value="6">6 hours</option>` +
-    `<option value="24">24 hours</option><option value="72">3 days</option></select></label>` +
+    [["", "No expiry"], ["2", "2 hours"], ["6", "6 hours"], ["24", "24 hours"], ["72", "3 days"]].map(([val, l]) =>
+      `<option value="${val}"${!ed.validUntil && String(ed.validHours || "") === val ? " selected" : ""}>${l}</option>`).join("") + `</select></label>` +
     `<small class="ix-rep-wide ix-r-hint" id="ix-r-hint"></small></div>`;
   const hint = () => {
-    $("ix-r-hint").textContent = (ed.validUntil ? `Drops off the live feed ${new Date(ed.validUntil).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" })}. ` : "No expiry: it stays in the live feed. ") +
+    $("ix-r-hint").textContent = (ed.validHours ? `Drops off the live feed ${ed.validHours === 72 ? "3 days" : `${ed.validHours} hours`} after you ${ed.status === "published" ? "save" : "publish"}. ` : ed.validUntil ? `Drops off the live feed ${new Date(ed.validUntil).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" })}. ` : "No expiry: it stays in the live feed. ") +
       "Grading is optional; an ungraded report shows “—”, not a low grade.";
   };
   hint();
@@ -30893,7 +31083,10 @@ function intelEdMountReport(v) {
   $("ix-r-now").onclick = () => { $("ix-r-time").value = intelLocalInput(new Date().toISOString()); intelEdChanged(); };
   $("ix-r-valid").onchange = (ev) => {
     const val = ev.target.value;
-    if (val !== "cur") ed.validUntil = val ? new Date(Date.now() + (+val) * 3600000).toISOString() : null;
+    // "cur" keeps the stored time; a duration wins over it at save; "" = none.
+    if (val === "cur") ed.validHours = null;
+    else if (val) ed.validHours = +val;
+    else { ed.validHours = null; ed.validUntil = null; }
     hint(); intelEdChanged();
   };
 }
@@ -30907,7 +31100,7 @@ function intelEdMountDossier(v) {
     ref: d.subject_ref ? { key: d.subject_ref, label: d.subject_label || d.subject_ref } : null };
   const stOpts = Object.entries(INTEL_STANCE).map(([k, t]) => `<option value="${k}"${(d.stance || "unknown") === k ? " selected" : ""}>${t}</option>`).join("");
   const wrap = $("ix-dos");
-  wrap.innerHTML = `<div class="ix-rep-h"><span>ABOUT</span><small id="ix-d-hint"></small></div>` +
+  wrap.innerHTML = `<div class="ix-rep-h"><span>ABOUT</span><small id="ix-d-hint"></small><a class="ix-rep-help" href="#/intel/guide/dossier" target="_blank" rel="noopener">How to fill this in</a></div>` +
     (locked ? "" : `<div class="seg" id="ix-d-kind" role="group" aria-label="What it's about" style="margin-bottom:10px">` +
       `<button type="button" data-dk="place">A PLACE</button><button type="button" data-dk="org">AN ORG</button></div>`) +
     `<div class="ix-dos-grid">` +
@@ -31146,7 +31339,7 @@ async function intelEditor(box) {
   const crumbTail = e ? `<a href="${published ? intelHref(e) : "#/intel/library"}">${esc(e.title)}</a><span>/</span><span>${e.kind === "report" && published ? "Correct" : "Edit"}</span>`
     : `<span id="ix-crumb-t">${kind === "rfi" ? "New question" : `New ${esc(INTEL_KIND[kind].toLowerCase())}`}</span>`;
   const home = (k) => k === "report" || k === "debrief" ? `<a href="#/intel/feed" id="ix-crumb-home">Feed</a>`
-    : k === "rfi" ? `<a href="#/intel/rfi" id="ix-crumb-home">RFI</a>`
+    : k === "rfi" ? `<a href="#/intel/rfi" id="ix-crumb-home">Questions</a>`
     : k === "dossier" ? `<a href="#/intel/dossiers" id="ix-crumb-home">Dossiers</a>` : `<a href="#/intel/library" id="ix-crumb-home">Library</a>`;
   box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb">${home(intelEd.kind)}<span>/</span>${crumbTail}</nav>` +
     `<div class="ix-ed-grid"><div class="panel ix-ed">` +
@@ -31197,7 +31390,9 @@ async function intelEditor(box) {
     `<textarea class="ti ix-area" id="ix-area" spellcheck="true" aria-label="Body (Markdown)"></textarea>` +
     `<div class="ix-prose ix-preview" id="ix-preview" hidden></div>` +
     `<div class="ix-ed-foot"><span id="ix-count"></span><span>Paste from Docs or Notion keeps the formatting. Shift-paste for plain text. ` +
-    `<a href="#/intel/guide/markdown" target="_blank" rel="noopener">Formatting guide</a></span>` +
+    `<a href="#/intel/guide/markdown" target="_blank" rel="noopener">Formatting guide</a>` +
+    // Procedures and tactics have no header block, so their "how to" lives here.
+    `<span id="ix-howto"${["procedure", "tactic"].includes(intelEd.kind) ? "" : " hidden"}> · <a href="#/intel/guide/procedure" target="_blank" rel="noopener">How to write a procedure or tactic</a></span></span>` +
     `<span class="saved" id="ix-saved" role="status"></span></div>` +
     `</div><aside class="ix-ed-rail"><div class="panel" id="ix-save-p"></div><div class="panel" id="ix-people-p" hidden></div></aside></div>`;
   const ta = $("ix-area");
@@ -31256,6 +31451,7 @@ async function intelEditor(box) {
     intelEdRenderSave(true);
     history.replaceState(null, "", `#/intel/new/${intelEd.kind}`);
     $("ix-crumb-t").textContent = intelEd.kind === "rfi" ? "New question" : `New ${INTEL_KIND[intelEd.kind].toLowerCase()}`;
+    if ($("ix-howto")) $("ix-howto").hidden = !["procedure", "tactic"].includes(intelEd.kind);
     intelRoute = { kind: intelEd.kind };
     intelEdCounts();
   });
@@ -31479,11 +31675,22 @@ function intelEdAnnounceHtml(mode) {
   return `<div class="ix-ann"><label class="ix-ann-on"><input type="checkbox" id="ix-ann-on"${a.on ? " checked" : ""}>${label}</label>` +
     `<div class="ix-ann-body" id="ix-ann-body"${a.on ? "" : " hidden"}>${chanSel}${pingSel}${teaser}</div></div>`;
 }
+// Where a first publish posts right now (shown on the button itself, so the
+// click that commits says where it goes), or null when it posts nothing now.
+function intelEdPostsTo() {
+  const o = intelAnnounceOpts, ed = intelEd;
+  if (!o || !ed || !ed.ann.on || intelEdGated()) return null;
+  if (ed.visibility === "restricted") return o.restricted ? `+ placeholder to ${INTEL_CHANNEL_LABEL.intel_restricted}` : null;
+  const key = ed.ann.channel || o.defaults[ed.kind];
+  const c = o.channels.find(x => x.key === key);
+  return c ? `+ post to ${c.label}` : null;
+}
 function intelEdBindAnnounce() {
   const a = intelEd && intelEd.ann; if (!a) return;
+  const where = () => { const w = $("ix-pub-where"), s = intelEdPostsTo(); if (w) { w.hidden = !s; w.textContent = s || ""; } };
   const cnt = () => { if ($("ix-ann-n") && $("ix-ann-t")) $("ix-ann-n").textContent = `${$("ix-ann-t").value.length} / ${intelAnnounceOpts.teaser_max}`; };
-  if ($("ix-ann-on")) $("ix-ann-on").onchange = (ev) => { a.on = ev.target.checked; if ($("ix-ann-body")) $("ix-ann-body").hidden = !a.on; };
-  if ($("ix-ann-ch")) $("ix-ann-ch").onchange = (ev) => { a.channel = ev.target.value; };
+  if ($("ix-ann-on")) $("ix-ann-on").onchange = (ev) => { a.on = ev.target.checked; if ($("ix-ann-body")) $("ix-ann-body").hidden = !a.on; where(); };
+  if ($("ix-ann-ch")) $("ix-ann-ch").onchange = (ev) => { a.channel = ev.target.value; where(); };
   if ($("ix-ann-ping")) $("ix-ann-ping").onchange = (ev) => { a.ping = ev.target.value || null; };
   if ($("ix-ann-t")) $("ix-ann-t").oninput = (ev) => { a.teaser = ev.target.value; cnt(); };
   cnt();
@@ -31514,11 +31721,12 @@ function intelEdRenderSave(keepNote) {
       (gated ? `Only you can see a draft. ${INTEL_KIND[ed.kind]}s are reviewed before they're published: a reviewer approves it, or sends it back with a note.`
         : isReport ? `Only you can see a draft. A report is a record of what you saw: once it's published you can correct it for 15 minutes, then you add updates.`
         : ed.kind === "dossier" ? `Only you can see a draft. Once it's published any member can edit it, and every change is kept.`
-        : ed.kind === "rfi" ? `Only you can see a draft. Posting puts the question in RFI and the Feed. Anyone can answer; you mark the answer that did it.`
+        : ed.kind === "rfi" ? `Only you can see a draft. Posting puts it in Questions and the Feed. Anyone can answer; you mark the answer that did it.`
         : ed.kind === "debrief" ? `Only you can see a draft. Publishing puts it in the Feed and search, and on its op's page under DEBRIEFS.`
         : `Only you can see a draft. Publishing puts it in the Library, the Feed and search, stamped with the game patch.`) + `</p>` +
       intelEdAnnounceHtml("publish") +
-      `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-publish">${gated ? "Submit for review" : isReport ? "Publish report" : ed.kind === "rfi" ? "Post question" : "Publish"}</button>` +
+      `<div class="ix-save-acts"><button type="button" class="ix-primary ix-pub" id="ix-publish"><span>${gated ? "Submit for review" : isReport ? "Publish report" : ed.kind === "rfi" ? "Post question" : "Publish"}</span>` +
+      `<small id="ix-pub-where"${intelEdPostsTo() ? "" : " hidden"}>${esc(intelEdPostsTo() || "")}</small></button>` +
       (ed.id ? `<button type="button" class="ix-btn" id="ix-del">Delete draft</button>` : "") + `</div>` +
       `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
     bindMarking();
@@ -32371,7 +32579,7 @@ const DISCORD_CATS = [
   { key: "intel",       label: "Intelligence", desc: "entries the author announces, and every major revision. A forum channel opens a thread per entry" },
   { key: "intel_report", label: "Intel · reports", desc: "reports only. Unset = Intelligence" },
   { key: "intel_sop",   label: "Intel · procedures + tactics", desc: "procedures and tactics only. Unset = Intelligence" },
-  { key: "intel_rfi",   label: "Intel · questions", desc: "RFIs, plus one nudge when a question goes 24 h unanswered. Unset = Intelligence" },
+  { key: "intel_rfi",   label: "Intel · questions", desc: "Questions, plus one nudge when a question goes 24 h unanswered. Unset = Intelligence" },
   { key: "intel_debrief", label: "Intel · debriefs", desc: "After-action debriefs written from an op (an #after-action channel). Unset = Intelligence" },
   { key: "intel_restricted", label: "Intel · restricted", desc: "RESTRICTED entries as a placeholder: no title or text, just a link. Unset = they post nothing" },
 ];
