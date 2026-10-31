@@ -15714,8 +15714,9 @@ class IntelLibraryTests(unittest.TestCase):
         self.assertEqual([e["title"] for e in lib], ["Pre-undock"])
         self.assertEqual(lib[0]["owner"]["name"], "Owner")
 
-    def test_only_library_kinds_can_be_written(self):
-        r = self.client.post("/api/intel/entries", json={"kind": "report", "title": "x"})
+    def test_only_writable_kinds_can_be_written(self):
+        # Reports arrive in slice 3; dossiers, RFIs and debriefs come later.
+        r = self.client.post("/api/intel/entries", json={"kind": "dossier", "title": "x"})
         self.assertEqual(r.status_code, 422)
         r = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": "x",
                                                          "activity": "not-a-playstyle"})
@@ -16178,6 +16179,241 @@ class IntelAccessReviewTests(unittest.TestCase):
             t.join()
         self.assertEqual(errors, [])
 
+
+
+class IntelReportTests(unittest.TestCase):
+    """Intelligence slice 3 (#50): reports (SALUTE header, grade, valid-until,
+    the 15-minute typo window, updates, corroborate/dispute), the feed, live
+    reference chips + backlinks, and danger-board write-ups."""
+
+    CLEAR_ROLE = "111111111111111111"
+    AUTHOR = {"id": "11", "username": "author", "is_admin": False}
+    OTHER = {"id": "22", "username": "other", "is_admin": False}
+    ADMIN = {"id": "33", "username": "admin", "is_admin": True}
+    CLEARED = {"id": "44", "username": "cleared", "is_admin": False}
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+        cls.user = cls.AUTHOR
+        app.app.dependency_overrides[app.require_session] = lambda: cls.user
+        cls._orig_session_user = app.session_user
+        app.session_user = lambda request: cls.user
+        cls._orig_members = app.members_dir.by_id
+        app.members_dir.by_id = {
+            m["id"]: {"display_name": m["username"].title(),
+                      "discord_roles": json.dumps([cls.CLEAR_ROLE] if m["id"] == "44" else [])}
+            for m in (cls.AUTHOR, cls.OTHER, cls.ADMIN, cls.CLEARED)}
+        for m in (cls.AUTHOR, cls.OTHER, cls.ADMIN, cls.CLEARED):
+            db.upsert_member({"id": m["id"], "username": m["username"], "global_name": m["username"].title()})
+        cls._orig_patch = app.patch_tracker._state
+        app.patch_tracker._state = {"seen": {}, "first": {}, "current": "4.3.0", "since": None}
+        cls.poi = next(p for p in app.nav.pois.values()
+                       if not p.private and app.nav_core.poi_active(p) and p.qt_marker)
+        cls.client = TestClient(app.app)
+
+    @classmethod
+    def tearDownClass(cls):
+        app.app.dependency_overrides.clear()
+        app.session_user = cls._orig_session_user
+        app.members_dir.by_id = cls._orig_members
+        app.patch_tracker._state = cls._orig_patch
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        type(self).user = self.AUTHOR
+        app._rate_hits.clear()
+        with db._conn:
+            for t in ("intel_entries", "intel_revisions", "intel_tags", "intel_links", "intel_comments"):
+                db._conn.execute(f"DELETE FROM {t}")
+            if db.INTEL_SEARCH == "fts5":
+                db._conn.execute("DELETE FROM intel_fts")
+        db.set_setting("intel_clearance_roles", json.dumps([{"id": self.CLEAR_ROLE, "label": "Officers"}]))
+        db.set_setting("intel_review_required", "0")
+
+    def as_(self, who):
+        type(self).user = who
+
+    def header(self, **kw):
+        return {"location_ref": f"poi:{self.poi.id}", "location": "8 km off the exit",
+                "time": "2026-10-31T21:25:00Z", "size": "5 ships", "unit": "Red Wake", **kw}
+
+    def report(self, title="Gate camp at the jump point", body="Pulled out of QT at 8 km.", publish=True, **kw):
+        kw.setdefault("header", self.header())
+        r = self.client.post("/api/intel/entries", json={"kind": "report", "title": title, "body": body, **kw})
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()
+        if not publish:
+            return d
+        r = self.client.put(f"/api/intel/entries/{d['id']}", json={"title": title, "body": body, "publish": True, **kw})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def age(self, eid, minutes):
+        """Pretend the report was published `minutes` ago."""
+        t = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+        db.intel_set_fields(eid, {"published_at": t})
+
+    # ---- the report itself ----
+    def test_publish_needs_a_place_and_a_time(self):
+        d = self.report(publish=False, header={"size": "3"})
+        r = self.client.put(f"/api/intel/entries/{d['id']}", json={"title": d["title"], "body": "x", "publish": True,
+                                                                   "header": {"size": "3"}})
+        self.assertEqual(r.status_code, 422)
+        self.assertIn("location and a time", r.json()["detail"])
+        e = self.report(grade_rel="B", grade_cred=2, valid_until="2099-01-01T00:00:00Z")
+        self.assertEqual(e["status"], "published")
+        self.assertEqual(e["header"]["location_label"], self.poi.name)
+        self.assertEqual((e["report"]["grade"], e["report"]["expired"]), ("B2", False))
+        # The SALUTE location is a backlink like a body reference, with its name kept.
+        self.assertEqual(db.intel_link_labels(e["id"])[f"poi:{self.poi.id}"], self.poi.name)
+
+    def test_grade_and_kind_validation(self):
+        r = self.client.post("/api/intel/entries", json={"kind": "report", "title": "x", "grade_rel": "G"})
+        self.assertEqual(r.status_code, 422)
+        r = self.client.post("/api/intel/entries", json={"kind": "report", "title": "x", "grade_cred": 7})
+        self.assertEqual(r.status_code, 422)
+        r = self.client.post("/api/intel/entries", json={"kind": "report", "title": "x",
+                                                         "header": {"location_ref": "entry:4"}})
+        self.assertEqual(r.status_code, 422)
+        # A credibility without a reliability is ungraded, not half a grade.
+        e = self.report(grade_cred=3)
+        self.assertIsNone(e["report"]["grade"])
+
+    def test_typo_window_then_updates_only(self):
+        e = self.report()
+        self.assertTrue(e["can_edit"])
+        r = self.client.put(f"/api/intel/entries/{e['id']}", json={
+            "title": e["title"], "body": "Pulled out of QT at 8 km!", "header": self.header(),
+            "base_rev": 1, "major": True, "note": "typo"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["rev"], 2)
+        self.assertEqual(db.intel_revisions(e["id"])[0]["major"], 0)   # never a re-publish
+        self.as_(self.OTHER)
+        self.assertFalse(self.client.get(f"/api/intel/entries/{e['id']}").json()["can_edit"])
+        self.as_(self.AUTHOR)
+        self.age(e["id"], 20)
+        v = self.client.get(f"/api/intel/entries/{e['id']}").json()
+        self.assertFalse(v["can_edit"])
+        self.assertTrue(v["can_update"])
+        r = self.client.put(f"/api/intel/entries/{e['id']}", json={"title": e["title"], "body": "rewrite",
+                                                                   "header": self.header(), "base_rev": 2})
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("Add an update", r.json()["detail"])
+
+    def test_updates_and_validity(self):
+        e = self.report(valid_until="2099-01-01T00:00:00Z")
+        url = f"/api/intel/entries/{e['id']}/updates"
+        self.assertEqual(self.client.post(url, json={"body": "x"}).status_code, 422)
+        v = self.client.post(url, json={"body": "One Polaris left."}).json()
+        self.assertEqual([u["kind"] for u in v["updates"]], ["addendum"])
+        self.assertIn("One Polaris left.", v["updates"][0]["html"])
+        self.assertEqual(self.client.post(url, json={"validity": "2001-01-01T00:00:00Z"}).status_code, 422)
+        v = self.client.post(url, json={"validity": "2099-06-01T12:00:00Z"}).json()
+        self.assertEqual(v["valid_until"], "2099-06-01T12:00:00+00:00")
+        self.assertIn("<time", v["updates"][-1]["html"])
+        self.as_(self.OTHER)
+        self.assertEqual(self.client.post(url, json={"body": "I saw it too"}).status_code, 403)
+        self.as_(self.ADMIN)
+        self.assertEqual(self.client.post(url, json={"body": "Admin note here"}).status_code, 200)
+        self.as_(self.AUTHOR)
+        v = self.client.post(url, json={"validity": "clear"}).json()
+        self.assertTrue(v["report"]["expired"])
+        # Expired reports leave the live feed; they're still there on request.
+        ids = [x["id"] for x in self.client.get("/api/intel/entries?section=feed").json()["entries"]]
+        self.assertNotIn(e["id"], ids)
+        ids = [x["id"] for x in self.client.get("/api/intel/entries?section=feed&expired=1").json()["entries"]]
+        self.assertIn(e["id"], ids)
+
+    def test_corroborate_and_dispute(self):
+        e = self.report()
+        url = f"/api/intel/entries/{e['id']}/stance"
+        self.assertEqual(self.client.post(url, json={"stance": "corroborate"}).status_code, 403)
+        self.as_(self.OTHER)
+        self.assertEqual(self.client.post(url, json={"stance": "dispute"}).status_code, 422)
+        v = self.client.post(url, json={"stance": "corroborate", "note": "Saw two Polaris"}).json()
+        self.assertEqual((v["stances"]["corroborate"], v["stances"]["mine"]), (1, "corroborate"))
+        v = self.client.post(url, json={"stance": "dispute", "note": "It's gone now"}).json()
+        self.assertEqual((v["stances"]["corroborate"], v["stances"]["dispute"]), (0, 1))
+        feed = self.client.get("/api/intel/entries?section=feed").json()["entries"]
+        self.assertEqual(feed[0]["counts"]["dispute"], 1)
+        v = self.client.post(url, json={"stance": "none"}).json()
+        self.assertEqual((v["stances"]["dispute"], v["stances"]["mine"]), (0, None))
+        # Stances are for reports only.
+        self.as_(self.AUTHOR)
+        d = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": "SOP", "body": "x"}).json()
+        self.client.put(f"/api/intel/entries/{d['id']}", json={"title": "SOP", "body": "x", "publish": True})
+        self.as_(self.OTHER)
+        self.assertEqual(self.client.post(f"/api/intel/entries/{d['id']}/stance",
+                                          json={"stance": "corroborate"}).status_code, 409)
+
+    # ---- references + backlinks ----
+    def test_refs_resolve_for_the_viewer_and_keep_a_last_name(self):
+        a = self.report(title="Gate camp")
+        hid = self.report(title="Officer brief", visibility=None)
+        db.intel_set_fields(hid["id"], {"visibility": "restricted"})
+        b = self.report(title="Follow-up", body=f"See [[entry:{a['id']}]] and [[entry:{hid['id']}]] near [[poi:{self.poi.id}]].")
+        self.assertEqual([x["id"] for x in self.client.get(f"/api/intel/entries/{a['id']}").json()["linked_from"]],
+                         [b["id"]])
+        keys = f"entry:{a['id']},entry:{hid['id']},poi:{self.poi.id},event:999999,bogus:1"
+        refs = self.client.get(f"/api/intel/refs?keys={keys}&entry={b['id']}").json()["refs"]
+        self.assertEqual(refs[f"entry:{a['id']}"]["label"], "Gate camp")
+        self.assertEqual(refs[f"entry:{hid['id']}"]["state"], "hidden")
+        self.assertNotIn("Officer", json.dumps(refs[f"entry:{hid['id']}"]))
+        self.assertEqual(refs[f"poi:{self.poi.id}"]["poi_id"], self.poi.id)
+        self.assertEqual(refs["event:999999"]["state"], "missing")
+        self.assertNotIn("bogus:1", refs)
+        # Archive the target: the chip keeps the name it had when b was saved.
+        self.as_(self.ADMIN)
+        self.client.delete(f"/api/intel/entries/{a['id']}")
+        self.as_(self.AUTHOR)
+        r = self.client.get(f"/api/intel/refs?keys=entry:{a['id']}&entry={b['id']}").json()["refs"][f"entry:{a['id']}"]
+        self.assertEqual((r["state"], r["label"]), ("missing", "Gate camp"))
+
+    def test_ref_search(self):
+        e = self.report(title="Hathor platform layout")
+        res = self.client.get("/api/intel/refs/search?q=hathor").json()["results"]
+        self.assertIn(f"entry:{e['id']}", [x["key"] for x in res])
+        res = self.client.get(f"/api/intel/refs/search?q={self.poi.name[:5]}").json()["results"]
+        self.assertIn(f"poi:{self.poi.id}", [x["key"] for x in res])
+        self.assertEqual(self.client.get("/api/intel/refs/search?q=a").json()["results"], [])
+
+    def test_approval_keeps_the_report_location_link(self):
+        db.set_setting("intel_review_required", "1")
+        db.set_setting("intel_review_kinds", json.dumps(["report"]))
+        d = self.report(publish=False)
+        r = self.client.put(f"/api/intel/entries/{d['id']}", json={"title": d["title"], "body": "x", "publish": True,
+                                                                   "header": self.header()})
+        self.assertEqual(r.json()["status"], "in_review")
+        self.as_(self.ADMIN)
+        self.assertEqual(self.client.post(f"/api/intel/entries/{d['id']}/approve").status_code, 200)
+        self.assertIn(f"poi:{self.poi.id}", db.intel_link_labels(d["id"]))
+
+    # ---- feed + danger board ----
+    def test_feed_seen_mark(self):
+        self.report()
+        self.assertIsNone(self.client.get("/api/intel/entries?section=feed").json()["seen"])
+        seen = self.client.post("/api/intel/feed/seen").json()["seen"]
+        self.assertEqual(self.client.get("/api/intel/entries?section=feed").json()["seen"], seen)
+        f = self.client.get("/api/intel/entries?section=feed&kind=procedure").json()["entries"]
+        self.assertEqual(f, [])
+
+    def test_warning_write_ups(self):
+        w = self.client.post("/api/warnings", json={"location": "Pyro Gateway", "severity": "active"}).json()
+        wid = w["id"] if "id" in w else w["entry"]["id"]
+        try:
+            e = self.report(header=self.header(warning_id=wid))
+            hidden = self.report(title="Restricted write-up", header=self.header(warning_id=wid))
+            db.intel_set_fields(hidden["id"], {"visibility": "restricted"})
+            board = self.client.get("/api/warnings").json()["entries"]
+            ups = next(x for x in board if x["id"] == wid)["writeups"]
+            self.assertEqual([u["id"] for u in ups], [e["id"]])
+            refs = self.client.get(f"/api/intel/refs?keys=warning:{wid}").json()["refs"]
+            self.assertEqual(refs[f"warning:{wid}"]["label"], "Pyro Gateway")
+        finally:
+            app.hub.warnings.pop(wid, None)
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

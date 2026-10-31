@@ -1157,6 +1157,11 @@ def init(db_path) -> None:
         _ensure_column("intel_revisions", "approved_at", "TEXT")
         _ensure_column("intel_revisions", "base_rev", "INTEGER")     # pending: the rev it was written on
         _ensure_column("intel_revisions", "fields", "TEXT")          # pending: JSON activity/system/tags
+        # Slice 3 (#50): a reference's last known name (a deleted target still
+        # renders as a struck-out chip saying what it was), and each member's
+        # "new since you looked" mark on the feed.
+        _ensure_column("intel_links", "label", "TEXT")
+        _ensure_column("members", "intel_feed_seen", "TEXT")
         _init_intel_search()
 
 
@@ -5273,7 +5278,8 @@ _INTEL_ENTRY_COLS = ("kind", "title", "slug", "summary", "body_md", "body_html",
                      "status", "visibility", "author_id", "author_name", "owner_id",
                      "maintainers", "system", "patch", "patch_confirmed", "activity",
                      "header", "created_at", "updated_at", "published_at", "revised_at",
-                     "submitted_at", "doctrine_at", "doctrine_by")
+                     "submitted_at", "doctrine_at", "doctrine_by",
+                     "grade_rel", "grade_cred", "valid_until")
 
 
 def _intel_read(fn):
@@ -5321,13 +5327,21 @@ def _intel_current_rev(entry_id: int) -> int:
 
 def _intel_write_side_tables(entry_id: int, tags, refs) -> None:
     """Tags, backlinks and the search row follow the entry's current text.
-    Caller holds _lock and an open transaction."""
+    `refs` items are (kind, id) for the body, or (kind, id, field, label) —
+    field names where it sits (body | salute_location), label is the target's
+    name when it was saved. Caller holds _lock and an open transaction."""
     _conn.execute("DELETE FROM intel_tags WHERE entry_id=?", (entry_id,))
     _conn.executemany("INSERT OR IGNORE INTO intel_tags (entry_id, tag) VALUES (?,?)",
                       [(entry_id, t) for t in tags])
-    _conn.execute("DELETE FROM intel_links WHERE entry_id=? AND field='body'", (entry_id,))
-    _conn.executemany("INSERT OR IGNORE INTO intel_links (entry_id, ref_kind, ref_id, field) "
-                      "VALUES (?,?,?,'body')", [(entry_id, k, i) for k, i in refs])
+    _conn.execute("DELETE FROM intel_links WHERE entry_id=?", (entry_id,))
+    rows = []
+    for r in refs:
+        k, i = r[0], str(r[1])
+        field = r[2] if len(r) > 2 else "body"
+        label = r[3] if len(r) > 3 else None
+        rows.append((entry_id, k, i, field, label))
+    _conn.executemany("INSERT OR IGNORE INTO intel_links (entry_id, ref_kind, ref_id, field, label) "
+                      "VALUES (?,?,?,?,?)", rows)
     if INTEL_SEARCH == "fts5":
         e = _conn.execute("SELECT title, summary, body_md FROM intel_entries WHERE id=?",
                           (entry_id,)).fetchone()
@@ -5497,12 +5511,114 @@ def intel_review_queue(restricted_ok: bool) -> list[dict]:
 
 
 def intel_add_comment(entry_id: int, author_id: str, author_name: str | None, body: str,
-                      kind: str, created_at: str) -> int:
+                      kind: str, created_at: str, body_html: str | None = None) -> int:
     with _lock, _conn:
         cur = _conn.execute(
-            "INSERT INTO intel_comments (entry_id, author_id, author_name, body_md, kind, created_at) "
-            "VALUES (?,?,?,?,?,?)", (entry_id, author_id, author_name, body, kind, created_at))
+            "INSERT INTO intel_comments (entry_id, author_id, author_name, body_md, body_html, kind, created_at) "
+            "VALUES (?,?,?,?,?,?,?)", (entry_id, author_id, author_name, body, body_html, kind, created_at))
     return cur.lastrowid
+
+
+# ---- reports (slice 3): updates, corroborate / dispute, backlinks ----
+INTEL_STANCES = ("corroborate", "dispute")
+
+
+@_intel_read
+def intel_comments_for(entry_id: int, kinds) -> list[dict]:
+    kinds = list(kinds)
+    rows = _conn.execute(
+        f"SELECT * FROM intel_comments WHERE entry_id=? AND kind IN ({','.join('?' * len(kinds))}) "
+        "AND deleted_at IS NULL ORDER BY created_at, id", [entry_id] + kinds).fetchall()
+    return [dict(r) for r in rows]
+
+
+def intel_set_stance(entry_id: int, member_id: str, name: str | None, stance: str | None,
+                     note: str, created_at: str) -> None:
+    """One stance per member per report: a new one replaces the old, None
+    withdraws it. Hard delete: a withdrawn corroboration isn't history."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM intel_comments WHERE entry_id=? AND author_id=? AND kind IN (?,?)",
+                      (entry_id, member_id) + INTEL_STANCES)
+        if stance:
+            _conn.execute(
+                "INSERT INTO intel_comments (entry_id, author_id, author_name, body_md, kind, created_at) "
+                "VALUES (?,?,?,?,?,?)", (entry_id, member_id, name, note or None, stance, created_at))
+
+
+@_intel_read
+def intel_comment_counts(ids) -> dict[int, dict]:
+    ids = list(ids)
+    out: dict[int, dict] = {i: {} for i in ids}
+    if not ids:
+        return out
+    for r in _conn.execute(
+            f"SELECT entry_id, kind, COUNT(*) AS n FROM intel_comments WHERE entry_id IN "
+            f"({','.join('?' * len(ids))}) AND deleted_at IS NULL GROUP BY entry_id, kind", ids):
+        out[r["entry_id"]][r["kind"]] = r["n"]
+    return out
+
+
+@_intel_read
+def intel_backlinks(ref_kind: str, ref_ids, restricted_ok: bool, limit: int = 50) -> list[dict]:
+    """Published entries that reference any of `ref_ids` of one kind, newest
+    first, each once (with the ref id it matched)."""
+    ref_ids = [str(i) for i in ref_ids]
+    if not ref_ids:
+        return []
+    rows = _conn.execute(
+        "SELECT e.id, e.kind, e.title, e.slug, e.summary, e.visibility, e.published_at, "
+        "e.revised_at, e.valid_until, MIN(l.ref_id) AS ref_id "
+        "FROM intel_links l JOIN intel_entries e ON e.id = l.entry_id "
+        f"WHERE l.ref_kind=? AND l.ref_id IN ({','.join('?' * len(ref_ids))}) "
+        f"AND e.status='published'{_intel_vis_sql(restricted_ok)} "
+        "GROUP BY e.id ORDER BY COALESCE(e.revised_at, e.published_at) DESC LIMIT ?",
+        [ref_kind] + ref_ids + [limit]).fetchall()
+    return [dict(r) for r in rows]
+
+
+@_intel_read
+def intel_link_labels(entry_id: int) -> dict[str, str]:
+    """{"kind:id": last known name} for one entry's references."""
+    return {f"{r['ref_kind']}:{r['ref_id']}": r["label"] for r in _conn.execute(
+        "SELECT ref_kind, ref_id, label FROM intel_links WHERE entry_id=? AND label IS NOT NULL",
+        (entry_id,))}
+
+
+@_intel_read
+def intel_title_matches(q: str, restricted_ok: bool, limit: int = 8) -> list[dict]:
+    pat = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    rows = _conn.execute(
+        "SELECT e.id, e.kind, e.title, e.slug, e.visibility FROM intel_entries e "
+        f"WHERE e.status='published' AND e.title LIKE ? ESCAPE '\\'{_intel_vis_sql(restricted_ok)} "
+        "ORDER BY COALESCE(e.revised_at, e.published_at) DESC LIMIT ?", (pat, limit)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def ref_search_rows(q: str, limit: int = 6) -> dict[str, list[dict]]:
+    """Events, ops and survey zones whose name matches `q` (the reference
+    inserter; POIs and entries are matched by the caller)."""
+    pat = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    with _lock:
+        ev = _conn.execute("SELECT id, title, start_at, status FROM events WHERE title LIKE ? ESCAPE '\\' "
+                           "ORDER BY start_at DESC LIMIT ?", (pat, limit)).fetchall()
+        ops = _conn.execute("SELECT id, name, phase, started_at, created_at FROM operations "
+                            "WHERE name LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?", (pat, limit)).fetchall()
+        zones = _conn.execute("SELECT * FROM survey_zones WHERE name LIKE ? ESCAPE '\\' "
+                              "ORDER BY name LIMIT ?", (pat, limit)).fetchall()
+    return {"event": [dict(r) for r in ev], "op": [dict(r) for r in ops],
+            "zone": [dict(r) for r in zones]}
+
+
+def intel_feed_seen(member_id: str) -> str | None:
+    with _lock:
+        r = _conn.execute("SELECT intel_feed_seen FROM members WHERE discord_id=?",
+                          (str(member_id),)).fetchone()
+    return r[0] if r else None
+
+
+def set_intel_feed_seen(member_id: str, at: str) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE members SET intel_feed_seen=? WHERE discord_id=?", (at, str(member_id)))
 
 
 @_intel_read
@@ -5522,7 +5638,8 @@ def intel_live_rev_created(entry_id: int) -> str | None:
 @_intel_read
 def intel_list(*, kinds=None, status="published", author_id=None, activity=None,
                system=None, tag=None, order="title", restricted_ok=False,
-               limit=500) -> list[dict]:
+               live_at: str | None = None, limit=500) -> list[dict]:
+    """`live_at` (an ISO time) drops reports whose valid-until has passed."""
     statuses = [status] if isinstance(status, str) else list(status)
     where = [f"e.status IN ({','.join('?' * len(statuses))})"]
     args: list = statuses
@@ -5541,6 +5658,9 @@ def intel_list(*, kinds=None, status="published", author_id=None, activity=None,
     if tag:
         where.append("EXISTS (SELECT 1 FROM intel_tags t WHERE t.entry_id=e.id AND t.tag=?)")
         args.append(tag)
+    if live_at:
+        where.append("(e.valid_until IS NULL OR e.valid_until > ?)")
+        args.append(live_at)
     order_sql = {"title": "e.title COLLATE NOCASE",
                  "recent": "COALESCE(e.revised_at, e.published_at, e.updated_at) DESC",
                  "updated": "e.updated_at DESC"}[order]
@@ -5548,7 +5668,7 @@ def intel_list(*, kinds=None, status="published", author_id=None, activity=None,
         "SELECT e.id, e.kind, e.title, e.slug, e.summary, e.status, e.visibility, e.author_id, "
         "e.author_name, e.owner_id, e.maintainers, e.system, e.patch, e.patch_confirmed, "
         "e.activity, e.created_at, e.updated_at, e.published_at, e.revised_at, "
-        "e.submitted_at, e.doctrine_at, "
+        "e.submitted_at, e.doctrine_at, e.header, e.grade_rel, e.grade_cred, e.valid_until, "
         "(SELECT MAX(rev) FROM intel_revisions r WHERE r.entry_id=e.id AND r.status='live') AS rev "
         f"FROM intel_entries e WHERE {' AND '.join(where)}{_intel_vis_sql(restricted_ok)} "
         f"ORDER BY {order_sql} LIMIT ?", args + [limit]).fetchall()
@@ -5579,6 +5699,7 @@ def intel_search(q: str, *, kinds=None, restricted_ok=False, limit=40) -> list[d
         rows = _conn.execute(
             "SELECT e.id, e.kind, e.title, e.slug, e.summary, e.activity, e.system, "
             "e.owner_id, e.author_name, e.patch, e.patch_confirmed, e.visibility, e.doctrine_at, "
+            "e.header, e.grade_rel, e.grade_cred, e.valid_until, e.published_at, "
             "snippet(intel_fts, 2, char(2), char(3), '…', 14) AS snippet "
             "FROM intel_fts JOIN intel_entries e ON e.id = intel_fts.rowid "
             f"WHERE intel_fts MATCH ? AND e.status='published'{kind_sql}{vis} "
@@ -5594,6 +5715,7 @@ def intel_search(q: str, *, kinds=None, restricted_ok=False, limit=40) -> list[d
         rows = _conn.execute(
             "SELECT e.id, e.kind, e.title, e.slug, e.summary, e.activity, e.system, "
             "e.owner_id, e.author_name, e.patch, e.patch_confirmed, e.visibility, e.doctrine_at, "
+            "e.header, e.grade_rel, e.grade_cred, e.valid_until, e.published_at, "
             "e.summary AS snippet "
             f"FROM intel_entries e WHERE e.status='published' AND {' AND '.join(like_where)}"
             f"{kind_sql}{vis} ORDER BY e.title COLLATE NOCASE LIMIT ?",

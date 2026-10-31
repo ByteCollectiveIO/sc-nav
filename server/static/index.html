@@ -791,7 +791,100 @@
   .ix-toast[hidden] { display: none; }
   .ix-toast b { color: var(--accent); font-weight: 400; }
   .ix-toast .warn { color: var(--warn); }
-  .ix-toast button { padding: 3px 9px; font-size: 11px; white-space: nowrap; }
+  .ix-toast button, .ix-toast .ix-btn { padding: 3px 9px; font-size: 11px; white-space: nowrap; }
+  /* ---- Intelligence slice 3: feed, reports, reference chips ---- */
+  .ix-grid.solo { grid-template-columns: minmax(0, 1fr); }
+  .ix-check { display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+  .ix-check input { margin: 0; }
+  .ix-dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: transparent; }
+  .ix-feed-row.unread .ix-dot { background: var(--accent); }
+  .ix-feed-row.unread .ix-t { font-weight: 600; }
+  .ix-feed-row.expired .ix-t, .ix-feed-row.expired .ix-teaser { color: var(--dim); }
+  .ix-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .ix-chips { display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .ix-chips > span { display: inline-flex; align-items: center; gap: 3px; }
+  .ix-chips .ix-ico { width: 12px; height: 12px; }
+  .ix-chips .bad, .ix-stance-n .bad { color: var(--bad); }
+  .ix-since { font-size: 11px; letter-spacing: 1px; color: var(--accent); padding: 10px 8px 2px; }
+  .ix-loc { display: inline-flex; align-items: center; gap: 4px; color: var(--text); }
+  .ix-loc .ix-ico { width: 12px; height: 12px; color: var(--accent); }
+  .ix-ttl { color: var(--text); }
+  .ix-expired { color: var(--dim); }
+  .ix-grade { font-size: 11px; font-weight: 700; letter-spacing: .06em; font-variant-numeric: tabular-nums; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 3px; padding: 0 5px; line-height: 18px; }
+  .ix-grade.none { color: var(--dim); border-color: var(--border); font-weight: 400; }
+  .ix-ico.sm { width: 13px; height: 13px; }
+  .ix-ico.warn { color: var(--warn); }
+  /* SALUTE: a readout table, not prose */
+  .ix-salute { display: grid; grid-template-columns: 132px minmax(0, 1fr); margin: 0; padding: 6px 22px 10px;
+    border-bottom: 1px solid var(--border); font-size: 13px; line-height: 1.5; }
+  .ix-salute dt, .ix-salute dd { margin: 0; padding: 7px 0; border-top: 1px solid var(--border-soft); }
+  .ix-salute > :nth-child(-n+2) { border-top: none; }
+  .ix-salute dt { display: flex; gap: 8px; align-items: baseline; }
+  .ix-salute .k { font-weight: 700; color: var(--accent); width: 12px; }
+  .ix-salute .l { font-size: 11px; letter-spacing: 1px; color: var(--dim); }
+  .ix-salute .ix-ref { vertical-align: 1px; }
+  .ix-stance .n { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .ix-stance.on { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+  .ix-stance.on[data-stance="dispute"] { border-color: var(--bad); color: var(--bad); background: var(--bad-wash); }
+  .ix-stance-n { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--dim); }
+  .ix-updates { padding: 4px 22px 18px; border-top: 1px solid var(--border); }
+  .ix-updates h2 { font-size: 12px; color: var(--dim); letter-spacing: 1px; margin: 16px 0 4px; }
+  .ix-upd { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 10px; padding: 9px 0; border-top: 1px solid var(--border-soft); font-size: 13px; }
+  .ix-upd:first-of-type { border-top: none; }
+  .ix-upd .when { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; padding-top: 2px; }
+  .ix-upd .who { font-size: 12px; color: var(--text); display: inline-flex; align-items: center; gap: 5px; }
+  .ix-upd .who .ix-ico { width: 13px; height: 13px; }
+  .ix-upd.corroborate .who { color: var(--good); }
+  .ix-upd.dispute .who { color: var(--bad); }
+  .ix-upd p { margin: 3px 0 0; color: var(--text); line-height: 1.55; max-width: 72ch; }
+  .ix-prose.ix-upd-body { padding: 3px 0 0; font-size: 13px; line-height: 1.6; }
+  .ix-prose.ix-upd-body > :last-child { margin-bottom: 0; }
+  .ix-upd-none { font-size: 12px; margin: 6px 0 0; }
+  .ix-upd-form { display: grid; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+  .ix-upd-form[hidden] { display: none; }
+  .ix-upd-form textarea.ti { width: 100%; resize: vertical; }
+  .ix-upd-form .row { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+  .ix-upd-form .row .sp { flex: 1; }
+  .ix-gradekey { font-size: 12px; line-height: 1.55; color: var(--dim); }
+  .ix-gradekey p { margin: 0 0 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .ix-gradekey b { color: var(--text); font-weight: 400; }
+  .ix-loc-name { font-size: 15px; color: var(--text); margin: 0 0 2px; }
+  .ix-loc-sub { font-size: 12px; color: var(--dim); line-height: 1.45; }
+  #ix-loc-p .ix-primary, #ix-loc-p .ix-btn { margin-top: 12px; width: 100%; justify-content: center; }
+  .ix-danger { display: flex; gap: 8px; font-size: 12px; line-height: 1.5; }
+  .ix-danger .ix-ico { color: var(--warn); margin-top: 2px; }
+  .ix-danger.sev-deadly .ix-ico { color: var(--bad); }
+  .ix-danger a { color: var(--accent); }
+  .ix-rl { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 2px; font-size: 12px; }
+  .ix-rl li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; padding: 6px 0; border-top: 1px solid var(--border-soft); }
+  .ix-rl li:first-child { border-top: none; }
+  .ix-rl .ix-ico { width: 14px; height: 14px; margin-top: 1px; }
+  .ix-rl a { color: var(--text); text-decoration: none; }
+  .ix-rl a:hover { color: var(--accent); }
+  .ix-rl small { display: block; color: var(--dim); font-size: 11px; margin-top: 1px; }
+  button.ix-ref { font: inherit; font-size: 12px; cursor: pointer; }
+  button.ix-ref:hover { border-color: var(--accent); }
+  .ix-ref.pending { color: var(--dim); }
+  .ix-ref.missing, .ix-ref.hidden, .ix-ref.expired { color: var(--dim); border-style: dashed; }
+  .ix-ref.missing .ix-ico, .ix-ref.hidden .ix-ico, .ix-ref.expired .ix-ico { color: var(--dim); }
+  .ix-ref.sev-active .ix-ico, .ix-ref.sev-sighted .ix-ico { color: var(--warn); }
+  .ix-ref.sev-deadly .ix-ico { color: var(--bad); }
+  /* editor: the report's SALUTE block */
+  .ix-rep { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+  .ix-rep[hidden] { display: none; }
+  .ix-rep-h { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 11px; letter-spacing: 1px; color: var(--text); }
+  .ix-rep-h small { letter-spacing: 0; color: var(--dim); }
+  .ix-rep-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .ix-rep-wide { grid-column: 1 / -1; }
+  .ix-r-time { display: flex; gap: 6px; }
+  .ix-r-time input.ti { flex: 1; min-width: 0; }
+  .ix-r-hint { font-size: 11px; color: var(--dim); line-height: 1.45; }
+  .ix-pick[hidden] { display: none; }
+  .ix-pick li button { display: flex; gap: 8px; align-items: flex-start; }
+  .ix-pick li button small { display: block; color: var(--dim); font-size: 11px; }
+  .ix-pick li.none { font-size: 12px; color: var(--dim); padding: 6px 8px; }
+  #ix-r-locchip:empty { display: none; }
   @media (max-width: 860px) {
     .ix-grid, .ix-ed-grid { grid-template-columns: minmax(0, 1fr); }
     .ix-rail, .ix-ed-rail { position: static; }
@@ -800,7 +893,12 @@
     .intel-search { flex-basis: 100%; max-width: none; order: 3; }
     .ix-row { grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 11px 4px; }
     .ix-row .ix-kind { grid-column: 1; grid-row: 1; }
-    .ix-row .ix-when { grid-column: 2; grid-row: 1; }
+    .ix-row .ix-when, .ix-row .ix-side { grid-column: 2; grid-row: 1; }
+    .ix-side { flex-direction: row; align-items: center; }
+    .ix-salute { grid-template-columns: 104px minmax(0, 1fr); padding-left: 14px; padding-right: 14px; }
+    .ix-updates { padding-left: 14px; padding-right: 14px; }
+    .ix-upd { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+    .ix-rep-grid { grid-template-columns: minmax(0, 1fr); }
     .ix-row .ix-body { grid-column: 1 / 3; grid-row: 2; }
     .ix-head, .ix-prose, .ix-banner { padding-left: 14px; padding-right: 14px; }
     .ix-title { font-size: 20px; }
@@ -1219,6 +1317,11 @@
   /* the offensive CTA — turn a warning into a hunt op; accent-outlined as the focal action */
   .warn-actions .warn-hunt { border-color: var(--accent); color: var(--accent); }
   .warn-actions .warn-hunt:hover { background: var(--accent-wash); }
+  .warn-actions .warn-writeup { margin-left: auto; font-size: 12px; color: var(--accent); text-decoration: none;
+    display: inline-flex; align-items: center; min-height: 34px; padding: 0 4px; }
+  .warn-actions .warn-writeup:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .warn-intel { color: var(--accent); text-decoration: none; border: 1px solid var(--accent); border-radius: 3px; padding: 0 6px; }
+  .warn-intel:hover { background: var(--accent-wash); }
   .warn-err { font-size: 12px; color: var(--bad); }
 
   /* resource forecast */
@@ -5455,6 +5558,15 @@
       <symbol id="ix-i-code" viewBox="0 0 24 24"><path d="M8.5 7L3.5 12l5 5M15.5 7l5 5-5 5"/></symbol>
       <symbol id="ix-i-table" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="1.5"/><path d="M3 9.5h18M3 14.5h18M9 9.5v10"/></symbol>
       <symbol id="ix-i-ref" viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 2.5v5M12 16.5v5M2.5 12h5M16.5 12h5"/></symbol>
+      <symbol id="ix-i-corrob" viewBox="0 0 24 24"><path d="M12 3l7.5 3v5.5c0 4.6-3.2 8-7.5 9.5-4.3-1.5-7.5-4.9-7.5-9.5V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></symbol>
+      <symbol id="ix-i-dispute" viewBox="0 0 24 24"><path d="M12 3l7.5 3v5.5c0 4.6-3.2 8-7.5 9.5-4.3-1.5-7.5-4.9-7.5-9.5V6z"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/></symbol>
+      <symbol id="ix-i-addend" viewBox="0 0 24 24"><path d="M5 4h10l4 4v12H5z"/><path d="M12 11v6M9 14h6"/></symbol>
+      <symbol id="ix-i-pin" viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.4"/></symbol>
+      <symbol id="ix-i-nav" viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-8z"/></symbol>
+      <symbol id="ix-i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/></symbol>
+      <symbol id="ix-i-op" viewBox="0 0 24 24"><path d="M12 3l8.5 9-8.5 9-8.5-9z"/><path d="M12 8.5l3.3 3.5-3.3 3.5-3.3-3.5z"/></symbol>
+      <symbol id="ix-i-zone" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" stroke-dasharray="3 2.4"/><circle cx="12" cy="12" r="1.6"/></symbol>
+      <symbol id="ix-i-member" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c.8-3.8 3.6-6 7-6s6.2 2.2 7 6"/></symbol>
     </defs></svg>
     <div class="panel intel-mast" id="intel-mast">
       <div class="intel-mast-row">
@@ -9865,6 +9977,13 @@ function warningCard(e) {
     (canCreateEvents() ? `<button type="button" class="warn-hunt" data-hunt="${e.id}" ` +
       `title="Organize an org op to go clear this danger">⚔ Organize hunt</button>` : "");
   if (mine || warnIsAdmin()) actions += `<button type="button" data-clear="${e.id}">All clear</button>`;
+  // Intelligence (#50 slice 3): the board stays the fast path; a report is the
+  // longer write-up. Org-visible write-ups only (the payload goes to every tab).
+  actions += `<a class="warn-writeup" href="#/intel/new/report?w=${e.id}" title="Start an Intelligence report pre-filled from this warning">Write up →</a>`;
+  const ups = e.writeups || [];
+  const writeups = ups.length
+    ? `<a class="warn-intel" href="#/intel/e/${ups[0].id}-${encodeURIComponent(ups[0].slug || "entry")}" title="${esc(ups.map(u => u.title).join(" · "))}">` +
+      `◆ ${ups.length === 1 ? "Written up" : `${ups.length} write-ups`}</a>` : "";
   return `<div class="warn-card sev-${sev}${mine ? " mine" : ""}${e.stale ? " stale" : ""}">` +
     `<div class="warn-card-head">` +
       `<span class="warn-sev sev-${sev}">${esc(sevLabel)}</span>` +
@@ -9872,7 +9991,7 @@ function warningCard(e) {
     `</div>` +
     `<div class="warn-sub">${threatIcon} ${esc(threatLabel)} · ${esc(kindLabel)}${sysTag} · by ${esc(e.poster)}${mine ? " (you)" : ""}</div>` +
     note +
-    `<div class="warn-meta"><span>${left}</span>${confirms}</div>` +
+    `<div class="warn-meta"><span>${left}</span>${confirms}${writeups}</div>` +
     `<div class="warn-actions">${actions}</div>` +
   `</div>`;
 }
@@ -27234,8 +27353,8 @@ function intelParseRoute(sub) {
     intelRoute = { id: +m[1], anchor: m[2] && m[2].startsWith("sec-") ? m[2] : null };
     return m[2] === "history" || m[2] === "edit" ? m[2] : m[2] === "review" ? "reviewing" : "entry";
   }
-  m = /^new\/(procedure|tactic)$/.exec(sub);
-  if (m) { intelRoute = { kind: m[1] }; return "new"; }
+  m = /^new\/(procedure|tactic|report)(?:\?w=(\d+))?$/.exec(sub);
+  if (m) { intelRoute = { kind: m[1], warning: m[2] ? +m[2] : null }; return "new"; }
   if (sub === "search") { intelRoute = {}; return "search"; }
   return null;
 }
@@ -27977,8 +28096,11 @@ function renderIntel(section) {
   intelCurSec = section;
   const know = INTEL_KNOW_SECS.includes(section) || INTEL_KNOW_VIEWS.includes(section);
   // Deeper routes keep the Library tab lit (search lights none).
+  // Deeper views sit under Library, except a report's (it lives in the Feed);
+  // an entry's kind is known only once it loads (intelSetTab then).
   const tab = INTEL_KNOW_SECS.includes(section) ? section : section === "search" ? null
-    : section === "reviewing" && intelAccess().reviewer ? "review" : "library";
+    : section === "reviewing" && intelAccess().reviewer ? "review"
+    : section === "new" && intelRoute.kind === "report" ? "feed" : "library";
   // Reviewers see a Review tab while the gate is on (#50 slice 2).
   const ia = intelAccess();
   $("intel-tab-review").hidden = !(ia.reviewer && ia.review_kinds.length) && section !== "review";
@@ -27996,6 +28118,8 @@ function renderIntel(section) {
   $("intel-know").hidden = !know;
   $("intel-search-wrap").hidden = !know;
   $("intel-new").hidden = !know;
+  // The Feed's natural "new" is a report; everywhere else it's a procedure.
+  $("intel-new").href = tab === "feed" ? "#/intel/new/report" : "#/intel/new/procedure";
   document.querySelectorAll("#intel-tabs a").forEach(a => {
     const on = a.dataset.sec === tab;
     a.classList.toggle("on", on);
@@ -28061,6 +28185,7 @@ const INTEL_TEMPLATE = {
     "## Steps\n- [ ] First step\n- [ ] Next step\n\n## Loadout\n\n## Notes\n",
   tactic: "## Situation\nWhat you're up against, and where.\n\n## Most likely\nWhat they usually do.\n\n" +
     "## Most dangerous\nThe worst case worth planning for.\n\n## Counter\n- What to do about it\n\n## Loadout\n",
+  report: "## What happened\nWhat you saw, in the order it happened.\n\n## What to do\n- \n",
 };
 let intelPlaystyles = null;      // /api/playstyles, fetched once
 let intelImageHosts = [];        // IMAGE_PREVIEW_HOSTS (from /api/intel/entries)
@@ -28120,11 +28245,15 @@ function intelRow(e, opts = {}) {
   const verb = opts.verb ? `<span class="ix-verb"> · ${e.revised_at && e.revised_at !== e.published_at ? "revised" : "published"}</span>` : "";
   const draft = e.status === "draft" ? `<span class="ix-tag draft">Draft</span>`
     : e.status === "in_review" ? `<span class="ix-tag draft">In review</span>` : "";
-  const meta = [draft, intelMarkTags(e), e.owner && e.owner.name ? `<span>by <b>${esc(e.owner.name)}</b></span>` : "",
+  const r = e.report;
+  const meta = [draft, intelMarkTags(e), r ? intelGradeChip(r.grade) : "",
+    r && r.location ? `<span class="ix-loc">${intelIco("pin")}${esc(r.location)}</span>` : "",
+    r && r.valid_until ? `<span>${esc(intelTtl(r.valid_until))}</span>` : "",
+    e.owner && e.owner.name ? `<span>by <b>${esc(e.owner.name)}</b></span>` : "",
     e.activity ? `<span class="ix-tag">${esc(e.activity)}</span>` : "",
     e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "",
     ...(e.tags || []).slice(0, 4).map(t => `<span class="ix-tag free">#${esc(t)}</span>`),
-    e.status === "published" ? intelPatchChip(e.patch) : ""].filter(Boolean).join("");
+    e.status === "published" && !r ? intelPatchChip(e.patch) : ""].filter(Boolean).join("");
   const teaser = opts.snippet ? `<div class="ix-teaser">${opts.snippet}</div>`   // server-escaped, <mark> only
     : e.summary ? `<div class="ix-teaser">${esc(e.summary)}</div>` : "";
   const href = e.status === "draft" ? `${intelHref(e)}/edit` : intelHref(e);
@@ -28145,6 +28274,7 @@ function renderIntelKnow(section) {
   const edKey = section === "edit" ? `e${intelRoute.id}` : section === "new" ? `n${intelRoute.kind}` : null;
   if (intelEd && edKey && (intelEd.key === edKey || (intelEd.id && edKey === `e${intelEd.id}`))) return;
   if (intelEd) intelEdLeave();
+  if (section !== "feed") intelFeedSeen = undefined;
   if (section !== "search") $("intel-search").value = "";
   if (!$("intel-tab-review").hidden && section !== "review")
     intelApi("/api/intel/review").then(d => intelSetReviewCount(d.items.length)).catch(() => {});
@@ -28160,19 +28290,120 @@ function renderIntelKnow(section) {
      review: intelReviewQueue, reviewing: intelReviewView })[section](box);
 }
 
-// ---- FEED ----
+// ---- FEED (#50 slice 3) ----
+// Reverse-chronological: reports, plus procedures and tactics on first publish
+// and major revision. Expired reports drop off unless asked for. "New since
+// you looked" is a server-side mark per member (set once per visit).
+let intelFeedFilter = { kind: "", system: "", activity: "", expired: false };
+let intelFeedSeen;   // undefined = not loaded this visit; null = never looked
+function intelFeedRow(e, seen) {
+  const at = e.revised_at || e.published_at;
+  const unread = !!(seen && at && at > seen);
+  const r = e.report, c = e.counts || {};
+  const revised = e.kind !== "report" && e.revised_at && e.published_at && e.revised_at !== e.published_at;
+  const who = e.kind === "report" ? e.author_name : (e.owner && e.owner.name) || e.author_name;
+  const meta = [
+    r && r.location ? `<span class="ix-loc">${intelIco("pin")}${esc(r.location)}</span>` : "",
+    intelMarkTags(e),
+    e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "",
+    e.activity ? `<span class="ix-tag">${esc(e.activity)}</span>` : "",
+    r && r.valid_until ? `<span class="${r.expired ? "" : "ix-ttl"}">${esc(intelTtl(r.valid_until))}</span>` : "",
+    e.kind !== "report" ? intelPatchChip(e.patch) : "",
+    who ? `<span>by <b>${esc(who)}</b></span>` : ""].filter(Boolean).join("");
+  const side = (r ? intelGradeChip(r.grade) : "") +
+    (c.corroborate ? `<span title="${c.corroborate} corroborated">${intelIco("corrob")}${c.corroborate}</span>` : "") +
+    (c.dispute ? `<span class="bad" title="${c.dispute} disputed">${intelIco("dispute")}${c.dispute}</span>` : "") +
+    (c.addendum ? `<span title="${c.addendum} update${c.addendum === 1 ? "" : "s"}">${intelIco("addend")}${c.addendum}</span>` : "");
+  const time = at ? new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "";
+  return `<a class="ix-row ix-feed-row${unread ? " unread" : ""}${r && r.expired ? " expired" : ""}" href="${intelHref(e)}">` +
+    `<span class="ix-kind"><span class="ix-dot" aria-hidden="true"></span>${intelIco(e.kind)}${esc(INTEL_KIND[e.kind] || e.kind)}</span>` +
+    `<span class="ix-body">${unread ? `<span class="sr-only">New. </span>` : ""}<span class="ix-t">${esc(e.title || "Untitled")}</span>` +
+    (revised ? `<span class="ix-verb"> · revised, rev ${e.rev}</span>` : "") +
+    (e.summary ? `<div class="ix-teaser">${esc(e.summary)}</div>` : "") +
+    (meta ? `<span class="ix-meta">${meta}</span>` : "") + `</span>` +
+    `<span class="ix-side"><span class="ix-when">${esc(time)}</span>${side ? `<span class="ix-chips">${side}</span>` : ""}</span></a>`;
+}
+function intelDayLabel(d) {
+  const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = Math.round((today - day) / 86400000);
+  const date = d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short",
+    year: diff > 300 ? "numeric" : undefined }).toUpperCase();
+  return diff === 0 ? `<b>TODAY</b> · ${esc(date)}` : diff === 1 ? `<b>YESTERDAY</b> · ${esc(date)}` : esc(date);
+}
 async function intelFeed(box) {
-  box.innerHTML = `<div class="panel"><div class="ix-panel-h"><h2>FEED</h2>` +
-    `<span class="muted">Newest first: first publishes and major revisions</span></div>` +
-    `<div class="ix-list" id="ix-feed">${intelStatus("Loading…")}</div></div>`;
+  const [tags] = await Promise.all([intelLoadPlaystyles()]);
+  const f = intelFeedFilter;
+  const chip = (k, label, ico) => `<button type="button" class="ix-chip" data-k="${k}" aria-pressed="${f.kind === k}">` +
+    `${ico ? intelIco(ico) : ""}${label}</button>`;
+  const opt = (list, cur, none) => `<option value="">${none}</option>` +
+    list.map(x => `<option value="${esc(x)}"${x === cur ? " selected" : ""}>${esc(x)}</option>`).join("");
+  box.innerHTML = `<div class="ix-grid" id="ix-feed-grid"><div class="panel"><div class="ix-panel-h"><h2>FEED</h2>` +
+    `<span class="muted">Reports, and procedures and tactics when they're published or revised</span></div>` +
+    `<div class="ix-filters" role="group" aria-label="Filter the feed">` +
+    chip("", "All") + chip("report", "Reports", "report") + chip("procedure", "Procedures", "procedure") + chip("tactic", "Tactics", "tactic") +
+    `<span class="sp"></span>` +
+    `<select class="ti" id="ix-f-sys" aria-label="System">${opt(INTEL_SYSTEM_OPTS, f.system, "Every system")}</select>` +
+    `<select class="ti" id="ix-f-act" aria-label="Activity">${opt(tags, f.activity, "Every activity")}</select>` +
+    `<label class="ix-chip ix-check"><input type="checkbox" id="ix-f-exp"${f.expired ? " checked" : ""}> Show expired</label></div>` +
+    `<div class="ix-list" id="ix-feed">${intelStatus("Loading…")}</div></div>` +
+    `<aside class="ix-rail" id="ix-feed-rail" hidden></aside></div>`;
+  box.querySelectorAll(".ix-chip[data-k]").forEach(b => b.onclick = () => { f.kind = b.dataset.k; intelFeed(box); });
+  $("ix-f-sys").onchange = (ev) => { f.system = ev.target.value; intelFeed(box); };
+  $("ix-f-act").onchange = (ev) => { f.activity = ev.target.value; intelFeed(box); };
+  $("ix-f-exp").onchange = (ev) => { f.expired = ev.target.checked; intelFeed(box); };
+  const q = new URLSearchParams({ section: "feed" });
+  if (f.kind) q.set("kind", f.kind);
+  if (f.system) q.set("system", f.system);
+  if (f.activity) q.set("activity", f.activity);
+  if (f.expired) q.set("expired", "1");
   try {
-    const d = await intelApi("/api/intel/entries?section=feed");
+    const d = await intelApi(`/api/intel/entries?${q}`);
     intelImageHosts = d.image_hosts || intelImageHosts;
     const el = $("ix-feed"); if (!el) return;
-    el.innerHTML = d.entries.length ? d.entries.map(e => intelRow(e, { verb: true })).join("")
-      : `<div class="intel-know-empty" style="padding:14px 8px"><p class="lead">Nothing published yet.</p>` +
-        `<p class="muted">Procedures and tactics appear here when they're published, and again when one gets a major revision.</p>` +
-        `<p style="margin-top:12px"><a class="ix-primary" href="#/intel/new/procedure">${intelIco("plus")}Write the first procedure</a></p></div>`;
+    // The mark from BEFORE this visit stays put while filters re-render.
+    if (intelFeedSeen === undefined) {
+      intelFeedSeen = d.seen || null;
+      intelApi("/api/intel/feed/seen", { method: "POST" }).catch(() => {});
+    }
+    const seen = intelFeedSeen;
+    if (!d.entries.length) {
+      el.innerHTML = f.kind || f.system || f.activity ? intelStatus(f.expired ? "Nothing matches that filter."
+        : "Nothing matches that filter. Expired reports are hidden; tick Show expired to include them.")
+        : `<div class="intel-know-empty" style="padding:14px 8px"><p class="lead">Nothing in the feed yet.</p>` +
+          `<p class="muted">Reports land here the moment they're published: a gate camp, a hostile org's new trick, ` +
+          `a base layout. Procedures and tactics show up when they're published or revised.</p>` +
+          `<p style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">` +
+          `<a class="ix-primary" href="#/intel/new/report">${intelIco("report")}Write a report</a>` +
+          `<a class="ix-btn" href="#/intel/new/procedure">${intelIco("procedure")}New procedure</a></p></div>`;
+    } else {
+      const fresh = seen ? d.entries.filter(e => (e.revised_at || e.published_at) > seen).length : 0;
+      let html = fresh ? `<div class="ix-since">${fresh} NEW SINCE YOU LOOKED · ${esc(intelWhen(seen).toUpperCase())}</div>` : "";
+      let day = null, n = 0, groupStart = 0;
+      const parts = [];
+      d.entries.forEach((e, i) => {
+        const dt = new Date(e.revised_at || e.published_at);
+        const key = dt.toDateString();
+        if (key !== day) {
+          if (day !== null) parts[groupStart] = parts[groupStart].replace("%N%", n);
+          day = key; n = 0; groupStart = parts.length;
+          parts.push(`<div class="ix-group-h"><span>${intelDayLabel(dt)}</span><span>%N%</span></div>`);
+        }
+        n++;
+        parts.push(intelFeedRow(e, seen));
+      });
+      if (day !== null) parts[groupStart] = parts[groupStart].replace("%N%", n);
+      el.innerHTML = html + parts.join("");
+      intelResolveRefs(el, null);
+    }
+    const ood = d.out_of_date || [];
+    const rail = $("ix-feed-rail");
+    if (ood.length && rail) {
+      rail.hidden = false;
+      rail.innerHTML = `<div class="panel"><div class="ix-panel-h"><h2>OUT OF DATE</h2><span class="muted">${ood.length} on an older patch</span></div>` +
+        `<ul class="ix-rl">${ood.map(o => `<li>${intelIco("patch", "ix-ico warn")}<span><a href="${intelHref(o)}">${esc(o.title)}</a>` +
+        `<small>${esc(INTEL_KIND[o.kind].toLowerCase())}${o.owner ? ` · owner ${esc(o.owner)}` : ""}${o.written ? ` · written ${esc(intelMinor(o.written))}` : ""}</small></span></li>`).join("")}</ul></div>`;
+    } else $("ix-feed-grid").classList.add("solo");
   } catch (err) { const el = $("ix-feed"); if (el) el.innerHTML = intelStatus(err.message, true); }
 }
 
@@ -28270,14 +28501,13 @@ function intelHydrate(root, e) {
   root.querySelectorAll("a[href]").forEach(a => {
     if (/^https?:/i.test(a.getAttribute("href"))) { a.target = "_blank"; a.rel = "noopener noreferrer nofollow"; }
   });
+  // [[kind:id]] → a chip, filled in by one /api/intel/refs call below.
   root.querySelectorAll("span.intel-ref").forEach(s => {
     const kind = s.dataset.refKind, id = s.dataset.refId;
-    const label = s.textContent || `${kind}:${id}`;
-    const el = document.createElement(kind === "entry" ? "a" : "span");
-    el.className = "ix-ref";
-    if (kind === "entry") el.href = `#/intel/e/${encodeURIComponent(id)}`;
-    el.innerHTML = intelIco("ref");
-    el.append(label);
+    const el = document.createElement("span");
+    el.className = "ix-ref pending"; el.dataset.key = `${kind}:${id}`;
+    el.innerHTML = intelIco(INTEL_REF_ICO[kind] || "ref");
+    el.append(INTEL_REF_NOUN[kind] || kind);
     s.replaceWith(el);
   });
   // Images are links until one-click loading ships (slice 8): nothing loads
@@ -28296,6 +28526,7 @@ function intelHydrate(root, e) {
     const sec = Date.parse(t.getAttribute("datetime")) / 1000;
     if (Number.isFinite(sec)) t.textContent = discordTime(sec, t.dataset.fmt || "f");
   });
+  intelResolveRefs(root, e && e.id);
   if (e) root.querySelectorAll("h2[id], h3[id]").forEach(h => {
     const a = document.createElement("a");
     a.className = "ix-anchor"; a.textContent = "§";
@@ -28303,6 +28534,71 @@ function intelHydrate(root, e) {
     a.onclick = (ev) => { ev.preventDefault(); intelCopy(location.origin + location.pathname + a.getAttribute("href"), "Section link copied"); };
     h.appendChild(a);
   });
+}
+// Reference chips (#50 slice 3): what each kind shows, resolved as THIS member
+// may see it. A target that's gone keeps its last name, struck out.
+const INTEL_REF_ICO = { poi: "pin", zone: "zone", warning: "alert", event: "cal", op: "op", entry: "ref", member: "member" };
+const INTEL_REF_NOUN = { poi: "place", zone: "survey zone", warning: "warning", event: "event", op: "op",
+  entry: "entry", member: "member" };
+async function intelResolveRefs(root, entryId) {
+  const els = [...root.querySelectorAll(".ix-ref.pending[data-key]")];
+  if (!els.length) return;
+  const keys = [...new Set(els.map(x => x.dataset.key))];
+  let refs = {};
+  try { refs = (await intelApi(`/api/intel/refs?keys=${keys.join(",")}${entryId ? `&entry=${entryId}` : ""}`)).refs; }
+  catch { els.forEach(el => el.classList.remove("pending")); return; }
+  els.forEach(el => { if (el.isConnected) el.replaceWith(intelRefChip(el.dataset.key, refs[el.dataset.key] || { state: "missing" })); });
+}
+function intelRefChip(key, info) {
+  const kind = key.split(":")[0], noun = INTEL_REF_NOUN[kind] || kind;
+  const ok = info.state === "ok";
+  let el;
+  if (ok && kind === "poi") {
+    el = document.createElement("button"); el.type = "button";
+    el.title = `${info.sub ? info.sub + " · " : ""}click to set it as your destination`;
+    el.onclick = () => intelSetDest(info.poi_id, info.label);
+  } else if ((ok || info.state === "expired") && info.href) {
+    el = document.createElement("a"); el.href = info.href;
+    el.title = info.state === "expired" ? "This warning has aged off the danger board" : (info.sub || "");
+  } else el = document.createElement("span");
+  el.className = "ix-ref" + (ok ? "" : " " + info.state);
+  if (kind === "warning" && ok && info.severity) el.classList.add("sev-" + info.severity);
+  el.innerHTML = intelIco(INTEL_REF_ICO[kind] || "ref");
+  if (info.state === "missing") {
+    const s = document.createElement("s"); s.textContent = info.label || `deleted ${noun}`;
+    el.append(s); el.title = `This ${noun} no longer exists`;
+  } else if (info.state === "expired") el.append(`${info.label || "warning"} · expired`);
+  else el.append(info.label || noun);
+  return el;
+}
+async function intelSetDest(id, name) {
+  try {
+    await setDestination(id);
+    intelToast(`<span>Destination set: <b>${esc(name)}</b></span><a class="ix-btn" href="#/nav">Open the navigator</a>`, 6000);
+  } catch (err) { intelToast(`<span class="warn">Couldn't set the destination: ${esc(err.message || "try again")}</span>`, 6000); }
+}
+// Report grading (Admiralty scale): the two axes are judged separately.
+const INTEL_REL = { A: "completely reliable", B: "usually reliable", C: "fairly reliable", D: "not usually reliable",
+  E: "unreliable", F: "reliability can't be judged" };
+const INTEL_CRED = { 1: "confirmed", 2: "probably true", 3: "possibly true", 4: "doubtful", 5: "improbable",
+  6: "truth can't be judged" };
+function intelGradeText(g) { return g ? `source ${INTEL_REL[g[0]]} · information ${INTEL_CRED[g[1]]}` : "Ungraded"; }
+function intelGradeChip(g) {
+  return g ? `<span class="ix-grade" title="${esc(g)}: ${esc(intelGradeText(g))}">${esc(g)}</span>`
+    : `<span class="ix-grade none" title="Ungraded: the author didn't grade it, which is normal">—</span>`;
+}
+function intelDur(ms) {
+  const m = Math.max(1, Math.round(ms / 60000));
+  if (m < 60) return `${m} m`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return m % 60 && h < 10 ? `${h} h ${m % 60} m` : `${h} h`;
+  return `${Math.round(h / 24)} d`;
+}
+// "valid · 1 h 52 m left" / "expired 18 h ago" (no valid-until = nothing).
+function intelTtl(vu) {
+  if (!vu) return "";
+  const d = Date.parse(vu) - Date.now();
+  return d > 0 ? `valid · ${intelDur(d)} left` : `expired ${intelDur(-d)} ago`;
 }
 function intelToast(html, ms = 4000) {
   let t = $("ix-toast");
@@ -28323,6 +28619,7 @@ async function intelEntryView(box) {
   catch (err) { box.innerHTML = `<div class="panel">${intelStatus(err.status === 404 ? "This entry doesn't exist, or it was archived." : err.message, true)}</div>`; return; }
   if (intelCurSec !== "entry" || intelRoute.id !== id) return;
   if (e.status === "draft") { history.replaceState(null, "", `${intelHref(e)}/edit`); applyView(); return; }
+  const isReport = e.kind === "report";
   const p = e.patch;
   const inReview = e.status === "in_review";
   const reviewUrl = `${intelHref(e)}/review`;
@@ -28335,34 +28632,83 @@ async function intelEntryView(box) {
       `is waiting for review${e.pending.note ? `: “${esc(e.pending.note)}”` : ""}. Readers see this version until it's approved.</span>` +
       `<a class="ix-btn" href="${reviewUrl}">${e.is_reviewer ? "Review it" : "See changes"}</a>` +
       (e.pending.mine ? `<button type="button" class="ix-btn" id="ix-withdraw">Withdraw</button>` : "") + `</div>` : "";
-  const doctrineBtn = e.is_reviewer && e.status === "published"
+  const doctrineBtn = e.is_reviewer && e.status === "published" && !isReport
     ? `<button type="button" class="ix-btn" id="ix-doctrine">${e.doctrine ? "Remove Doctrine" : "Mark as Doctrine"}</button>` : "";
-  const confirm = p.stale && e.can_edit
+  const confirm = !isReport && p.stale && e.can_edit
     ? `<button type="button" id="ix-confirm" title="Clears the warning without editing">Still valid on ${esc(intelMinor(p.current))}</button>` : "";
-  const people = [e.owner.name && `<span>Owner <b>${esc(e.owner.name)}</b></span>`,
-    e.maintainers.length ? `<span>Maintainers <b>${e.maintainers.map(m => esc(m.name)).join(", ")}</b></span>` : ""].filter(Boolean).join("");
-  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/library">Library</a><span>/</span>` +
-    `<span>${esc(e.activity || "General")}</span></nav>` +
-    `<div class="ix-grid"><article class="panel ix-article">${banner}<div class="ix-head">` +
-    `<div class="ix-kindline">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind])}` +
-    (e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "") + intelMarkTags(e) + `</div>` +
-    `<h1 class="ix-title">${esc(e.title)}</h1>` +
-    (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") +
-    `<div class="ix-by">${people}` + (inReview ? "" : `<span>Rev <b>${e.rev}</b> · ${esc(intelWhen(e.revised_at || e.published_at))}</span>`) +
-    `${inReview ? "" : intelPatchChip(p)}${confirm}</div>` +
-    `<div class="ix-actions">` +
-    (e.can_edit ? `<a class="ix-primary" href="${intelHref(e)}/edit">${intelIco("edit")}Edit</a>` : "") +
+  const r = isReport ? (e.report || {}) : null;
+  const h = isReport ? (e.header || {}) : {};
+  const st = isReport ? (e.stances || {}) : {};
+  const editLeft = isReport && e.can_edit && e.edit_until ? Date.parse(e.edit_until) - Date.now() : 0;
+  const by = isReport
+    ? [`<span>by <b>${esc(e.author_name || "?")}</b></span>`,
+       e.published_at ? `<span>${esc(new Date(e.published_at).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }))}</span>` : "",
+       r.valid_until ? `<span class="${r.expired ? "ix-expired" : "ix-ttl"}">${r.expired ? esc(intelTtl(r.valid_until))
+         : `valid until ${esc(new Date(r.valid_until).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }))} · ${esc(intelDur(Date.parse(r.valid_until) - Date.now()))} left`}</span>` : "",
+       p.written ? `<span>game ${esc(p.written)}</span>` : ""].join("")
+    : [e.owner.name && `<span>Owner <b>${esc(e.owner.name)}</b></span>`,
+       e.maintainers.length ? `<span>Maintainers <b>${e.maintainers.map(m => esc(m.name)).join(", ")}</b></span>` : "",
+       inReview ? "" : `<span>Rev <b>${e.rev}</b> · ${esc(intelWhen(e.revised_at || e.published_at))}</span>`,
+       inReview ? "" : intelPatchChip(p), confirm].filter(Boolean).join("");
+  const stanceBtn = (k, label) => `<button type="button" class="ix-btn ix-stance${st.mine === k ? " on" : ""}" data-stance="${k}" ` +
+    `aria-pressed="${st.mine === k}">${intelIco(k === "corroborate" ? "corrob" : "dispute")}${st.mine === k ? (k === "corroborate" ? "Corroborated" : "Disputed") : label}` +
+    (st[k] ? ` <span class="n">${st[k]}</span>` : "") + `</button>`;
+  const actions = `<div class="ix-actions">` +
+    (e.can_edit ? `<a class="ix-primary" href="${intelHref(e)}/edit">${intelIco("edit")}${isReport ? `Correct · ${esc(intelDur(editLeft))} left` : "Edit"}</a>` : "") +
+    (isReport && e.can_stance ? stanceBtn("corroborate", "Corroborate") + stanceBtn("dispute", "Dispute") : "") +
+    (isReport && !e.can_stance && (st.corroborate || st.dispute) ? `<span class="ix-stance-n">${intelIco("corrob")}${st.corroborate || 0} corroborated` +
+      (st.dispute ? ` · <span class="bad">${st.dispute} disputed</span>` : "") + `</span>` : "") +
+    (isReport && e.can_update ? `<button type="button" class="ix-btn" id="ix-add-upd" aria-expanded="false" aria-controls="ix-upd-form">${intelIco("addend")}Add update</button>` : "") +
     (inReview ? "" : `<a class="ix-btn" href="${intelHref(e)}/history">${intelIco("history")}History</a>`) +
     `<button type="button" class="ix-btn" id="ix-copy">${intelIco("link")}Copy link</button>` +
     `<span class="sp"></span>${doctrineBtn}` +
-    (e.can_manage && !inReview ? `<button type="button" class="ix-btn" id="ix-archive">Archive</button>` : "") +
-    `</div></div><div class="ix-prose" id="ix-prose">${e.body_html || `<p class="muted">This entry has no body yet.</p>`}</div></article>` +
-    `<aside class="ix-rail"><div class="panel" id="ix-toc-p" hidden><h2>ON THIS PAGE</h2><ul class="ix-toc" id="ix-toc"></ul></div>` +
+    (e.can_manage && !inReview ? `<button type="button" class="ix-btn" id="ix-archive">Archive</button>` : "") + `</div>`;
+  const sal = (k, l, v) => v ? `<dt><span class="k">${k}</span><span class="l">${l}</span></dt><dd>${v}</dd>` : "";
+  const salute = isReport ? `<dl class="ix-salute" aria-label="SALUTE report">` +
+    sal("S", "SIZE", esc(h.size)) + sal("A", "ACTIVITY", esc(h.activity)) +
+    sal("L", "LOCATION", (h.location_ref ? `<span class="intel-ref" data-ref-kind="${esc(h.location_ref.split(":")[0])}" data-ref-id="${esc(h.location_ref.split(":")[1])}"></span> ` : "") + esc(h.location)) +
+    sal("U", "UNIT", esc(h.unit)) +
+    sal("T", "TIME", h.time ? esc(new Date(h.time).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })) : "") +
+    sal("E", "EQUIPMENT", esc(h.equipment)) + `</dl>` : "";
+  const updates = isReport ? `<section class="ix-updates" aria-label="Updates"><h2>UPDATES${e.updates.length ? ` · ${e.updates.length}` : ""}</h2>` +
+    (e.updates.length ? e.updates.map(u => `<div class="ix-upd ${u.kind}"><span class="when">${esc(intelWhen(u.at))}</span>` +
+      `<div><span class="who">${u.kind === "corroborate" ? `${intelIco("corrob")}${esc(u.by)} corroborated`
+        : u.kind === "dispute" ? `${intelIco("dispute")}${esc(u.by)} disputed` : esc(u.by)}</span>` +
+      (u.kind === "addendum" ? `<div class="ix-prose ix-upd-body">${u.html}</div>` : u.note ? `<p>${esc(u.note)}</p>` : "") + `</div></div>`).join("")
+      : `<p class="muted ix-upd-none">No updates yet. The author adds them as things change; anyone else can corroborate or dispute it.</p>`) +
+    (e.can_update ? `<form class="ix-upd-form" id="ix-upd-form" hidden><label class="ix-lbl"><span>UPDATE</span>` +
+      `<textarea class="ti" id="ix-upd-body" rows="3" maxlength="2000" placeholder="What changed? e.g. One Polaris left, two still on station."></textarea></label>` +
+      `<div class="row"><label class="ix-lbl"><span>STILL VALID?</span><select class="ti" id="ix-upd-valid">` +
+      `<option value="keep">${r.valid_until && !r.expired ? "Keep the current time" : "No change"}</option>` +
+      `<option value="clear">It's over now</option><option value="2">For 2 more hours</option>` +
+      `<option value="6">For 6 more hours</option><option value="24">For 24 more hours</option></select></label>` +
+      `<span class="sp"></span><button type="button" class="ix-btn" id="ix-upd-x">Cancel</button>` +
+      `<button type="submit" class="ix-primary" id="ix-upd-go">Post update</button></div>` +
+      `<p class="ix-save-err" id="ix-upd-err" role="alert" hidden></p></form>` : "") + `</section>` : "";
+  const crumb = isReport ? `<a href="#/intel/feed">Feed</a><span>/</span><span>Report</span>`
+    : `<a href="#/intel/library">Library</a><span>/</span><span>${esc(e.activity || "General")}</span>`;
+  const linked = (e.linked_from || []).length ? `<div class="panel"><div class="ix-panel-h"><h2>LINKED FROM</h2><span class="muted">${e.linked_from.length}</span></div>` +
+    `<ul class="ix-rl">${e.linked_from.map(b => `<li>${intelIco(b.kind)}<span><a href="${intelHref(b)}">${esc(b.title)}</a>` +
+    `<small>${esc((INTEL_KIND[b.kind] || b.kind).toLowerCase())}</small></span></li>`).join("")}</ul></div>` : "";
+  const repRail = isReport ? `<div class="panel" id="ix-loc-p" hidden></div><div class="panel" id="ix-warn-p" hidden></div>` +
+    `<div class="panel"><h2>GRADE</h2><div class="ix-gradekey"><p>${intelGradeChip(r.grade)}<b>${esc(r.grade ? intelGradeText(r.grade) : "Ungraded")}</b></p>` +
+    `${r.grade ? "Set by the author. The two letters are judged separately: who it came from, and how likely it is." : "The author didn't grade it. That's normal, and it isn't a low grade."}` +
+    `${st.corroborate || st.dispute ? ` ${st.corroborate || 0} corroborated, ${st.dispute || 0} disputed.` : ""}</div></div>` : "";
+  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb">${crumb}</nav>` +
+    `<div class="ix-grid"><article class="panel ix-article">${banner}<div class="ix-head">` +
+    `<div class="ix-kindline">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind])}` +
+    (e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "") + intelMarkTags(e) +
+    (isReport ? intelGradeChip(r.grade) + (r.expired ? `<span class="ix-tag">Expired</span>` : "") : "") + `</div>` +
+    `<h1 class="ix-title">${esc(e.title)}</h1>` +
+    (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") +
+    `<div class="ix-by">${by}</div>${actions}</div>${salute}` +
+    `<div class="ix-prose" id="ix-prose">${e.body_html || `<p class="muted">This entry has no body yet.</p>`}</div>${updates}</article>` +
+    `<aside class="ix-rail">${repRail}<div class="panel" id="ix-toc-p" hidden><h2>ON THIS PAGE</h2><ul class="ix-toc" id="ix-toc"></ul></div>${linked}` +
     `<div class="panel"><h2>DETAILS</h2><dl class="ix-dl">` +
     `<dt>KIND</dt><dd>${esc(INTEL_KIND[e.kind])}</dd>` +
-    `<dt>ACTIVITY</dt><dd>${esc(e.activity || "General")}</dd>` +
+    (isReport && !e.activity ? "" : `<dt>ACTIVITY</dt><dd>${esc(e.activity || "General")}</dd>`) +
     (e.system ? `<dt>SYSTEM</dt><dd>${esc(e.system)}</dd>` : "") +
-    `<dt>PATCH</dt><dd>${p.written ? `${esc(p.written)}${p.confirmed ? " (re-confirmed)" : ""}` : "Not known"}</dd>` +
+    (isReport ? "" : `<dt>PATCH</dt><dd>${p.written ? `${esc(p.written)}${p.confirmed ? " (re-confirmed)" : ""}` : "Not known"}</dd>`) +
     (inReview ? `<dt>SUBMITTED</dt><dd>${esc(new Date(e.submitted_at).toLocaleDateString())} by ${esc(e.author_name || "?")}</dd>`
       : `<dt>PUBLISHED</dt><dd>${esc(e.published_at ? new Date(e.published_at).toLocaleDateString() : "")} by ${esc(e.author_name || "?")}</dd>`) +
     `<dt>MARKING</dt><dd>${e.visibility === "restricted" ? "Restricted: cleared members only" : "Org: every member"}</dd>` +
@@ -28371,6 +28717,8 @@ async function intelEntryView(box) {
     `</dl></div></aside></div>`;
   const prose = $("ix-prose");
   intelHydrate(prose, e);
+  box.querySelectorAll(".ix-upd-body").forEach(u => intelHydrate(u, null));
+  const sl = box.querySelector(".ix-salute"); if (sl) intelHydrate(sl, null);
   const heads = [...prose.querySelectorAll("h2[id], h3[id]")];
   if (heads.length > 1) {
     $("ix-toc-p").hidden = false;
@@ -28383,28 +28731,93 @@ async function intelEntryView(box) {
   }
   if (intelRoute.anchor) { const t = document.getElementById(intelRoute.anchor); if (t) t.scrollIntoView({ block: "start" }); }
   else window.scrollTo(0, 0);
+  if (isReport) { intelReportRail(e); intelSetTab("feed"); }
+  const fail = (err) => intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000);
   $("ix-copy").onclick = () => intelCopy(location.origin + location.pathname + intelHref(e), "Link copied");
   if ($("ix-confirm")) $("ix-confirm").onclick = async () => {
-    try { await intelApi(`/api/intel/entries/${e.id}/confirm`, { method: "POST" }); intelEntryView(box); }
-    catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
+    try { await intelApi(`/api/intel/entries/${e.id}/confirm`, { method: "POST" }); intelEntryView(box); } catch (err) { fail(err); }
   };
   if ($("ix-withdraw")) $("ix-withdraw").onclick = async () => {
     try {
       await intelApi(`/api/intel/entries/${e.id}/withdraw`, { method: "POST" });
       if (inReview) location.hash = `${intelHref(e)}/edit`; else intelEntryView(box);
-    } catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
+    } catch (err) { fail(err); }
   };
   if ($("ix-doctrine")) $("ix-doctrine").onclick = async () => {
     try { await intelApi(`/api/intel/entries/${e.id}/doctrine`, { method: "POST", body: { on: !e.doctrine } }); intelEntryView(box); }
-    catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
+    catch (err) { fail(err); }
   };
   if ($("ix-archive")) $("ix-archive").onclick = async () => {
-    const ok = await confirmDialog(`“${e.title}” leaves the Library, the Feed and search. Its history is kept and an admin can still see it.`,
+    const ok = await confirmDialog(`“${e.title}” leaves ${isReport ? "the Feed" : "the Library, the Feed"} and search. Its history is kept and an admin can still see it.`,
       { title: "Archive this entry?", confirmLabel: "Archive", danger: true });
     if (!ok) return;
-    try { await intelApi(`/api/intel/entries/${e.id}`, { method: "DELETE" }); location.hash = "#/intel/library"; }
-    catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
+    try { await intelApi(`/api/intel/entries/${e.id}`, { method: "DELETE" }); location.hash = isReport ? "#/intel/feed" : "#/intel/library"; }
+    catch (err) { fail(err); }
   };
+  // Corroborate / Dispute: one stance each; pressing yours again withdraws it.
+  box.querySelectorAll("[data-stance]").forEach(b => b.onclick = async () => {
+    const k = b.dataset.stance;
+    let note = "";
+    if (st.mine !== k) {
+      note = await promptDialog(k === "dispute" ? "Say what doesn't match. Your note shows under the report's updates."
+        : "Optional: what did you see? It shows under the report's updates.",
+        { title: k === "dispute" ? "Dispute this report" : "Corroborate this report",
+          confirmLabel: k === "dispute" ? "Dispute" : "Corroborate",
+          placeholder: k === "dispute" ? "e.g. Went through at 22:10, nobody there" : "e.g. Saw the same from the Stanton side" });
+      if (note === null) return;
+      if (k === "dispute" && note.trim().length < 3) { intelToast(`<span class="warn">A dispute needs a note saying why.</span>`, 5000); return; }
+    }
+    try { await intelApi(`/api/intel/entries/${e.id}/stance`, { method: "POST", body: { stance: st.mine === k ? "none" : k, note } }); intelEntryView(box); }
+    catch (err) { fail(err); }
+  });
+  if ($("ix-add-upd")) {
+    const form = $("ix-upd-form"), btn = $("ix-add-upd");
+    const open = (on) => { form.hidden = !on; btn.setAttribute("aria-expanded", on); if (on) $("ix-upd-body").focus(); };
+    btn.onclick = () => { open(form.hidden); if (!form.hidden) form.scrollIntoView({ block: "nearest" }); };
+    $("ix-upd-x").onclick = () => { open(false); btn.focus(); };
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const v = $("ix-upd-valid").value;
+      const validity = v === "keep" || v === "clear" ? v : new Date(Date.now() + (+v) * 3600000).toISOString();
+      $("ix-upd-go").disabled = true;
+      try { await intelApi(`/api/intel/entries/${e.id}/updates`, { method: "POST", body: { body: $("ix-upd-body").value, validity } }); intelEntryView(box); }
+      catch (err) { $("ix-upd-go").disabled = false; const x = $("ix-upd-err"); x.textContent = err.message; x.hidden = false; }
+    };
+  }
+}
+function intelSetTab(tab) {
+  document.querySelectorAll("#intel-tabs a").forEach(a => {
+    const on = a.dataset.sec === tab;
+    a.classList.toggle("on", on);
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
+}
+// A report's rail: where it was (with Set destination) and the danger-board
+// warning it was written up from, both resolved live.
+async function intelReportRail(e) {
+  const h = e.header || {};
+  const keys = [h.location_ref, h.warning_id ? `warning:${h.warning_id}` : null].filter(Boolean);
+  if (!keys.length) return;
+  let refs = {};
+  try { refs = (await intelApi(`/api/intel/refs?keys=${keys.join(",")}&entry=${e.id}`)).refs; } catch { return; }
+  const loc = h.location_ref && refs[h.location_ref], lp = $("ix-loc-p");
+  if (loc && lp) {
+    lp.hidden = false;
+    const isPoi = h.location_ref.startsWith("poi:");
+    lp.innerHTML = `<h2>LOCATION</h2><p class="ix-loc-name">${loc.state === "missing" ? `<s>${esc(loc.label || "A deleted place")}</s>` : esc(loc.label || "A place you can't see")}</p>` +
+      (loc.sub ? `<div class="ix-loc-sub">${esc(loc.sub)}</div>` : "") + (h.location ? `<div class="ix-loc-sub">${esc(h.location)}</div>` : "") +
+      (loc.state === "ok" && isPoi ? `<button type="button" class="ix-primary" id="ix-loc-go">${intelIco("nav")}Set destination</button>`
+        : loc.state === "ok" && loc.href ? `<a class="ix-btn" href="${loc.href}">${intelIco("zone")}Open in Prospector</a>` : "");
+    if ($("ix-loc-go")) $("ix-loc-go").onclick = () => intelSetDest(loc.poi_id, loc.label);
+  }
+  const w = h.warning_id && refs[`warning:${h.warning_id}`], wp = $("ix-warn-p");
+  if (w && wp) {
+    wp.hidden = false;
+    wp.innerHTML = `<h2>ON THE DANGER BOARD</h2>` + (w.state === "ok"
+      ? `<div class="ix-danger sev-${esc(w.severity || "active")}">${intelIco("alert")}<div><b>${esc((w.severity || "").toUpperCase())}</b> · ${esc(w.label)}` +
+        `<br><span class="muted">${esc((w.sub || "").split(" · ").slice(1).join(" · "))} · still on the board</span><br><a href="#/pirates">Open the board</a></div></div>`
+      : `<p class="muted" style="margin:0;font-size:12px">The warning it was written up from has aged off the board.</p>`);
+  }
 }
 
 // ---- REVIEW (#50 slice 2): the queue + one submission ----
@@ -28637,7 +29050,118 @@ function intelEdValues() {
     activity: $("ix-ed-act").value || null, system: $("ix-ed-sys").value || null,
     tags: $("ix-ed-tags").value.split(/[,\s]+/).filter(Boolean) };
   if (intelEd && intelEd.canMark) v.visibility = intelEd.visibility;
+  if (intelEd && intelEd.kind === "report" && $("ix-rep")) {
+    const t = $("ix-r-time").value;
+    v.header = { size: $("ix-r-size").value, activity: $("ix-r-act").value,
+      location_ref: intelEd.locRef ? intelEd.locRef.key : null, location_label: intelEd.locRef ? intelEd.locRef.label : null,
+      location: $("ix-r-loc").value, unit: $("ix-r-unit").value,
+      time: t ? new Date(t).toISOString() : null, equipment: $("ix-r-eq").value, warning_id: intelEd.warningId || null };
+    v.grade_rel = $("ix-r-rel").value || null;
+    v.grade_cred = $("ix-r-cred").value ? +$("ix-r-cred").value : null;
+    v.valid_until = intelEd.validUntil || null;
+  }
   return v;
+}
+const INTEL_TITLE_PH = { procedure: "e.g. Hull-C escort formation", tactic: "e.g. Countering a gate camp at Pyro Gateway",
+  report: "e.g. Gate camp on the Pyro side of the jump point" };
+// ISO → the value a datetime-local input wants (local time, minutes).
+function intelLocalInput(iso) {
+  const d = iso ? new Date(iso) : null;
+  if (!d || !Number.isFinite(d.getTime())) return "";
+  const z = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}T${z(d.getHours())}:${z(d.getMinutes())}`;
+}
+// The SALUTE header + grade + valid-until block (reports). Re-mounted whole
+// when a local backup is restored.
+function intelEdMountReport(v) {
+  const ed = intelEd, h = v.header || {};
+  ed.locRef = h.location_ref ? { key: h.location_ref, label: h.location_label || h.location_ref } : null;
+  ed.validUntil = v.valid_until || null;
+  if (h.warning_id) ed.warningId = h.warning_id;
+  const inp = (id, lbl, val, ph, max) => `<label class="ix-lbl"><span>${lbl}</span><input class="ti" id="${id}" maxlength="${max}" autocomplete="off" ` +
+    `placeholder="${esc(ph)}" value="${esc(val || "")}"></label>`;
+  const rel = `<option value="">— ungraded</option>` + Object.entries(INTEL_REL).map(([k, t]) =>
+    `<option value="${k}"${v.grade_rel === k ? " selected" : ""}>${k} · ${esc(t)}</option>`).join("");
+  const cred = `<option value="">—</option>` + Object.entries(INTEL_CRED).map(([k, t]) =>
+    `<option value="${k}"${String(v.grade_cred) === k ? " selected" : ""}>${k} · ${esc(t)}</option>`).join("");
+  const wrap = $("ix-rep");
+  wrap.innerHTML = `<div class="ix-rep-h"><span>SALUTE</span><small>Where and when are required. The rest helps whoever reads it next.</small></div>` +
+    `<div class="ix-rep-grid">` +
+    `<div class="ix-lbl ix-rep-wide"><span>LOCATION · a place or survey zone</span><div id="ix-r-locchip"></div>` +
+    `<div class="ix-pick" id="ix-r-pick"><input class="ti" id="ix-r-locq" autocomplete="off" placeholder="Find a place or survey zone…" aria-label="Find a place">` +
+    `<ul id="ix-r-locres" hidden></ul></div></div>` +
+    inp("ix-r-loc", "WHERE EXACTLY", h.location, "e.g. 8 km off the Pyro-side exit", 200) +
+    `<label class="ix-lbl"><span>TIME SEEN</span><span class="ix-r-time"><input class="ti" type="datetime-local" id="ix-r-time" value="${intelLocalInput(h.time)}">` +
+    `<button type="button" id="ix-r-now">Now</button></span></label>` +
+    inp("ix-r-size", "SIZE", h.size, "e.g. 5 ships, 2 crewed heavies", 120) +
+    inp("ix-r-act", "WHAT THEY'RE DOING", h.activity, "e.g. Interdicting anything over 96 SCU", 200) +
+    inp("ix-r-unit", "UNIT", h.unit, "Who: an org, ship tags", 200) +
+    inp("ix-r-eq", "EQUIPMENT", h.equipment, "e.g. 3× Polaris, 2× Hornet Mk II", 300) +
+    `<label class="ix-lbl"><span>SOURCE</span><select class="ti" id="ix-r-rel">${rel}</select></label>` +
+    `<label class="ix-lbl"><span>INFORMATION</span><select class="ti" id="ix-r-cred">${cred}</select></label>` +
+    `<label class="ix-lbl"><span>VALID FOR</span><select class="ti" id="ix-r-valid">` +
+    (ed.validUntil ? `<option value="cur" selected>Until ${esc(new Date(ed.validUntil).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" }))}</option>` : "") +
+    `<option value=""${ed.validUntil ? "" : " selected"}>No expiry</option><option value="2">2 hours</option><option value="6">6 hours</option>` +
+    `<option value="24">24 hours</option><option value="72">3 days</option></select></label>` +
+    `<small class="ix-rep-wide ix-r-hint" id="ix-r-hint"></small></div>`;
+  const hint = () => {
+    $("ix-r-hint").textContent = (ed.validUntil ? `Drops off the live feed ${new Date(ed.validUntil).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" })}. ` : "No expiry: it stays in the live feed. ") +
+      "Grading is optional; an ungraded report shows “—”, not a low grade.";
+  };
+  hint();
+  const chip = () => {
+    const c = $("ix-r-locchip");
+    c.innerHTML = ed.locRef ? `<span class="ix-person">${intelIco(ed.locRef.key.startsWith("zone:") ? "zone" : "pin", "ix-ico sm")}${esc(ed.locRef.label)}` +
+      `<button type="button" id="ix-r-locx" aria-label="Clear the location">×</button></span>` : "";
+    $("ix-r-pick").hidden = !!ed.locRef;
+    if ($("ix-r-locx")) $("ix-r-locx").onclick = () => { ed.locRef = null; chip(); intelEdChanged(); $("ix-r-locq").focus(); };
+  };
+  chip();
+  intelRefPicker($("ix-r-locq"), $("ix-r-locres"), ["poi", "zone"], (it) => {
+    ed.locRef = { key: it.key, label: it.label }; chip(); intelEdChanged();
+  });
+  $("ix-r-now").onclick = () => { $("ix-r-time").value = intelLocalInput(new Date().toISOString()); intelEdChanged(); };
+  $("ix-r-valid").onchange = (ev) => {
+    const val = ev.target.value;
+    if (val !== "cur") ed.validUntil = val ? new Date(Date.now() + (+val) * 3600000).toISOString() : null;
+    hint(); intelEdChanged();
+  };
+}
+// A search-as-you-type picker over /api/intel/refs/search (the reference
+// inserter, and the report's location). `kinds` narrows what it offers.
+function intelRefPicker(input, list, kinds, onPick) {
+  let t = null, items = [];
+  const close = () => { list.hidden = true; list.innerHTML = ""; input.setAttribute("aria-expanded", "false"); };
+  input.setAttribute("role", "combobox"); input.setAttribute("aria-expanded", "false");
+  input.setAttribute("aria-autocomplete", "list"); input.setAttribute("aria-controls", list.id);
+  list.setAttribute("role", "listbox");
+  input.oninput = () => {
+    clearTimeout(t);
+    const q = input.value.trim();
+    if (q.length < 2) { close(); return; }
+    t = setTimeout(async () => {
+      let d;
+      try { d = await intelApi(`/api/intel/refs/search?q=${encodeURIComponent(q)}`); } catch { return; }
+      if (input.value.trim() !== q) return;
+      items = d.results.filter(x => !kinds || kinds.includes(x.kind)).slice(0, 12);
+      list.innerHTML = items.length ? items.map((x, i) => `<li role="option"><button type="button" data-i="${i}">` +
+        `${intelIco(INTEL_REF_ICO[x.kind] || "ref", "ix-ico sm")}<span>${esc(x.label)}<small>${esc(x.sub || "")}</small></span></button></li>`).join("")
+        : `<li class="none">Nothing matches “${esc(q)}”.</li>`;
+      list.hidden = false; input.setAttribute("aria-expanded", "true");
+      list.querySelectorAll("button[data-i]").forEach(b => b.onclick = () => { const it = items[+b.dataset.i]; input.value = ""; close(); onPick(it); });
+    }, 200);
+  };
+  input.onkeydown = (ev) => {
+    if (ev.key === "Escape" && !list.hidden) { ev.stopPropagation(); close(); }
+    if (ev.key === "ArrowDown" && !list.hidden) { ev.preventDefault(); const b = list.querySelector("button"); if (b) b.focus(); }
+    if (ev.key === "Enter") { ev.preventDefault(); const b = list.querySelector("button"); if (b) b.click(); }
+  };
+  list.onkeydown = (ev) => {
+    const bs = [...list.querySelectorAll("button")], i = bs.indexOf(document.activeElement);
+    if (ev.key === "ArrowDown" && i < bs.length - 1) { ev.preventDefault(); bs[i + 1].focus(); }
+    if (ev.key === "ArrowUp") { ev.preventDefault(); (i > 0 ? bs[i - 1] : input).focus(); }
+    if (ev.key === "Escape") { ev.stopPropagation(); close(); input.focus(); }
+  };
 }
 // Does this member's publish / major revision of this kind go to review?
 function intelEdGated() {
@@ -28670,21 +29194,48 @@ async function intelEditor(box) {
     if (!e.can_edit) { box.innerHTML = `<div class="panel">${intelStatus("Only the owner, maintainers or an admin can edit this entry.", true)}</div>`; return; }
   }
   if (intelCurSec !== (isNew ? "new" : "edit") || (!isNew && intelRoute.id !== id)) return;
+  if (e && e.kind === "report") intelSetTab("feed");
+  // "Write up →" from a danger-board warning: a report pre-filled with where,
+  // what and when, citing the warning.
+  let pre = null;
+  if (isNew && kind === "report" && intelRoute.warning) {
+    let w = null;
+    try { w = ((await intelApi("/api/warnings")).entries || []).find(x => x.id === intelRoute.warning) || null; } catch {}
+    if (intelCurSec !== "new") return;
+    const wid = intelRoute.warning;
+    const where = w ? ((w.anchor_a && w.anchor_a.name) || w.location || "") : "";
+    const sev = w ? w.severity.charAt(0).toUpperCase() + w.severity.slice(1) : "";
+    pre = w ? {
+      title: `${sev} ${w.threat === "pvp" ? "player" : "NPC pirate"} ${w.kind === "lane" ? "snare" : "camp"}${where ? ` at ${where}` : ""}`.slice(0, 140),
+      summary: "", activity: null, system: INTEL_SYSTEM_OPTS.includes(w.system) ? w.system : null, tags: [],
+      body: `Written up from the danger board: [[warning:${wid}]]\n\n${w.note ? w.note + "\n\n" : ""}` + INTEL_TEMPLATE.report,
+      header: { location_ref: w.anchor_a && w.anchor_a.name ? `poi:${w.anchor_a.id}` : null,
+        location_label: w.anchor_a && w.anchor_a.name, location: w.anchor_a && w.anchor_a.name ? (w.location || "") : "",
+        activity: `${w.kind === "lane" ? "Snaring the lane" : "Camping"} · ${w.threat === "pvp" ? "players" : "NPC pirates"}`,
+        time: new Date(Date.now() - w.age_s * 1000).toISOString(), warning_id: wid },
+      valid_until: w.expires_s > 60 ? new Date(Date.now() + w.expires_s * 1000).toISOString() : null,
+    } : { title: "", summary: "", activity: null, system: null, tags: [],
+      body: `Written up from the danger board: [[warning:${wid}]]\n\n` + INTEL_TEMPLATE.report,
+      header: { time: new Date().toISOString(), warning_id: wid } };
+  }
   intelEd = { key: isNew ? `n${kind}` : `e${id}`, id, kind: e ? e.kind : kind, status: e ? e.status : "draft",
     rev: e ? e.rev : 0, entry: e, major: false, timer: null, saving: false, dirty: false,
-    templated: isNew, visibility: e ? e.visibility : "org",
+    templated: isNew && !pre, visibility: e ? e.visibility : "org", locRef: null, validUntil: null, warningId: null,
     // The marking control shows to cleared members, and on an entry that's
     // already RESTRICTED (whoever can open it is cleared anyway).
     canMark: intelAccess().cleared || (e && e.visibility === "restricted") };
   const published = intelEd.status === "published";
-  const v = e ? { title: e.title, summary: e.summary, body: e.body_md, activity: e.activity, system: e.system, tags: e.tags }
-    : { title: "", summary: "", body: INTEL_TEMPLATE[kind], activity: null, system: null, tags: [] };
+  const v = e ? { title: e.title, summary: e.summary, body: e.body_md, activity: e.activity, system: e.system, tags: e.tags,
+      header: e.header, grade_rel: e.grade_rel, grade_cred: e.grade_cred, valid_until: e.valid_until }
+    : pre || { title: "", summary: "", body: INTEL_TEMPLATE[kind], activity: null, system: null, tags: [],
+      header: kind === "report" ? { time: new Date().toISOString() } : null };
   const opt = (list, cur, none) => `<option value="">${none}</option>` +
     list.map(x => `<option value="${esc(x)}"${x === cur ? " selected" : ""}>${esc(x)}</option>`).join("");
   const tb = (md, label, inner, kbd) => `<button type="button" class="ix-tb" data-md="${md}" title="${label}${kbd ? ` (${kbd})` : ""}" aria-label="${label}">${inner}</button>`;
-  const crumbTail = e ? `<a href="${published ? intelHref(e) : "#/intel/library"}">${esc(e.title)}</a><span>/</span><span>Edit</span>`
+  const crumbTail = e ? `<a href="${published ? intelHref(e) : "#/intel/library"}">${esc(e.title)}</a><span>/</span><span>${e.kind === "report" && published ? "Correct" : "Edit"}</span>`
     : `<span id="ix-crumb-t">New ${esc(INTEL_KIND[kind].toLowerCase())}</span>`;
-  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/library">Library</a><span>/</span>${crumbTail}</nav>` +
+  const home = (k) => k === "report" ? `<a href="#/intel/feed" id="ix-crumb-home">Feed</a>` : `<a href="#/intel/library" id="ix-crumb-home">Library</a>`;
+  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb">${home(intelEd.kind)}<span>/</span>${crumbTail}</nav>` +
     `<div class="ix-ed-grid"><div class="panel ix-ed">` +
     `<div class="ix-restore" id="ix-restore" hidden><span id="ix-restore-msg"></span>` +
     `<button type="button" id="ix-restore-go">Restore</button><button type="button" id="ix-restore-x">Discard</button></div>` +
@@ -28694,16 +29245,16 @@ async function intelEditor(box) {
       `major revision is waiting for review. You're editing the live text${e.pending.mine ? "; submitting again replaces your earlier one" : ""}.</span></div>` : "") +
     `<div class="ix-ed-head">` +
     (isNew ? `<div class="seg" id="ix-ed-kind" role="group" aria-label="Kind">` +
-      ["procedure", "tactic"].map(k => `<button type="button" data-k="${k}" class="${k === kind ? "on" : ""}" aria-pressed="${k === kind}">${INTEL_KIND[k].toUpperCase()}</button>`).join("") + `</div>` : "") +
+      ["procedure", "tactic", "report"].map(k => `<button type="button" data-k="${k}" class="${k === kind ? "on" : ""}" aria-pressed="${k === kind}">${INTEL_KIND[k].toUpperCase()}</button>`).join("") + `</div>` : "") +
     `<input class="ti ix-ed-title" id="ix-ed-title" maxlength="140" autocomplete="off" aria-label="Title" ` +
-    `placeholder="${intelEd.kind === "tactic" ? "e.g. Countering a gate camp at Pyro Gateway" : "e.g. Hull-C escort formation"}" value="${esc(v.title)}">` +
+    `placeholder="${INTEL_TITLE_PH[intelEd.kind]}" value="${esc(v.title)}">` +
     `<label class="ix-lbl"><span>SUMMARY <i id="ix-sum-n"></i></span>` +
-    `<input class="ti" id="ix-ed-sum" maxlength="300" autocomplete="off" placeholder="One line: what this is for. Shows in lists and search." value="${esc(v.summary)}"></label>` +
+    `<input class="ti" id="ix-ed-sum" maxlength="300" autocomplete="off" placeholder="${intelEd.kind === "report" ? "One line for the feed: what's going on, where." : "One line: what this is for. Shows in lists and search."}" value="${esc(v.summary)}"></label>` +
     `<div class="ix-ed-meta">` +
     `<label class="ix-lbl"><span>ACTIVITY</span><select class="ti" id="ix-ed-act">${opt(tags, v.activity, "General")}</select></label>` +
     `<label class="ix-lbl"><span>SYSTEM</span><select class="ti" id="ix-ed-sys">${opt(INTEL_SYSTEM_OPTS, v.system, "Any system")}</select></label>` +
     `<label class="ix-lbl"><span>TAGS</span><input class="ti" id="ix-ed-tags" autocomplete="off" placeholder="escort, hull-c" value="${esc(v.tags.join(", "))}"></label>` +
-    `</div></div>` +
+    `</div><div class="ix-rep" id="ix-rep"${intelEd.kind === "report" ? "" : " hidden"}></div></div>` +
     `<div class="ix-tools" role="toolbar" aria-label="Formatting">` +
     tb("h", "Heading", "<b>H</b>") + tb("b", "Bold", "<b>B</b>", "Ctrl+B") + tb("i", "Italic", "<i>I</i>", "Ctrl+I") +
     tb("u", "Underline", "<u>U</u>") + tb("s", "Strikethrough", "<s>S</s>") + `<span class="sep"></span>` +
@@ -28711,6 +29262,7 @@ async function intelEditor(box) {
     tb("q", "Quote", intelIco("quote")) + tb("code", "Code", intelIco("code")) + tb("table", "Table", intelIco("table")) +
     `<span class="sep"></span>` + tb("link", "Link", intelIco("link"), "Ctrl+K") +
     `<button type="button" class="ix-tb" id="ix-tb-img" title="Image link" aria-label="Image link" aria-expanded="false" aria-controls="ix-pop-img">${intelIco("image")}</button>` +
+    `<button type="button" class="ix-tb" id="ix-tb-ref" title="Insert a reference: a place, zone, warning, event, op or entry" aria-label="Insert a reference" aria-expanded="false" aria-controls="ix-pop-ref">${intelIco("ref")}</button>` +
     `<span class="seg" role="group" aria-label="Write or preview"><button type="button" id="ix-m-write" class="on" aria-pressed="true">WRITE</button>` +
     `<button type="button" id="ix-m-prev" aria-pressed="false">PREVIEW</button></span>` +
     `<div class="ix-pop" id="ix-pop-img" hidden role="dialog" aria-label="Insert an image link">` +
@@ -28718,6 +29270,10 @@ async function intelEditor(box) {
     `<div class="ix-hostcheck" id="ix-img-check"></div>` +
     `<label class="ix-lbl"><span>CAPTION</span><input class="ti" id="ix-img-cap" maxlength="120" autocomplete="off" placeholder="What it shows"></label>` +
     `<div class="row"><button type="button" id="ix-img-x">Cancel</button><button type="button" class="ix-primary" id="ix-img-go" disabled>Insert</button></div></div>` +
+    `<div class="ix-pop" id="ix-pop-ref" hidden role="dialog" aria-label="Insert a reference">` +
+    `<label class="ix-lbl"><span>INSERT A REFERENCE</span><span class="ix-pick"><input class="ti" id="ix-ref-q" autocomplete="off" placeholder="A place, zone, warning, event, op or entry…">` +
+    `<ul id="ix-ref-res" hidden></ul></span></label>` +
+    `<small class="muted">Inserts a live chip: it shows the current name, and a place chip sets your destination.</small></div>` +
     `</div>` +
     `<textarea class="ti ix-area" id="ix-area" spellcheck="true" aria-label="Body (Markdown)"></textarea>` +
     `<div class="ix-prose ix-preview" id="ix-preview" hidden></div>` +
@@ -28726,6 +29282,9 @@ async function intelEditor(box) {
     `</div><aside class="ix-ed-rail"><div class="panel" id="ix-save-p"></div><div class="panel" id="ix-people-p" hidden></div></aside></div>`;
   const ta = $("ix-area");
   ta.value = v.body || "";
+  intelEdMountReport(v);
+  $("ix-rep").addEventListener("input", (ev) => { if (ev.target.id !== "ix-r-locq") intelEdChanged(); });
+  $("ix-rep").addEventListener("change", (ev) => { if (ev.target.tagName === "SELECT" && ev.target.id !== "ix-r-valid") intelEdChanged(); });
   intelEdCounts();
   intelEdRenderSave();
   if (e && e.can_manage && published) intelEdRenderPeople();
@@ -28741,6 +29300,7 @@ async function intelEditor(box) {
     $("ix-restore-go").onclick = () => {
       $("ix-ed-title").value = bk.title || ""; $("ix-ed-sum").value = bk.summary || ""; ta.value = bk.body || "";
       $("ix-ed-act").value = bk.activity || ""; $("ix-ed-sys").value = bk.system || ""; $("ix-ed-tags").value = (bk.tags || []).join(", ");
+      if (intelEd.kind === "report" && bk.header) intelEdMountReport(bk);
       $("ix-restore").hidden = true; intelEd.templated = false; intelEdChanged();
     };
     $("ix-restore-x").onclick = () => { try { localStorage.removeItem(intelEdBackupKey()); } catch {} $("ix-restore").hidden = true; };
@@ -28751,7 +29311,10 @@ async function intelEditor(box) {
     intelEd.kind = b.dataset.k; intelEd.key = `n${intelEd.kind}`;
     $("ix-ed-kind").querySelectorAll("button").forEach(x => { const on = x === b; x.classList.toggle("on", on); x.setAttribute("aria-pressed", on); });
     if (swap) ta.value = INTEL_TEMPLATE[intelEd.kind];
-    $("ix-ed-title").placeholder = intelEd.kind === "tactic" ? "e.g. Countering a gate camp at Pyro Gateway" : "e.g. Hull-C escort formation";
+    $("ix-ed-title").placeholder = INTEL_TITLE_PH[intelEd.kind];
+    $("ix-rep").hidden = intelEd.kind !== "report";
+    $("ix-crumb-home").outerHTML = home(intelEd.kind);
+    intelEdRenderSave(true);
     history.replaceState(null, "", `#/intel/new/${intelEd.kind}`);
     $("ix-crumb-t").textContent = `New ${INTEL_KIND[intelEd.kind].toLowerCase()}`;
     intelRoute = { kind: intelEd.kind };
@@ -28788,6 +29351,14 @@ async function intelEditor(box) {
     const u = $("ix-img-url").value.trim(), c = $("ix-img-cap").value.trim().replace(/[\[\]]/g, "");
     setPop(false); intelInsertBlock(`![${c}](${u})\n`);
   };
+  // reference popover: search → insert a [[kind:id]] chip at the cursor
+  const rpop = $("ix-pop-ref"), rbtn = $("ix-tb-ref");
+  const setRef = (on) => { rpop.hidden = !on; rbtn.setAttribute("aria-expanded", on);
+    if (on) { setPop(false); $("ix-ref-q").value = ""; $("ix-ref-q").focus(); } };
+  rbtn.onclick = () => setRef(rpop.hidden);
+  popBtn.addEventListener("click", () => setRef(false));
+  rpop.addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); setRef(false); rbtn.focus(); } });
+  intelRefPicker($("ix-ref-q"), $("ix-ref-res"), null, (it) => { setRef(false); intelInsert(`[[${it.key}]]`); });
   // write / preview
   const setPreview = async (on) => {
     ta.hidden = on; $("ix-preview").hidden = !on;
@@ -28945,12 +29516,14 @@ function intelEdRenderSave(keepNote) {
     if (ed.visibility === b.dataset.vis) return;
     ed.visibility = b.dataset.vis; intelEdRenderSave(true); intelEdChanged();
   });
+  const isReport = ed.kind === "report";
   if (!published) {
     p.innerHTML = `<h2>${gated ? "SUBMIT" : "PUBLISH"}</h2>` + marking +
       `<p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 12px">` +
       (gated ? `Only you can see a draft. ${INTEL_KIND[ed.kind]}s are reviewed before they're published: a reviewer approves it, or sends it back with a note.`
+        : isReport ? `Only you can see a draft. A report is a record of what you saw: once it's published you can correct it for 15 minutes, then you add updates.`
         : `Only you can see a draft. Publishing puts it in the Library, the Feed and search, stamped with the game patch.`) + `</p>` +
-      `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-publish">${gated ? "Submit for review" : "Publish"}</button>` +
+      `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-publish">${gated ? "Submit for review" : isReport ? "Publish report" : "Publish"}</button>` +
       (ed.id ? `<button type="button" class="ix-btn" id="ix-del">Delete draft</button>` : "") + `</div>` +
       `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
     bindMarking();
@@ -28964,6 +29537,20 @@ function intelEdRenderSave(keepNote) {
         intelEd = null; location.hash = "#/intel/library"; }
       catch (err) { intelEdErr(err.message); }
     };
+    return;
+  }
+  if (isReport) {
+    // A published report: the author's typo window, never a major revision.
+    const until = ed.entry.edit_until ? new Date(ed.entry.edit_until).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "";
+    p.innerHTML = `<h2>CORRECT IT</h2>` + marking +
+      `<p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 12px">Fix typos and wrong details until ${esc(until)}. ` +
+      `After that the report only takes updates, so the first thing people read stays the record.</p>` +
+      `<label class="ix-fld"><span>WHAT YOU FIXED · optional</span><input class="ti" id="ix-note" maxlength="300" autocomplete="off" placeholder="e.g. Wrong ship count" value="${esc(noteVal)}"></label>` +
+      `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-save">Save correction</button>` +
+      `<a class="ix-btn" href="${intelHref(ed.entry)}">Cancel</a></div>` +
+      `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
+    bindMarking();
+    $("ix-save").onclick = () => intelEdSave({ note: $("ix-note").value, base_rev: ed.rev });
     return;
   }
   const major = ed.major;
@@ -28992,6 +29579,10 @@ async function intelEdSave(extra) {
   const ed = intelEd; if (!ed) return;
   const vals = intelEdValues();
   if (!vals.title.trim()) { intelEdErr("Give it a title first."); $("ix-ed-title").focus(); return; }
+  if (ed.kind === "report" && (!(vals.header.location_ref || vals.header.location.trim()) || !vals.header.time)) {
+    intelEdErr("Add where it was (pick a place, or describe it) and when you saw it.");
+    (vals.header.time ? $("ix-r-locq") : $("ix-r-time")).focus(); return;
+  }
   clearTimeout(ed.timer); ed.timer = null;
   const btn = $("ix-publish") || $("ix-save"); if (btn) btn.disabled = true;
   try {
@@ -29006,7 +29597,8 @@ async function intelEdSave(extra) {
     intelEd = null;
     const msg = d.status === "in_review" ? "Submitted for review. You'll see it in your drafts until it's approved."
       : d.pending && d.pending.mine && extra.major ? "Revision submitted for review."
-      : extra.publish ? "Published." : `Saved rev ${d.rev}.`;
+      : extra.publish ? (d.kind === "report" ? "Report published. You can correct it for 15 minutes." : "Published.")
+      : d.kind === "report" ? "Correction saved." : `Saved rev ${d.rev}.`;
     intelToast(`<span>${msg}</span>`, 6000);
     location.hash = intelHref(d);
   } catch (err) {
