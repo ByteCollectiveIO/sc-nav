@@ -49,7 +49,7 @@ CATEGORIES = ("events", "marketplace", "goals", "records", "lfg", "pirates",
               # overrides; a kind with no override posts to `intel`.
               # `intel_restricted` is never a fallback: unset = RESTRICTED
               # entries post nothing at all.
-              "intel", "intel_report", "intel_sop", "intel_rfi", "intel_restricted")
+              "intel", "intel_report", "intel_sop", "intel_rfi", "intel_debrief", "intel_restricted")
 _FORUM_PREFIX = "discord_forum_"              # + category: "1" once Discord said it's a forum
 _WEBHOOK_PREFIX = "discord_webhook_"          # + category, e.g. discord_webhook_events
 _LEGACY_WEBHOOK_KEY = "discord_webhook_url"   # v0.13.0's single shared webhook

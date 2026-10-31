@@ -51,7 +51,7 @@ goals already stamp `min_q` per line but progress never reads it. Design:
 the marketplace crafted blob on crafted holdings, derived subkind + band, then
 goals gate on it, craft preview reads pledged lots, listings/rollups follow.
 
-### 50. Intelligence: the org's knowledge hub, inside Org Intel 🔨 SLICES 0–6 BUILT (2026-10-31)
+### 50. Intelligence: the org's knowledge hub, inside Org Intel 🔨 SLICES 0–7 BUILT (2026-10-31)
 Org knowledge (SOPs, tactics, notes on places and hostile orgs, op lessons)
 lives in Discord and scrolls away. Design: [intelligence.md](intelligence.md).
 Org Intel grows a second half (INTELLIGENCE · ACTIVITY; every `#/intel/<slug>`
@@ -76,8 +76,11 @@ comments (answers, accept, Promote → procedure or dossier, comments with one l
 of reply under every entry) built 2026-10-31. Slice 6, Discord publishing (`intel`
 channel + per-kind overrides, the editor's 📣 panel with ping + teaser, major
 revisions always post, Push on minor, forum threads reused per entry, RESTRICTED
-placeholders, one 24 h nudge for unanswered questions) built 2026-10-31; next is
-slice 7, debriefs + required reading.
+placeholders, one 24 h nudge for unanswered questions) built 2026-10-31. Slice 7,
+debriefs + required reading (op **Write debrief →** with a read-only op-record
+snapshot and the AAR template, DEBRIEFS on the op page, an `intel_debrief`
+channel, event REQUIRED READING with a ✓ on the roster, reads reset only by a
+major revision) built 2026-10-31; next is slice 8, images + portability.
 
 ### 49. Goal custody: hand delivered materials to a holder 📐 DESIGN (2026-10-21)
 User report: deleting a holding after delivering it to an org goal withdraws
