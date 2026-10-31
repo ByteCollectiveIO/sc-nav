@@ -3590,6 +3590,12 @@ async def market_sweep_loop():
     while True:
         await asyncio.sleep(MARKET_SWEEP_TICK_S)
         try:
+            # Rides this minute tick: Intelligence's one 24 h nudge for an
+            # unanswered question (#50 slice 6). Idle when no intel channel.
+            await _intel_rfi_nudges()
+        except Exception as exc:
+            print(f"[sc-nav] intel nudge error: {exc}")
+        try:
             if not notify.is_configured("marketplace"):
                 continue
             now = datetime.now(timezone.utc)
@@ -3747,6 +3753,8 @@ async def _sync_strata_feed():
 
 @app.on_event("startup")
 async def _start_presence_broadcaster():
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
     # Re-hydrate the Group Finder board so a redeploy/restart no longer wipes it.
     # Aged-off posts self-clean on the first broadcaster tick; the id sequence
     # resumes past the highest persisted id so a new post never collides.
@@ -8971,6 +8979,7 @@ def _discord_ts(iso: str, style: str = "F") -> str:
 
 
 _notify_tasks: set[asyncio.Task] = set()
+_main_loop: asyncio.AbstractEventLoop | None = None   # set at startup; see _notify_bg
 
 
 def _notify_bg(coro) -> None:
@@ -8988,8 +8997,14 @@ def _notify_bg(coro) -> None:
     try:
         task = asyncio.create_task(wrapper)
     except RuntimeError:
-        # No running loop (sync test helper / script context) — a notification
-        # is best-effort by contract, so drop it rather than crash the caller.
+        # No running loop in THIS thread. A sync route runs on FastAPI's thread
+        # pool: hand the post to the server's loop (captured at startup).
+        # Without one (sync test helper / script) a notification is
+        # best-effort by contract, so drop it rather than crash the caller.
+        loop = _main_loop
+        if loop is not None and loop.is_running():
+            asyncio.run_coroutine_threadsafe(wrapper, loop)
+            return
         wrapper.close()
         coro.close()
         return
@@ -16296,6 +16311,8 @@ def _notify_template_channel(key: str) -> str | None:
     cat = notify_templates.TEMPLATES[key].category
     if cat == "ops":
         return _ops_notify_category()
+    if cat.startswith("intel"):
+        return _intel_channel(cat)      # a kind's override, else the Intelligence default
     return cat if notify.is_configured(cat) else None
 
 
@@ -17492,11 +17509,19 @@ class IntelCreateIn(IntelEntryFields):
         return v
 
 
+class IntelAnnounceIn(BaseModel):
+    on: bool = False
+    channel: str | None = Field(None, max_length=32)
+    ping: str | None = Field(None, max_length=32)       # one Discord role id from the alias map
+    teaser: str = Field("", max_length=280)
+
+
 class IntelSaveIn(IntelEntryFields):
     base_rev: int | None = None        # revision the editor opened (published entries)
     major: bool = False
     note: str = Field("", max_length=300)
     publish: bool = False              # draft → published (rev 1)
+    announce: IntelAnnounceIn | None = None   # slice 6: the 📣 / Push choices
 
 
 class IntelPeopleIn(BaseModel):
@@ -17749,6 +17774,7 @@ def _intel_entry_view(e: dict, user: dict) -> dict:
         "is_reviewer": intel_reviewer(user),
         # Would this member's publish / major revision go to review?
         "review_gate": _intel_gated(e, user),
+        "discord": _intel_discord_view(e) if e["status"] == "published" else None,
     })
     uid = str(user["id"])
     pend = db.intel_pending(e["id"]) if e["status"] == "published" else None
@@ -17818,6 +17844,215 @@ def _intel_thread_view(e: dict, user: dict) -> list[dict]:
                     "md": r.get("body_md") or "", "mine": mine,
                     "can_delete": not r["deleted_at"] and (mine or admin)})
     return out
+
+
+# ---- Intelligence → Discord (#50 slice 6, docs/intelligence.md "Discord") ----
+# The author decides whether an entry is announced (the 📣 box); a MAJOR
+# revision always posts; a minor one only when the author ticks Push. The post
+# is a pointer to the entry, never its body. Channels: `intel` is the default,
+# per-kind overrides win when set, and RESTRICTED entries post only a
+# placeholder to `intel_restricted` (unset = nothing at all). A forum-channel
+# webhook opens one thread per entry and later revisions post into it.
+_INTEL_KIND_CHANNEL = {"report": "intel_report", "procedure": "intel_sop",
+                       "tactic": "intel_sop", "rfi": "intel_rfi"}
+INTEL_CHANNEL_LABELS = {"intel": "Intelligence", "intel_report": "Intel · reports",
+                        "intel_sop": "Intel · procedures + tactics", "intel_rfi": "Intel · questions",
+                        "intel_restricted": "Intel · restricted"}
+_INTEL_ICON = {"procedure": "📘", "tactic": "♟️", "report": "📡", "dossier": "🗂️",
+               "rfi": "❓", "debrief": "📝"}
+_INTEL_KIND_WORD = {"procedure": "Procedure", "tactic": "Tactic", "report": "Report",
+                    "dossier": "Dossier", "rfi": "Question", "debrief": "Debrief"}
+INTEL_TEASER_MAX = 280
+INTEL_NUDGE_AFTER_S = 24 * 3600
+_INTEL_NUDGE_WINDOW_S = 7 * 86400     # older questions are never nudged (a deploy mustn't flood)
+_IMG_MD_RE = re.compile(r"!\[[^\]]*\]\((https://[^)\s]+)\)")
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _intel_channel(cat: str) -> str | None:
+    """Where a post for channel `cat` really goes: its own webhook, else the
+    default `intel` one. RESTRICTED never falls back."""
+    if notify.is_configured(cat):
+        return cat
+    if cat != "intel_restricted" and notify.is_configured("intel"):
+        return "intel"
+    return None
+
+
+def _intel_kind_channel(kind: str) -> str | None:
+    return _intel_channel(_INTEL_KIND_CHANNEL.get(kind, "intel"))
+
+
+def intel_channel_options() -> list[dict]:
+    """The intel channels an author can pick (the configured ones)."""
+    return [{"key": c, "label": INTEL_CHANNEL_LABELS[c]}
+            for c in ("intel", "intel_report", "intel_sop", "intel_rfi") if notify.is_configured(c)]
+
+
+def intel_ping_options() -> list[dict]:
+    """Discord roles an author may ping: the admin's event role-alias map,
+    flattened. It's the ONLY source of allowed_mentions.roles (CLAUDE.md)."""
+    out, seen = [], set()
+    for aliases in role_aliases().values():
+        for a in aliases:
+            if a["id"] not in seen:
+                seen.add(a["id"])
+                out.append({"id": a["id"], "label": a.get("label") or a["id"]})
+    return sorted(out, key=lambda a: a["label"].lower())
+
+
+def _intel_clean_announce(a: "IntelAnnounceIn | None") -> dict:
+    """Validate the 📣 choices against what's configured NOW: an unknown
+    channel falls back to the kind's own, an unknown ping is dropped."""
+    if not a:
+        return {"on": False}
+    chans = {c["key"] for c in intel_channel_options()}
+    pings = {r["id"] for r in intel_ping_options()}
+    return {"on": bool(a.on), "channel": a.channel if a.channel in chans else None,
+            "ping": a.ping if a.ping in pings else None, "teaser": a.teaser.strip()[:INTEL_TEASER_MAX]}
+
+
+def _intel_teaser(e: dict, written: str = "") -> str:
+    if written.strip():
+        return written.strip()
+    if (e.get("summary") or "").strip():
+        return e["summary"].strip()
+    text = " ".join(html.unescape(_TAG_RE.sub(" ", e.get("body_html") or "")).split())
+    return _clip(text, INTEL_TEASER_MAX) if text else ""
+
+
+def _intel_lead_image(e: dict) -> str | None:
+    """The first linked image from an allowed host. Discord fetches it itself,
+    so it shows there even when the in-app preview is off."""
+    for m in _IMG_MD_RE.finditer(e.get("body_md") or ""):
+        if urllib.parse.urlsplit(m.group(1)).hostname in IMAGE_PREVIEW_HOSTS:
+            return m.group(1)
+    return None
+
+
+def _intel_post_fields(e: dict) -> list[dict]:
+    """A report's SALUTE lines + grade, or a question's place, as embed fields."""
+    h = json.loads(e.get("header") or "{}") if isinstance(e.get("header"), str) else (e.get("header") or {})
+    rows = []
+    if e["kind"] == "report":
+        where = " · ".join(x for x in (h.get("location_label"), h.get("location")) if x)
+        grade = f"{e.get('grade_rel') or '–'}{e.get('grade_cred') or ''}" if e.get("grade_rel") or e.get("grade_cred") else ""
+        rows = [("Where", where), ("When", _discord_ts(h["time"], "f") if h.get("time") else ""),
+                ("Size", h.get("size")), ("Activity", h.get("activity")), ("Unit", h.get("unit") or h.get("unit_label")),
+                ("Equipment", h.get("equipment")), ("Grade", grade),
+                ("Valid until", _discord_ts(e["valid_until"], "R") if e.get("valid_until") else "")]
+        return [{"name": n, "value": v if n in ("When", "Valid until", "Grade") else _md_plain(v)}
+                for n, v in rows if v]
+    if e["kind"] == "rfi" and h.get("location_label"):
+        return [{"name": "Where", "value": _md_plain(h["location_label"])}]
+    return []
+
+
+async def _intel_post(entry_id: int, what: str, ann: dict | None = None,
+                      note: str = "", editor: str | None = None) -> None:
+    """Announce an entry: `publish` (first publish / approval), `revise` (a
+    major revision, always), `push` (a minor edit the author chose to push).
+    Never twice for the same revision. Never raises (a notify task)."""
+    e = db.intel_get_entry(entry_id)
+    if not e or e["status"] != "published":
+        return
+    ann, rev, url = ann or {}, e["rev"], _app_url(f"#/intel/e/{entry_id}")
+    posts = db.intel_discord_posts(entry_id)
+    if any(p["rev"] == rev and p.get("what") != "nudge" for p in posts):
+        return
+    if e["visibility"] == "restricted":
+        cat = _intel_channel("intel_restricted")
+        if not cat:
+            return
+        embed = _announcement("intel_restricted", {"verb": "published" if what == "publish" else "revised"},
+                              url=url, color=_EMBED_BAD)
+        r = await notify.send(cat, "", embed=embed, info=True, thread_name="A restricted entry")
+    else:
+        thread = None
+        if what == "publish":
+            cat = ann.get("channel") or _intel_kind_channel(e["kind"])
+        else:
+            # Into the entry's thread if it has one, else its last channel,
+            # else the kind's channel (a push may name another channel).
+            last = next((p for p in posts if p.get("what") != "nudge" and p["channel_key"] != "intel_restricted"
+                         and notify.is_configured(p["channel_key"])), None)
+            cat = ann.get("channel") or (last["channel_key"] if last else None) or _intel_kind_channel(e["kind"])
+            if last and last["channel_key"] == cat:
+                thread = last.get("thread_id")
+        if not cat or not notify.is_configured(cat):
+            return
+        kind_word = _INTEL_KIND_WORD.get(e["kind"], e["kind"].title())
+        if what == "publish":
+            embed = _announcement("intel_published", {
+                "icon": _INTEL_ICON.get(e["kind"], "📘"), "kind_label": kind_word, "title": e["title"],
+                "teaser": _intel_teaser(e, ann.get("teaser", "")), "system": e.get("system") or "",
+                "author": e.get("author_name") or _resolve_member_name(e["author_id"], None) or ""},
+                url=url, color=_EMBED_WARN if e["kind"] == "report" else _EMBED_INFO,
+                fields=_intel_post_fields(e) or None)
+        else:
+            embed = _announcement("intel_revised", {
+                "title": e["title"], "note": note or ("Updated" if what == "push" else ""),
+                "teaser": (ann.get("teaser") or "").strip(), "kind_label": kind_word, "rev": str(rev),
+                "patch": e.get("patch") or "", "editor": editor or ""}, url=url)
+        kw = _announce(embed)
+        img = _intel_lead_image(e) if what == "publish" else None
+        if img:
+            kw["embed"] = {**kw["embed"], "image": {"url": img}}
+        ping = ann.get("ping")
+        r = await notify.send(cat, notify.role_pings([ping]) if ping else "", roles=[ping] if ping else None,
+                              info=True, thread_id=thread, thread_name=e["title"], **kw)
+    if r:
+        info = r if isinstance(r, dict) else {}
+        db.intel_record_discord_post(entry_id, rev, cat, what, info.get("message_id"),
+                                     info.get("thread_id"), _now_iso())
+
+
+async def _intel_rfi_nudges(now: datetime | None = None) -> None:
+    """One automatic nudge for a question nobody answered in 24 h, never
+    repeated. Claimed (recorded) before sending, so overlapping ticks or a
+    restart can't post it twice."""
+    cat = _intel_channel("intel_rfi")
+    if not cat:
+        return
+    now = now or datetime.now(timezone.utc)
+    for e in db.intel_rfis_to_nudge((now - timedelta(seconds=INTEL_NUDGE_AFTER_S)).isoformat(),
+                                    (now - timedelta(seconds=_INTEL_NUDGE_WINDOW_S)).isoformat()):
+        db.intel_record_discord_post(e["id"], None, cat, "nudge", None, None, now.isoformat())
+        thread = next((p.get("thread_id") for p in db.intel_discord_posts(e["id"])
+                       if p["channel_key"] == cat and p.get("thread_id")), None)
+        embed = _announcement("intel_rfi_nudge", {
+            "title": e["title"], "teaser": (e.get("summary") or "").strip(),
+            "author": e.get("author_name") or "", "asked": _discord_ts(e["published_at"], "R")},
+            url=_app_url(f"#/intel/e/{e['id']}"), color=_EMBED_WARN)
+        await notify.send(cat, "", thread_id=thread, thread_name=e["title"], **_announce(embed))
+
+
+def _intel_discord_view(e: dict) -> dict | None:
+    """What the entry page says about Discord: where it was announced, and the
+    forum thread to discuss it in (restricted entries: in-app only)."""
+    posts = [p for p in db.intel_discord_posts(e["id"]) if p.get("what") != "nudge"]
+    if not posts:
+        return None
+    thread = None
+    if e.get("visibility") != "restricted":
+        t = next((p for p in posts if p.get("thread_id")), None)
+        guild = notify.webhook_guild(t["channel_key"]) if t else None
+        if t and guild:
+            thread = f"https://discord.com/channels/{guild}/{t['thread_id']}"
+    return {"posts": [{"what": p.get("what") or "publish", "channel": INTEL_CHANNEL_LABELS.get(p["channel_key"], p["channel_key"]),
+                       "rev": p["rev"], "at": p["posted_at"]} for p in posts[:5]],
+            "thread_url": thread}
+
+
+@app.get("/api/intel/announce-options")
+def intel_announce_options(user: dict = Depends(require_session)):
+    """The editor's 📣 panel: configured intel channels, each kind's default,
+    the pingable roles, and whether RESTRICTED entries post anything."""
+    return {"channels": intel_channel_options(),
+            "defaults": {k: _intel_kind_channel(k) for k in INTEL_WRITABLE_KINDS},
+            "pings": intel_ping_options(),
+            "restricted": bool(_intel_channel("intel_restricted")),
+            "teaser_max": INTEL_TEASER_MAX}
 
 
 class IntelCommentIn(BaseModel):
@@ -18375,7 +18610,8 @@ def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_se
     if e["status"] == "draft" and gated:
         # Submit for review: the draft is frozen as it stands and goes to the
         # queue; a reviewer's Approve writes rev 1.
-        db.intel_update_draft(entry_id, {**fields, "status": "in_review", "submitted_at": now}, tags, refs)
+        db.intel_update_draft(entry_id, {**fields, "status": "in_review", "submitted_at": now,
+                                         "announce": json.dumps(_intel_clean_announce(body.announce))}, tags, refs)
         return _intel_entry_view(db.intel_get_entry(entry_id), user)
     first = e["status"] == "draft"
     major = first or body.major
@@ -18402,7 +18638,8 @@ def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_se
             "header": fields.get("header", e.get("header")), "editor_id": uid,
             "editor_name": _resolve_member_name(uid, None),
             "note": note, "created_at": now, "base_rev": e["rev"],
-            "fields": {"activity": fields["activity"], "system": fields["system"], "tags": tags}})
+            "fields": {"activity": fields["activity"], "system": fields["system"], "tags": tags,
+                       "announce": _intel_clean_announce(body.announce)}})
         return _intel_entry_view(db.intel_get_entry(entry_id), user)
     if major and not first and e.get("doctrine_at") and not intel_reviewer(user):
         # Doctrine is a reviewer's judgement of THIS text; an unreviewed major
@@ -18424,6 +18661,16 @@ def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_se
             "message": f"Someone saved rev {c.current_rev} since you opened this. "
                        "Review their changes, then save again.",
             "current_rev": c.current_rev})
+    # Discord (slice 6): first publish = the author's 📣 choice; a major
+    # revision always posts; a minor edit only when the author pushes it.
+    ann = _intel_clean_announce(body.announce)
+    if first:
+        if ann["on"]:
+            _notify_bg(_intel_post(entry_id, "publish", ann))
+    elif major:
+        _notify_bg(_intel_post(entry_id, "revise", ann, note, _resolve_member_name(uid, None)))
+    elif ann["on"]:
+        _notify_bg(_intel_post(entry_id, "push", ann, note, _resolve_member_name(uid, None)))
     return _intel_entry_view(db.intel_get_entry(entry_id), user)
 
 
@@ -18652,6 +18899,14 @@ def intel_approve(entry_id: int, user: dict = Depends(require_session)):
             "body_html": r["html"]}, e["tags"], _intel_link_rows(r["refs"], e.get("header")), {
             "editor_id": e["author_id"], "editor_name": e.get("author_name"),
             "note": "First published", "major": True, "created_at": now, **approver})
+        # The author's 📣 choice from submission goes out now, at approval.
+        try:
+            ann = json.loads(e.get("announce") or "{}")
+        except ValueError:
+            ann = {}
+        db.intel_set_fields(entry_id, {"announce": None})
+        if ann.get("on"):
+            _notify_bg(_intel_post(entry_id, "publish", ann))
         return _intel_entry_view(db.intel_get_entry(entry_id), user)
     pend = db.intel_pending(entry_id) if e["status"] == "published" else None
     if not pend:
@@ -18671,6 +18926,8 @@ def intel_approve(entry_id: int, user: dict = Depends(require_session)):
         "editor_id": pend["editor_id"], "editor_name": pend.get("editor_name"),
         "note": pend.get("note"), "major": True, "created_at": now, **approver})
     db.intel_set_revision_status(pend["id"], "approved")
+    _notify_bg(_intel_post(entry_id, "revise", f.get("announce") or {}, pend.get("note") or "",
+                           pend.get("editor_name")))      # a major revision always posts
     return _intel_entry_view(db.intel_get_entry(entry_id), user)
 
 

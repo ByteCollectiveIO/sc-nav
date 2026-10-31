@@ -327,4 +327,48 @@ TEMPLATES: dict[str, Template] = {
         vars={"heading": Var("Op record / Op record updated", "Op record"),
               "name": Var("Op name", "Rockbreaker", md=True)},
         color=0x4FC3F7, color_note="Amber when an updated record is posted."),
+    # Intelligence (#50 slice 6). The post is a pointer to the entry, never
+    # its body: the app is the record. A report's SALUTE lines ride as embed
+    # fields, built in code.
+    "intel_published": Template(
+        "intel", "Intelligence entry published",
+        title="{icon} {kind_label}: {title}",
+        description=("{teaser}\n\n"
+                     "{system} · by {author}"),
+        vars={"icon": Var("Kind glyph", "📘"),
+              "kind_label": Var("Procedure / Tactic / Report / Dossier / Question", "Procedure"),
+              "title": Var("Entry title", "Hull-C escort formation", md=True),
+              "teaser": Var("Teaser (the author's, or the summary)", "Two escorts, one scout ahead.", md=True),
+              "system": Var("System", "Pyro"),
+              "author": Var("Written by", "Ace", md=True)},
+        color=0x4FC3F7, color_note="Amber for a report."),
+    "intel_revised": Template(
+        "intel", "Intelligence entry revised",
+        title="✏️ Revised: {title}",
+        description=("{note}\n\n"
+                     "{teaser}\n\n"
+                     "{kind_label} · rev {rev} · game {patch} · by {editor}"),
+        vars={"title": Var("Entry title", "Hull-C escort formation", md=True),
+              "note": Var("What changed", "Escorts now break at QT exit", md=True),
+              "teaser": Var("Teaser, when the author wrote one", "", md=True),
+              "kind_label": Var("Procedure / Tactic / …", "Procedure"),
+              "rev": Var("Revision number", "4"),
+              "patch": Var("Game patch", "4.3"),
+              "editor": Var("Revised by", "Ace", md=True)}),
+    "intel_rfi_nudge": Template(
+        "intel_rfi", "Unanswered question (after 24 h)",
+        title="❓ Still open: {title}",
+        description=("{teaser}\n\n"
+                     "Asked by {author} {asked}. Nobody has answered yet. If you know, answer it in the app."),
+        vars={"title": Var("The question", "Anyone mapped the caves at Aberdeen?", md=True),
+              "teaser": Var("The question's summary", "", md=True),
+              "author": Var("Asked by", "Ace", md=True),
+              "asked": Var("When, relative ('2 days ago')", "<t:1792726500:R>")},
+        color=0xFFB74D),
+    "intel_restricted": Template(
+        "intel_restricted", "Restricted entry (placeholder)",
+        title="📕 A restricted entry was {verb}",
+        description="Only members with Intelligence clearance can open it.",
+        vars={"verb": Var("published / revised", "published")},
+        color=0xEF5350),
 }

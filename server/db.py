@@ -1162,6 +1162,11 @@ def init(db_path) -> None:
         # "new since you looked" mark on the feed.
         _ensure_column("intel_links", "label", "TEXT")
         _ensure_column("members", "intel_feed_seen", "TEXT")
+        # Slice 6 (Discord publishing): what each recorded post was (publish |
+        # revise | push | nudge), and a submission's 📣 choices, held until a
+        # reviewer approves it (the post goes out at approval).
+        _ensure_column("intel_discord_posts", "what", "TEXT")
+        _ensure_column("intel_entries", "announce", "TEXT")
         _init_intel_search()
 
 
@@ -5280,7 +5285,7 @@ _INTEL_ENTRY_COLS = ("kind", "title", "slug", "summary", "body_md", "body_html",
                      "header", "created_at", "updated_at", "published_at", "revised_at",
                      "submitted_at", "doctrine_at", "doctrine_by",
                      "grade_rel", "grade_cred", "valid_until", "subject_kind", "subject_ref",
-                     "accepted_comment_id")
+                     "accepted_comment_id", "announce")
 
 
 def _intel_read(fn):
@@ -5539,6 +5544,37 @@ def intel_thread(entry_id: int) -> list[dict]:
     return [dict(r) for r in _conn.execute(
         "SELECT * FROM intel_comments WHERE entry_id=? AND kind IN (?,?) ORDER BY created_at, id",
         (entry_id,) + INTEL_THREAD_KINDS)]
+
+
+# ---- Discord posts (#50 slice 6) ----
+def intel_record_discord_post(entry_id: int, rev: int | None, category: str, what: str,
+                              message_id: str | None, thread_id: str | None, at: str) -> None:
+    with _lock, _conn:
+        _conn.execute("INSERT INTO intel_discord_posts (entry_id, rev, channel_key, message_id, "
+                      "thread_id, posted_at, what) VALUES (?,?,?,?,?,?,?)",
+                      (entry_id, rev, category, message_id, thread_id, at, what))
+
+
+@_intel_read
+def intel_discord_posts(entry_id: int) -> list[dict]:
+    """An entry's Discord posts, newest first."""
+    return [dict(r) for r in _conn.execute(
+        "SELECT * FROM intel_discord_posts WHERE entry_id=? ORDER BY posted_at DESC, rowid DESC",
+        (entry_id,))]
+
+
+@_intel_read
+def intel_rfis_to_nudge(published_before: str, published_after: str) -> list[dict]:
+    """Published, org-visible questions asked in the window, with no live
+    answer and never nudged. The window's far edge keeps a deploy from nudging
+    every old question at once."""
+    return [dict(r) for r in _conn.execute(
+        "SELECT * FROM intel_entries e WHERE e.kind='rfi' AND e.status='published' "
+        "AND e.visibility='org' AND e.published_at <= ? AND e.published_at > ? "
+        "AND NOT EXISTS (SELECT 1 FROM intel_comments c WHERE c.entry_id=e.id "
+        "  AND c.kind='answer' AND c.deleted_at IS NULL) "
+        "AND NOT EXISTS (SELECT 1 FROM intel_discord_posts d WHERE d.entry_id=e.id AND d.what='nudge')",
+        (published_before, published_after))]
 
 
 @_intel_read

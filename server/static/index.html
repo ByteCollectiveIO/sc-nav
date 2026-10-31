@@ -992,6 +992,21 @@
     .ix-dx-seen { grid-template-columns: minmax(0, 1fr) 60px 26px; }
     .ix-dos-grid { grid-template-columns: minmax(0, 1fr); }
   }
+  /* ---- Intelligence slice 6: the 📣 Discord panel + where it was posted ---- */
+  .ix-ann { display: grid; gap: 10px; margin: 2px 0 14px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+  .ix-ann-on { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); cursor: pointer; min-height: 28px; }
+  .ix-ann-on input { width: 16px; height: 16px; accent-color: var(--accent); margin: 0; }
+  .ix-ann-note { display: flex; gap: 6px; align-items: baseline; margin: 0; font-size: 12px; line-height: 1.5; color: var(--dim); }
+  .ix-ann-note .ix-ico { flex: none; width: 13px; height: 13px; position: relative; top: 2px; }
+  .ix-ann-body { display: grid; }
+  .ix-ann-body .ix-fld:last-child { margin-bottom: 0; }
+  .ix-ann-body[hidden] { display: none; }
+  .ix-ann .ix-fld i { font-style: normal; float: right; letter-spacing: 0; }
+  .ix-dc { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; font-size: 12px; }
+  .ix-dc li { display: grid; gap: 1px; }
+  .ix-dc b { color: var(--text); font-weight: 600; }
+  .ix-dc small { color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .ix-dc-go { margin-top: 12px; width: 100%; justify-content: center; }
   /* ---- Intelligence slice 5: discussion (comments, RFI answers) ---- */
   .ix-tag.ok { color: var(--good); border-color: var(--good); display: inline-flex; align-items: center; gap: 3px; }
   .ix-tag.ok .ix-ico { width: 11px; height: 11px; }
@@ -5198,7 +5213,8 @@
             Developer Mode in Discord (User Settings › Advanced), then right-click the role under
             Server Settings › Roles › <b>Copy Role ID</b>. Each role must have
             <b>Allow anyone to @mention this role</b> turned on in Discord, or the post shows the
-            mention without pinging anyone.
+            mention without pinging anyone. The same roles are the ones an author can ping when
+            announcing an Intelligence entry.
           </div>
           <div class="ra-add">
             <select id="ra-role" class="ti" aria-label="Event role"></select>
@@ -28829,6 +28845,7 @@ function intelDossierView(box, e) {
         (!sv.ores.length && !(sv.harvestables || []).length ? `<p class="ix-dx-none" style="padding:0">Nothing logged here yet.</p>` : "") + `</div>`;
     }
   }
+  rail += intelDiscordPanel(e);
   rail += `<div class="panel"><h2>DETAILS</h2><dl class="ix-dl"><dt>KIND</dt><dd>${isOrg ? "Org dossier" : "Place dossier"}</dd>` +
     (e.system ? `<dt>SYSTEM</dt><dd>${esc(e.system)}</dd>` : "") +
     `<dt>STARTED</dt><dd>${esc(e.published_at ? new Date(e.published_at).toLocaleDateString() : "")} by ${esc(e.author_name || "?")}</dd>` +
@@ -28862,6 +28879,16 @@ function intelDossierView(box, e) {
     catch (err) { fail(err); }
   };
   intelBindThread(box, e, () => intelEntryView(box));
+}
+
+// Where an entry was announced (#50 slice 6), and its forum thread.
+function intelDiscordPanel(e) {
+  const d = e.discord; if (!d || !d.posts.length) return "";
+  const verb = { publish: "Announced", revise: "Revision posted", push: "Update pushed" };
+  return `<div class="panel"><h2>DISCORD</h2><ul class="ix-dc">` +
+    d.posts.map(x => `<li><span>${verb[x.what] || "Posted"} in <b>${esc(x.channel)}</b></span>` +
+      `<small>${x.rev ? `rev ${x.rev} · ` : ""}${esc(intelWhen(x.at))}</small></li>`).join("") + `</ul>` +
+    (d.thread_url ? `<a class="ix-btn ix-dc-go" href="${esc(d.thread_url)}" target="_blank" rel="noopener">${intelIco("comment")}Discuss in Discord</a>` : "") + `</div>`;
 }
 
 // ---- DISCUSSION (#50 slice 5): comments under every entry, RFI answers ----
@@ -29026,7 +29053,7 @@ async function intelRfiView(box, e) {
     `</div>${actions}</div>` +
     (e.body_md && e.body_md.trim() ? `<div class="ix-prose" id="ix-prose">${e.body_html}</div>` : `<div id="ix-prose"></div>`) +
     intelThreadHtml(e, { promote }) + `</article>` +
-    `<aside class="ix-rail"><div class="panel" id="ix-loc-p" hidden></div>${linked}` +
+    `<aside class="ix-rail"><div class="panel" id="ix-loc-p" hidden></div>${linked}${intelDiscordPanel(e)}` +
     `<div class="panel"><h2>HOW IT WORKS</h2><p class="muted" style="font-size:12px;line-height:1.5;margin:0">` +
     `Anyone can answer. ${esc(e.author_name || "The asker")} (or an admin) marks the answer that answered it. ` +
     `An accepted answer can be promoted into a procedure${h.location_ref ? " or onto the place's dossier" : ""}, crediting both of you.` +
@@ -29295,7 +29322,7 @@ async function intelEntryView(box) {
     (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") +
     `<div class="ix-by">${by}</div>${actions}</div>${salute}` +
     `<div class="ix-prose" id="ix-prose">${e.body_html || `<p class="muted">This entry has no body yet.</p>`}</div>${updates}${e.thread ? intelThreadHtml(e) : ""}</article>` +
-    `<aside class="ix-rail">${repRail}<div class="panel" id="ix-toc-p" hidden><h2>ON THIS PAGE</h2><ul class="ix-toc" id="ix-toc"></ul></div>${linked}` +
+    `<aside class="ix-rail">${repRail}<div class="panel" id="ix-toc-p" hidden><h2>ON THIS PAGE</h2><ul class="ix-toc" id="ix-toc"></ul></div>${linked}${intelDiscordPanel(e)}` +
     `<div class="panel"><h2>DETAILS</h2><dl class="ix-dl">` +
     `<dt>KIND</dt><dd>${esc(INTEL_KIND[e.kind])}</dd>` +
     (isReport && !e.activity ? "" : `<dt>ACTIVITY</dt><dd>${esc(e.activity || "General")}</dd>`) +
@@ -29946,6 +29973,7 @@ async function intelEditor(box) {
   // A report from a dossier (?loc= / ?unit=), or a dossier started from a
   // place (?subject=, the navigator's "Start dossier") or as an org (?org=1).
   const promo = intelRoute.from ? await intelPromoteSource(intelRoute.from) : null;
+  try { intelAnnounceOpts = await intelApi("/api/intel/announce-options"); } catch { intelAnnounceOpts = null; }
   if (intelCurSec !== (isNew ? "new" : "edit")) return;
   if (isNew && !pre && kind === "rfi" && (intelRoute.loc || intelRoute.about)) {
     let refs = {};
@@ -29987,6 +30015,8 @@ async function intelEditor(box) {
     rev: e ? e.rev : 0, entry: e, major: false, timer: null, saving: false, dirty: false,
     templated: isNew && (!pre || pre.body === intelTemplateFor(kind, pre.dossier && pre.dossier.subject_kind)),
     visibility: e ? e.visibility : "org", locRef: null, unitRef: null, validUntil: null, warningId: null, dos: null,
+    // 📣: on by default for a first publish, off (Push) for an edit.
+    ann: { on: !(e && e.status === "published"), channel: null, ping: null, teaser: "" },
     // The marking control shows to cleared members, and on an entry that's
     // already RESTRICTED (whoever can open it is cleared anyway).
     canMark: intelAccess().cleared || (e && e.visibility === "restricted") };
@@ -30298,6 +30328,53 @@ async function intelEdAutosave(leaving) {
     }
   } finally { ed.saving = false; }
 }
+// ---- 📣 Discord (#50 slice 6) ----
+// The author decides: 📣 on first publish (on by default when a channel is
+// set), a major revision always posts, a minor one only with Push. Options
+// come from /api/intel/announce-options (configured channels + pingable roles).
+let intelAnnounceOpts = null;
+function intelEdAnnounceHtml(mode) {
+  const o = intelAnnounceOpts, ed = intelEd, a = ed.ann;
+  if (!o || (!o.channels.length && !o.restricted)) return "";
+  const later = intelEdGated() && (mode === "publish" || mode === "major") ? " when it's approved" : "";
+  if (ed.visibility === "restricted") {
+    if (!o.restricted) return `<div class="ix-ann"><p class="ix-ann-note">${intelIco("alert", "ix-ico sm")}RESTRICTED: nothing is posted to Discord.</p></div>`;
+    const note = `<p class="ix-ann-note">RESTRICTED: Discord gets only “a restricted entry was ${mode === "publish" ? "published" : "revised"}” and a link, in ${esc(INTEL_CHANNEL_LABEL.intel_restricted)}. No title or text.</p>`;
+    if (mode === "major") return `<div class="ix-ann">${note}</div>`;
+    return `<div class="ix-ann"><label class="ix-ann-on"><input type="checkbox" id="ix-ann-on"${a.on ? " checked" : ""}>` +
+      `${mode === "publish" ? `Post a placeholder to Discord${later}` : "Push a placeholder to Discord"}</label>${note}</div>`;
+  }
+  if (!o.channels.length) return "";
+  const def = o.defaults[ed.kind];
+  const chan = a.channel || def;
+  const chanSel = mode === "major" ? "" : `<label class="ix-fld"><span>CHANNEL</span><select class="ti" id="ix-ann-ch">` +
+    o.channels.map(c => `<option value="${esc(c.key)}"${c.key === chan ? " selected" : ""}>${esc(c.label)}${c.key === def ? " (this kind's)" : ""}</option>`).join("") +
+    `</select></label>`;
+  const pingSel = `<label class="ix-fld"><span>PING</span><select class="ti" id="ix-ann-ping"><option value="">Nobody</option>` +
+    o.pings.map(r => `<option value="${esc(r.id)}"${r.id === a.ping ? " selected" : ""}>@${esc(r.label)}</option>`).join("") + `</select>` +
+    (o.pings.length ? "" : `<small>An admin maps Discord roles in Settings › Discord to make them pingable.</small>`) + `</label>`;
+  const teaser = `<label class="ix-fld"><span>TEASER · optional <i id="ix-ann-n"></i></span><input class="ti" id="ix-ann-t" maxlength="${o.teaser_max}" ` +
+    `autocomplete="off" placeholder="${mode === "major" ? "Shows under what changed" : "Defaults to the summary"}" value="${esc(a.teaser)}"></label>`;
+  if (mode === "major") {
+    const where = ed.entry && ed.entry.discord ? (ed.entry.discord.thread_url ? "into its Discord thread" : `to ${esc(ed.entry.discord.posts[0].channel)}`) : `to ${esc((o.channels.find(c => c.key === def) || {}).label || "Discord")}`;
+    return `<div class="ix-ann"><p class="ix-ann-note">A major revision always posts “Revised: …” ${where}${later}.</p>` +
+      `<div class="ix-ann-body">${pingSel}${teaser}</div></div>`;
+  }
+  const label = mode === "publish" ? `Announce in Discord${later}` : "Push a notification to Discord";
+  return `<div class="ix-ann"><label class="ix-ann-on"><input type="checkbox" id="ix-ann-on"${a.on ? " checked" : ""}>${label}</label>` +
+    `<div class="ix-ann-body" id="ix-ann-body"${a.on ? "" : " hidden"}>${chanSel}${pingSel}${teaser}</div></div>`;
+}
+function intelEdBindAnnounce() {
+  const a = intelEd && intelEd.ann; if (!a) return;
+  const cnt = () => { if ($("ix-ann-n") && $("ix-ann-t")) $("ix-ann-n").textContent = `${$("ix-ann-t").value.length} / ${intelAnnounceOpts.teaser_max}`; };
+  if ($("ix-ann-on")) $("ix-ann-on").onchange = (ev) => { a.on = ev.target.checked; if ($("ix-ann-body")) $("ix-ann-body").hidden = !a.on; };
+  if ($("ix-ann-ch")) $("ix-ann-ch").onchange = (ev) => { a.channel = ev.target.value; };
+  if ($("ix-ann-ping")) $("ix-ann-ping").onchange = (ev) => { a.ping = ev.target.value || null; };
+  if ($("ix-ann-t")) $("ix-ann-t").oninput = (ev) => { a.teaser = ev.target.value; cnt(); };
+  cnt();
+}
+const INTEL_CHANNEL_LABEL = { intel: "Intelligence", intel_report: "Intel · reports", intel_sop: "Intel · procedures + tactics",
+  intel_rfi: "Intel · questions", intel_restricted: "Intel · restricted" };
 function intelEdRenderSave(keepNote) {
   const p = $("ix-save-p"); if (!p || !intelEd) return;
   const ed = intelEd, published = ed.status === "published";
@@ -30324,10 +30401,12 @@ function intelEdRenderSave(keepNote) {
         : ed.kind === "dossier" ? `Only you can see a draft. Once it's published any member can edit it, and every change is kept.`
         : ed.kind === "rfi" ? `Only you can see a draft. Posting puts the question in RFI and the Feed. Anyone can answer; you mark the answer that did it.`
         : `Only you can see a draft. Publishing puts it in the Library, the Feed and search, stamped with the game patch.`) + `</p>` +
+      intelEdAnnounceHtml("publish") +
       `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-publish">${gated ? "Submit for review" : isReport ? "Publish report" : ed.kind === "rfi" ? "Post question" : "Publish"}</button>` +
       (ed.id ? `<button type="button" class="ix-btn" id="ix-del">Delete draft</button>` : "") + `</div>` +
       `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
     bindMarking();
+    intelEdBindAnnounce();
     $("ix-publish").onclick = () => intelEdSave({ publish: true });
     if ($("ix-del")) $("ix-del").onclick = async () => {
       const ok = await confirmDialog("This draft and everything in it is deleted. It was never published, so there's no history to keep.",
@@ -30347,10 +30426,12 @@ function intelEdRenderSave(keepNote) {
       `<p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 12px">Fix typos and wrong details until ${esc(until)}. ` +
       `After that the report only takes updates, so the first thing people read stays the record.</p>` +
       `<label class="ix-fld"><span>WHAT YOU FIXED · optional</span><input class="ti" id="ix-note" maxlength="300" autocomplete="off" placeholder="e.g. Wrong ship count" value="${esc(noteVal)}"></label>` +
+      intelEdAnnounceHtml("minor") +
       `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-save">Save correction</button>` +
       `<a class="ix-btn" href="${intelHref(ed.entry)}">Cancel</a></div>` +
       `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
     bindMarking();
+    intelEdBindAnnounce();
     $("ix-save").onclick = () => intelEdSave({ note: $("ix-note").value, base_rev: ed.rev });
     return;
   }
@@ -30359,10 +30440,12 @@ function intelEdRenderSave(keepNote) {
     p.innerHTML = `<h2>EDIT THE QUESTION</h2>` + marking +
       `<p class="muted" style="font-size:12px;line-height:1.5;margin:0 0 12px">Reword it or add what you've learned. The answers stay where they are.</p>` +
       `<label class="ix-fld"><span>WHAT CHANGED · optional</span><input class="ti" id="ix-note" maxlength="300" autocomplete="off" placeholder="e.g. It's the north cave" value="${esc(noteVal)}"></label>` +
+      intelEdAnnounceHtml("minor") +
       `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-save">Save</button>` +
       `<a class="ix-btn" href="${intelHref(ed.entry)}">Cancel</a></div>` +
       `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
     bindMarking();
+    intelEdBindAnnounce();
     $("ix-save").onclick = () => intelEdSave({ note: $("ix-note").value, base_rev: ed.rev });
     return;
   }
@@ -30379,6 +30462,7 @@ function intelEdRenderSave(keepNote) {
     `<input class="ti" id="ix-note" maxlength="300" autocomplete="off" placeholder="${major ? (ed.kind === "dossier" ? "e.g. Hold 10 km on arrival, not 8" : "e.g. Escorts now break at QT exit") : "e.g. Fixed typos"}" value="${esc(noteVal)}"></label>` +
     (ed.kind === "dossier" && ed.dos && ed.dos.kind === "org" && ed.entry.dossier && $("ix-d-stance") && $("ix-d-stance").value !== ed.entry.dossier.stance
       ? `<small class="muted" style="display:block;margin:-6px 0 10px">History records it as “Stance: ${esc(ed.entry.dossier.stance)} → ${esc($("ix-d-stance").value)}”.</small>` : "") +
+    intelEdAnnounceHtml(major ? "major" : "minor") +
     `<div class="ix-save-acts"><button type="button" class="ix-primary" id="ix-save">${toReview ? "Submit for review" : `Save rev ${ed.rev + 1}`}</button>` +
     `<a class="ix-btn" href="${intelHref(ed.entry)}">Cancel</a></div>` +
     `<p class="ix-save-err" id="ix-save-err" role="alert"${errVal ? "" : " hidden"}>${esc(errVal)}</p>`;
@@ -30387,6 +30471,7 @@ function intelEdRenderSave(keepNote) {
   $("ix-note").oninput = sync;
   p.querySelectorAll("[data-major]").forEach(b => b.onclick = () => { ed.major = b.dataset.major === "1"; intelEdRenderSave(true); });
   bindMarking();
+  intelEdBindAnnounce();
   $("ix-save").onclick = () => intelEdSave({ major: ed.major, note: $("ix-note").value, base_rev: ed.rev });
 }
 function intelEdErr(msg) { const el = $("ix-save-err"); if (el) { el.textContent = msg; el.hidden = false; } }
@@ -30410,7 +30495,7 @@ async function intelEdSave(extra) {
       id = ed.id = d.id;
       try { localStorage.removeItem(`scIntelEdit:new:${ed.kind}`); } catch {}
     }
-    const d = await intelApi(`/api/intel/entries/${id}`, { method: "PUT", body: { ...vals, ...extra } });
+    const d = await intelApi(`/api/intel/entries/${id}`, { method: "PUT", body: { ...vals, ...extra, ...(intelAnnounceOpts ? { announce: ed.ann } : {}) } });
     try { localStorage.removeItem(`scIntelEdit:${id}`); } catch {}
     intelEd = null;
     const msg = d.status === "in_review" ? "Submitted for review. You'll see it in your drafts until it's approved."
@@ -31166,6 +31251,12 @@ const DISCORD_CATS = [
   { key: "pirates",     label: "Danger Board", desc: "new pirate danger warnings (opt-in per post)" },
   { key: "survey",      label: "Surveying",   desc: "new survey zones (opt-in per zone) + belt-survey milestones" },
   { key: "ops",         label: "Ops",         desc: "a closed op's record (and reopens). Unset = posts to Events" },
+  // Intelligence (#50 slice 6). A forum channel works too: each entry gets its own thread.
+  { key: "intel",       label: "Intelligence", desc: "entries the author announces, and every major revision. A forum channel opens a thread per entry" },
+  { key: "intel_report", label: "Intel · reports", desc: "reports only. Unset = Intelligence" },
+  { key: "intel_sop",   label: "Intel · procedures + tactics", desc: "procedures and tactics only. Unset = Intelligence" },
+  { key: "intel_rfi",   label: "Intel · questions", desc: "RFIs, plus one nudge when a question goes 24 h unanswered. Unset = Intelligence" },
+  { key: "intel_restricted", label: "Intel · restricted", desc: "RESTRICTED entries as a placeholder: no title or text, just a link. Unset = they post nothing" },
 ];
 const WEBHOOK_RE = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/api\/webhooks\//;
 const discSt = (key) => $("dwh-st-" + key);

@@ -181,6 +181,106 @@
    "text": ""
   }
  ],
+ "intel_published_report": [
+  {
+   "category": "intel_report",
+   "embed": {
+    "color": 16758605,
+    "description": "Camp on the Pyro side\n\nby Ace",
+    "fields": [
+     {
+      "inline": true,
+      "name": "Where",
+      "value": "Pyro Gateway · 8 km out"
+     },
+     {
+      "inline": true,
+      "name": "When",
+      "value": "<t:1790884800:f>"
+     },
+     {
+      "inline": true,
+      "name": "Size",
+      "value": "5 ships"
+     },
+     {
+      "inline": true,
+      "name": "Equipment",
+      "value": "3x Polaris"
+     },
+     {
+      "inline": true,
+      "name": "Grade",
+      "value": "B2"
+     }
+    ],
+    "title": "📡 Report: Gate camp",
+    "url": "https://nav.example.org/#/intel/e/2"
+   },
+   "files": [],
+   "mentions": null,
+   "text": ""
+  }
+ ],
+ "intel_published_sop": [
+  {
+   "category": "intel_sop",
+   "embed": {
+    "color": 5227511,
+    "description": "Escorts break at \\[QT\\](https://e.vil) exit\n\nPyro · by Ace",
+    "image": {
+     "url": "https://i.imgur.com/abc.png"
+    },
+    "title": "📘 Procedure: Hull-C *escort*",
+    "url": "https://nav.example.org/#/intel/e/1"
+   },
+   "files": [],
+   "mentions": null,
+   "text": "<@&123456789012345678>"
+  }
+ ],
+ "intel_restricted": [
+  {
+   "category": "intel_restricted",
+   "embed": {
+    "color": 15684432,
+    "description": "Only members with Intelligence clearance can open it.",
+    "title": "📕 A restricted entry was published",
+    "url": "https://nav.example.org/#/intel/e/3"
+   },
+   "files": [],
+   "mentions": null,
+   "text": ""
+  }
+ ],
+ "intel_revised": [
+  {
+   "category": "intel_sop",
+   "embed": {
+    "color": 5227511,
+    "description": "Escorts now break at QT exit\n\nProcedure · rev 2 · game 4.3 · by Nova",
+    "title": "✏️ Revised: Hull-C *escort*",
+    "url": "https://nav.example.org/#/intel/e/1"
+   },
+   "files": [],
+   "mentions": null,
+   "text": ""
+  }
+ ],
+ "intel_rfi_nudge": [
+  {
+   "category": "intel_rfi",
+   "embed": {
+    "color": 16758605,
+    "description": "Asked by Ace <t:1790812800:R>. Nobody has answered yet. If you know, answer it in the app.",
+    "title": "❓ Still open: Caves at *Aberdeen*?",
+    "url": "https://nav.example.org/#/intel/e/4"
+   },
+   "files": [],
+   "mentions": null,
+   "text": ""
+  }
+ ],
  "lfg_lfj_bare": [
   {
    "category": "lfg",

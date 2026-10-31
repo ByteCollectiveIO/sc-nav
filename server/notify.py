@@ -44,7 +44,13 @@ import db
 # A category is "on" exactly when it has a valid webhook, so there's no separate
 # enable toggle: clearing the URL turns that category off.
 CATEGORIES = ("events", "marketplace", "goals", "records", "lfg", "pirates",
-              "survey", "ops")
+              "survey", "ops",
+              # Intelligence (#50 slice 6): one default channel + per-kind
+              # overrides; a kind with no override posts to `intel`.
+              # `intel_restricted` is never a fallback: unset = RESTRICTED
+              # entries post nothing at all.
+              "intel", "intel_report", "intel_sop", "intel_rfi", "intel_restricted")
+_FORUM_PREFIX = "discord_forum_"              # + category: "1" once Discord said it's a forum
 _WEBHOOK_PREFIX = "discord_webhook_"          # + category, e.g. discord_webhook_events
 _LEGACY_WEBHOOK_KEY = "discord_webhook_url"   # v0.13.0's single shared webhook
 REMINDER_LEAD_KEY = "discord_reminder_lead_min"
@@ -131,7 +137,60 @@ def set_webhook(category: str, url: str) -> None:
     """Store (or clear, with '') a category's webhook URL. Caller validates."""
     if category in CATEGORIES:
         db.set_setting(_webhook_key(category), (url or "").strip())
+        db.set_setting(_FORUM_PREFIX + category, "")   # a new hook may be a plain channel
+        db.set_setting(_GUILD_PREFIX + category, "")
         _health.pop(category, None)   # new hook = clean delivery slate
+
+
+# --- forum channels ------------------------------------------------------------
+# A webhook into a Discord FORUM channel must name a thread (`thread_name`) or
+# post into one (`?thread_id=`); a plain post is refused with error 220001.
+# Nothing in the webhook URL says which kind of channel it is, so the first
+# refusal teaches us: the category is remembered as a forum and every later
+# post opens a thread. Changing the URL forgets it (set_webhook).
+_FORUM_CODE = 220001
+_GUILD_PREFIX = "discord_guild_"              # + category: the webhook's server id (thread links)
+
+
+def webhook_guild(category: str) -> str | None:
+    """The Discord server id behind a category's webhook, learned after its
+    first threaded post (a link to a thread needs it). None until then."""
+    g = (db.get_setting(_GUILD_PREFIX + category, "") or "").strip()
+    return g if g.isdigit() else None
+
+
+def _fetch_guild(url: str) -> str | None:
+    """GET the webhook object (a webhook may read itself) for its guild_id."""
+    req = urllib.request.Request(url, headers={"User-Agent": "sc-nav/1.0"}, method="GET")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        g = str(json.loads(resp.read() or b"{}").get("guild_id") or "")
+    return g if g.isdigit() else None
+
+
+def is_forum(category: str) -> bool:
+    return (db.get_setting(_FORUM_PREFIX + category, "") or "") == "1"
+
+
+def _forum_refusal(exc: urllib.error.HTTPError) -> bool:
+    """Is this Discord's "a forum post needs a thread" refusal? The error body
+    can be read once, so the answer is cached on the exception."""
+    if exc.code != 400:
+        return False
+    if not hasattr(exc, "_scnav_forum"):
+        try:
+            info = json.loads(exc.read().decode("utf-8") or "{}")
+        except Exception:
+            info = {}
+        exc._scnav_forum = (info.get("code") == _FORUM_CODE
+                            or "thread_name" in str(info.get("message", "")))
+    return exc._scnav_forum
+
+
+def _thread_name(payload: dict) -> str:
+    """A forum thread's name: the embed title, else the text, else ours."""
+    e = (payload.get("embeds") or [{}])[0]
+    name = (e.get("title") or payload.get("content") or "Org Navigator").strip()
+    return (name.splitlines()[0] if name else "Org Navigator")[:100]
 
 
 def reminder_lead_min() -> int:
@@ -330,7 +389,8 @@ async def send(category: str, text: str, *, mentions: list[str] | None = None,
                roles: list[str] | None = None,
                dedup_key: str | None = None, embed: dict | None = None,
                files: list[tuple[str, bytes, str]] | None = None,
-               wait: bool = False) -> bool | str:
+               wait: bool = False, thread_id: str | None = None,
+               thread_name: str | None = None, info: bool = False) -> bool | str | dict:
     """Post ``text`` to ``category``'s Discord webhook. Returns True on a
     best-effort success, False if that category has no webhook / deduped /
     failed. NEVER raises — a notification problem must not break the caller's
@@ -355,6 +415,13 @@ async def send(category: str, text: str, *, mentions: list[str] | None = None,
     ``wait=True`` asks Discord to reply with the created message, and on
     success returns its id (a non-empty str, still truthy) so the caller can
     EDIT it later (edit_message). Falls back to True when no id came back.
+
+    Forum channels (see is_forum): the post opens a thread named
+    ``thread_name`` (default: the embed title). ``thread_id`` posts INTO an
+    existing thread; if Discord refuses that (deleted / locked) the message
+    goes out as a fresh post instead. ``info=True`` returns
+    ``{"message_id", "thread_id"}`` (thread_id only when the post is in a
+    thread) instead of True/id, still False on failure.
     """
     url = webhook_url(category)
     if not is_valid_webhook_url(url):
@@ -376,25 +443,59 @@ async def send(category: str, text: str, *, mentions: list[str] | None = None,
         payload["embeds"] = [_cap_embed(embed)]
     if "content" not in payload and "embeds" not in payload:
         return False   # Discord rejects an empty message; nothing to say
-    if wait:
-        url = _webhook_endpoint(url, query="wait=true")
+    wait = wait or info
+    if is_forum(category) and not thread_id:
+        payload["thread_name"] = (thread_name or _thread_name(payload))[:100]
 
+    async def deliver(body: dict, tid: str | None):
+        q = "&".join(x for x in ("wait=true" if wait else "", f"thread_id={tid}" if tid else "") if x)
+        target = _webhook_endpoint(url, query=q) if q else url
+        if not files:
+            return await asyncio.to_thread(_post, target, body)
+        try:
+            resp = await asyncio.to_thread(_post, target, body, files)
+            _health.get(category, {}).pop("img_err", None)   # art got through again
+            return resp
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (400, 413) or _forum_refusal(exc):
+                raise
+            # Degrade, don't drop: the art was the problem, the message isn't.
+            resp = await asyncio.to_thread(_post, target, _strip_attachments(body))
+            _note_image_dropped(category, f"Discord refused the image (HTTP {exc.code}); "
+                                          "the message was sent without it")
+            return resp
+
+    tid = str(thread_id) if thread_id and str(thread_id).isdigit() else None
     try:
         await _pace(category)
-        if not files:
-            resp = await asyncio.to_thread(_post, url, payload)
-        else:
-            try:
-                resp = await asyncio.to_thread(_post, url, payload, files)
-                _health.get(category, {}).pop("img_err", None)   # art got through again
-            except urllib.error.HTTPError as exc:
-                if exc.code not in (400, 413):
-                    raise
-                # Degrade, don't drop: the art was the problem, the message isn't.
-                resp = await asyncio.to_thread(_post, url, _strip_attachments(payload))
-                _note_image_dropped(category, f"Discord refused the image (HTTP {exc.code}); "
-                                              "the message was sent without it")
+        try:
+            resp = await deliver(payload, tid)
+        except urllib.error.HTTPError as exc:
+            if tid and exc.code in (400, 403, 404):
+                # The thread is gone or locked: start a fresh post instead.
+                tid = None
+                if is_forum(category):
+                    payload["thread_name"] = (thread_name or _thread_name(payload))[:100]
+                resp = await deliver(payload, None)
+            elif not tid and "thread_name" not in payload and _forum_refusal(exc):
+                db.set_setting(_FORUM_PREFIX + category, "1")
+                payload["thread_name"] = (thread_name or _thread_name(payload))[:100]
+                resp = await deliver(payload, None)
+            else:
+                raise
         _note_result(category, True)
+        if info:
+            ch = resp.get("channel_id") if isinstance(resp, dict) else None
+            in_thread = bool(tid or "thread_name" in payload)
+            if in_thread and not webhook_guild(category):
+                try:
+                    g = await asyncio.to_thread(_fetch_guild, url)
+                    if g:
+                        db.set_setting(_GUILD_PREFIX + category, g)
+                except Exception:
+                    pass   # only the "discuss in Discord" link needs it
+            return {"message_id": _message_id(resp),
+                    "thread_id": str(ch) if in_thread and ch and str(ch).isdigit() else None}
         return (_message_id(resp) or True) if wait else True
     except Exception as exc:   # log and swallow — see module docstring
         _note_result(category, False, str(exc))
