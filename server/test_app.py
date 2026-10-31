@@ -14918,6 +14918,37 @@ def _notify_golden_run() -> dict:
         op = db.get_op(oid)
         out["op_record"] = [{"embed": app._op_record_embed(op, updated=False)}]
         out["op_record_updated"] = [{"embed": app._op_record_embed(op, updated=True)}]
+        # Intelligence (#50 slice 6): published / revised / restricted / nudge.
+        db.set_setting(app._ROLE_ALIAS_KEY, json.dumps({"Escort": [{"id": "123456789012345678", "label": "Security"}]}))
+
+        def intel(kind, title, **over):
+            d = {"kind": kind, "title": title, "slug": "x", "summary": "", "status": "draft",
+                 "visibility": "org", "author_id": "4242", "author_name": "Ace", "body_md": "",
+                 "body_html": "", "created_at": now, "updated_at": now, **over}
+            eid = db.intel_create_entry(d, [], [])
+            db.intel_save_revision(eid, None, {"status": "published", "published_at": over.get("published_at", now),
+                                               "patch": "4.3"}, [], [], {
+                "editor_id": "4242", "editor_name": "Ace", "note": "First published", "major": True,
+                "created_at": now})
+            return eid
+        sop = intel("procedure", "Hull-C *escort*", system="Pyro",
+                    body_md="Two escorts.\n\n![wing](https://i.imgur.com/abc.png)",
+                    body_html="<p>Two escorts.</p>")
+        run("intel_published_sop", app._intel_post(sop, "publish", {
+            "on": True, "teaser": "Escorts break at [QT](https://e.vil) exit", "ping": "123456789012345678"}))
+        rep = intel("report", "Gate camp", header=json.dumps({
+            "location_label": "Pyro Gateway", "location": "8 km out", "time": "2026-10-01T20:00:00+00:00",
+            "size": "5 ships", "equipment": "3x Polaris"}), grade_rel="B", grade_cred=2,
+            summary="Camp on the Pyro side")
+        run("intel_published_report", app._intel_post(rep, "publish", {"on": True}))
+        db.intel_save_revision(sop, 1, {"patch": "4.3"}, [], [], {
+            "editor_id": "777", "editor_name": "Nova", "note": "Escorts now break at QT exit",
+            "major": True, "created_at": now})
+        run("intel_revised", app._intel_post(sop, "revise", {}, "Escorts now break at QT exit", "Nova"))
+        secret = intel("tactic", "Hidden", visibility="restricted")
+        run("intel_restricted", app._intel_post(secret, "publish", {"on": True}))
+        intel("rfi", "Caves at *Aberdeen*?", published_at="2026-10-01T00:00:00+00:00")
+        run("intel_rfi_nudge", app._intel_rfi_nudges(datetime(2026, 10, 2, 6, tzinfo=timezone.utc)))
     finally:
         notify.send, app.PUBLIC_BASE_URL, db.blueprint_crafters = orig
     return out
@@ -14999,7 +15030,7 @@ class NotifyTemplateEngineTests(unittest.TestCase):
         raw_ok = {"icon", "heading", "kind_label", "headline", "call_to_action", "posted",
                   "start", "start_relative", "old_start", "signups_close", "length",
                   "crew", "needs", "severity", "threat", "comms", "roe", "read_more",
-                  "progress"}
+                  "progress", "system", "rev", "patch", "asked", "verb"}
         for key, t in self.nt.TEMPLATES.items():
             for name, v in t.vars.items():
                 if not v.md:
@@ -16714,3 +16745,237 @@ class IntelDiscussionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
+
+
+class IntelDiscordTests(unittest.TestCase):
+    """Intelligence slice 6 (#50): announcing entries in Discord — the author's
+    📣 choice on publish, always on a major revision, Push on a minor one,
+    per-kind channels over the default, RESTRICTED placeholders, approval
+    posts, forum threads, and the one 24 h nudge for an unanswered question."""
+
+    CLEAR_ROLE = IntelReportTests.CLEAR_ROLE
+    AUTHOR, OTHER, ADMIN, CLEARED = (IntelReportTests.AUTHOR, IntelReportTests.OTHER,
+                                     IntelReportTests.ADMIN, IntelReportTests.CLEARED)
+    setUpClass = IntelReportTests.__dict__["setUpClass"]
+    tearDownClass = IntelReportTests.__dict__["tearDownClass"]
+    as_ = IntelReportTests.as_
+    header = IntelReportTests.header
+    report = IntelReportTests.report
+    entry = IntelDiscussionTests.entry
+    ROLE = "123456789012345678"
+
+    def setUp(self):
+        IntelReportTests.setUp(self)
+        with db._conn:
+            db._conn.execute("DELETE FROM intel_discord_posts")
+        for c in notify.CATEGORIES:
+            db.set_setting(notify._webhook_key(c), "")
+            db.set_setting(notify._FORUM_PREFIX + c, "")
+        db.set_setting(notify._webhook_key("intel"), _GOOD_WEBHOOK)
+        db.set_setting(app._ROLE_ALIAS_KEY, json.dumps({"Escort": [{"id": self.ROLE, "label": "Security"}]}))
+        self.sent = []
+
+        async def _send(category, text, **kw):
+            self.sent.append({"cat": category, "text": text, **kw})
+            return {"message_id": "900", "thread_id": kw.get("thread_id") or ("700" if self.forum else None)}
+        self.forum = False
+        self._orig = (notify.send, app._notify_bg)
+        notify.send = _send
+        app._notify_bg = lambda coro: asyncio.run(coro)
+
+    def tearDown(self):
+        notify.send, app._notify_bg = self._orig
+
+    def save(self, eid, title, expect=200, **kw):
+        r = self.client.put(f"/api/intel/entries/{eid}", json={"title": title, **kw})
+        self.assertEqual(r.status_code, expect, r.text)
+        return r.json()
+
+    def test_publish_posts_only_when_the_author_asks(self):
+        self.entry(title="Quiet one")                                    # no 📣: nothing
+        self.assertEqual(self.sent, [])
+        e = self.entry(title="Hull-C escort", summary="Two escorts",
+                       announce={"on": True, "ping": self.ROLE, "teaser": ""})
+        self.assertEqual(len(self.sent), 1)
+        m = self.sent[0]
+        self.assertEqual(m["cat"], "intel")                              # no SOP override → the default
+        self.assertEqual((m["text"], m["roles"]), (f"<@&{self.ROLE}>", [self.ROLE]))
+        self.assertIn("Hull-C escort", m["embed"]["title"])
+        self.assertIn("Two escorts", m["embed"]["description"])
+        # A kind override wins; a ping that isn't in the alias map is dropped.
+        db.set_setting(notify._webhook_key("intel_sop"), _GOOD_WEBHOOK)
+        self.sent.clear()
+        self.entry(title="Tactic one", kind="tactic", announce={"on": True, "ping": "999999999999999999"})
+        self.assertEqual((self.sent[0]["cat"], self.sent[0]["text"], self.sent[0]["roles"]), ("intel_sop", "", None))
+        v = self.client.get(f"/api/intel/entries/{e['id']}").json()
+        self.assertEqual(v["discord"]["posts"][0]["channel"], "Intelligence")
+
+    def test_major_always_posts_minor_only_on_push(self):
+        e = self.entry(announce={"on": True})
+        self.sent.clear()
+        self.save(e["id"], "Hull-C escort", body="v2", base_rev=e["rev"])           # minor: silent
+        self.assertEqual(self.sent, [])
+        v = self.save(e["id"], "Hull-C escort", body="v3", base_rev=e["rev"] + 1,
+                      announce={"on": True, "teaser": "new coords"}, note="coords")   # minor + Push
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("Revised", self.sent[0]["embed"]["title"])
+        self.save(e["id"], "Hull-C escort", body="v4", base_rev=v["rev"], major=True,
+                  note="Escorts now break at QT exit")                               # major: always
+        self.assertEqual(len(self.sent), 2)
+        self.assertIn("Escorts now break at QT exit", self.sent[1]["embed"]["description"])
+        self.assertEqual(self.sent[1]["cat"], "intel")                                # its last channel
+
+    def test_forum_thread_is_reused_for_revisions(self):
+        self.forum = True
+        e = self.entry(announce={"on": True})
+        self.assertIsNone(self.sent[0]["thread_id"])
+        self.assertEqual(self.sent[0]["thread_name"], "Hull-C escort")
+        self.save(e["id"], "Hull-C escort", body="v2", base_rev=e["rev"], major=True, note="New formation")
+        self.assertEqual(self.sent[1]["thread_id"], "700")                            # into the same thread
+        db.set_setting(notify._GUILD_PREFIX + "intel", "555555555555555555")
+        v = self.client.get(f"/api/intel/entries/{e['id']}").json()
+        self.assertEqual(v["discord"]["thread_url"], "https://discord.com/channels/555555555555555555/700")
+
+    def test_restricted_entries_post_only_a_placeholder(self):
+        self.as_(self.CLEARED)
+        self.entry(title="Secret route", visibility="restricted", body="the route", announce={"on": True})
+        self.assertEqual(self.sent, [])                                   # no restricted channel: nothing
+        db.set_setting(notify._webhook_key("intel_restricted"), _GOOD_WEBHOOK)
+        self.entry(title="Secret two", visibility="restricted", body="the route", announce={"on": True})
+        m = self.sent[0]
+        self.assertEqual(m["cat"], "intel_restricted")
+        self.assertNotIn("Secret", json.dumps(m["embed"]))
+        self.assertEqual(m["text"], "")
+
+    def test_review_gate_posts_at_approval(self):
+        db.set_setting("intel_review_required", "1")
+        db.set_setting("intel_review_kinds", json.dumps(["procedure"]))
+        r = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": "Gated"})
+        eid = r.json()["id"]
+        v = self.save(eid, "Gated", publish=True, announce={"on": True, "ping": self.ROLE})
+        self.assertEqual((v["status"], self.sent), ("in_review", []))
+        self.as_(self.ADMIN)
+        v = self.client.post(f"/api/intel/entries/{eid}/approve").json()
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.sent[0]["roles"], [self.ROLE])              # the author's choice, kept
+        self.as_(self.AUTHOR)
+        self.save(eid, "Gated", body="v2", base_rev=v["rev"], major=True, note="A real change")
+        self.assertEqual(len(self.sent), 1)                               # pending: not yet
+        self.as_(self.ADMIN)
+        self.client.post(f"/api/intel/entries/{eid}/approve")
+        self.assertEqual(len(self.sent), 2)
+        self.assertIn("A real change", self.sent[1]["embed"]["description"])
+
+    def test_unanswered_question_nudged_once(self):
+        db.set_setting(notify._webhook_key("intel_rfi"), _GOOD_WEBHOOK)
+        q = self.entry(kind="rfi", title="Caves at Aberdeen?")
+        a = self.entry(kind="rfi", title="Answered one")
+        self.as_(self.OTHER)
+        self.client.post(f"/api/intel/entries/{a['id']}/comments", json={"body": "Yes, two."})
+        with db._conn:
+            db._conn.execute("UPDATE intel_entries SET published_at=?", ("2026-10-01T00:00:00+00:00",))
+        later = datetime(2026, 10, 2, 6, tzinfo=timezone.utc)
+        asyncio.run(app._intel_rfi_nudges(later))
+        asyncio.run(app._intel_rfi_nudges(later))
+        nudges = [m for m in self.sent if "Still open" in m["embed"]["title"]]
+        self.assertEqual(len(nudges), 1)
+        self.assertIn("Caves", nudges[0]["embed"]["title"])
+        self.assertEqual(nudges[0]["cat"], "intel_rfi")
+        # Too old for the window: a deploy never floods the channel.
+        asyncio.run(app._intel_rfi_nudges(datetime(2026, 10, 30, tzinfo=timezone.utc)))
+        self.assertEqual(len([m for m in self.sent if "Still open" in m["embed"]["title"]]), 1)
+        self.assertEqual(db.intel_discord_posts(q["id"])[0]["what"], "nudge")
+
+    def test_announce_options(self):
+        db.set_setting(notify._webhook_key("intel_report"), _GOOD_WEBHOOK)
+        o = self.client.get("/api/intel/announce-options").json()
+        self.assertEqual([c["key"] for c in o["channels"]], ["intel", "intel_report"])
+        self.assertEqual((o["defaults"]["report"], o["defaults"]["procedure"]), ("intel_report", "intel"))
+        self.assertEqual(o["pings"], [{"id": self.ROLE, "label": "Security"}])
+        self.assertFalse(o["restricted"])
+
+
+class NotifyBgThreadTests(unittest.TestCase):
+    """A sync route runs on the thread pool, where there's no event loop: a
+    notification fired there must reach the server loop, not vanish."""
+
+    def test_worker_thread_hands_off_to_the_main_loop(self):
+        import threading
+        loop = asyncio.new_event_loop()
+        ran = threading.Event()
+        t = threading.Thread(target=loop.run_forever, daemon=True)
+        t.start()
+
+        async def job():
+            ran.set()
+        orig = app._main_loop
+        app._main_loop = loop
+        try:
+            w = threading.Thread(target=lambda: app._notify_bg(job()))
+            w.start()
+            w.join()
+            self.assertTrue(ran.wait(2))
+        finally:
+            app._main_loop = orig
+            loop.call_soon_threadsafe(loop.stop)
+            t.join(2)
+            loop.close()
+
+
+class NotifyForumTests(unittest.TestCase):
+    """A webhook into a forum channel: learned from Discord's 220001 refusal,
+    then every post opens a thread; posting into a gone thread falls back."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        cls._tmp.close()
+        db.init(Path(cls._tmp.name))
+
+    @classmethod
+    def tearDownClass(cls):
+        Path(cls._tmp.name).unlink(missing_ok=True)
+
+    def setUp(self):
+        notify.set_webhook("intel", _GOOD_WEBHOOK)
+        notify._next_send.clear()
+        self.calls = []
+        self._orig = (notify._post, notify._fetch_guild, notify.SEND_SPACING_S)
+        notify.SEND_SPACING_S = 0
+        notify._fetch_guild = lambda url: "555555555555555555"
+
+    def tearDown(self):
+        notify._post, notify._fetch_guild, notify.SEND_SPACING_S = self._orig
+
+    def _err(self, code, body):
+        import io
+        return urllib.error.HTTPError("u", code, "x", {}, io.BytesIO(json.dumps(body).encode()))
+
+    def test_forum_detected_then_threads(self):
+        def post(url, payload, files=None, method="POST"):
+            self.calls.append((url, dict(payload)))
+            if len(self.calls) == 1:
+                raise self._err(400, {"code": 220001, "message": "must have a thread_name or thread_id"})
+            return {"id": "901", "channel_id": "701"}
+        notify._post = post
+        r = asyncio.run(notify.send("intel", "", embed={"title": "Gate camp"}, info=True))
+        self.assertEqual(r, {"message_id": "901", "thread_id": "701"})
+        self.assertEqual(self.calls[1][1]["thread_name"], "Gate camp")
+        self.assertTrue(notify.is_forum("intel"))
+        self.assertEqual(notify.webhook_guild("intel"), "555555555555555555")
+        # Into the thread; a gone thread falls back to a new one.
+        self.calls.clear()
+
+        def post2(url, payload, files=None, method="POST"):
+            self.calls.append((url, dict(payload)))
+            if "thread_id=" in url:
+                raise self._err(404, {"code": 10003})
+            return {"id": "902", "channel_id": "702"}
+        notify._post = post2
+        r = asyncio.run(notify.send("intel", "", embed={"title": "Revised"}, info=True, thread_id="701"))
+        self.assertEqual(r["thread_id"], "702")
+        self.assertIn("thread_id=701", self.calls[0][0])
+        self.assertEqual(self.calls[1][1]["thread_name"], "Revised")
+        # A new webhook URL forgets it was a forum.
+        notify.set_webhook("intel", _GOOD_WEBHOOK)
+        self.assertFalse(notify.is_forum("intel"))

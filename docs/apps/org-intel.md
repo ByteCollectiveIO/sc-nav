@@ -51,7 +51,11 @@ you ask the org a question (optionally about a place, so it shows on that
 place's dossier). Anyone answers; the asker marks the answer that did it, and an
 accepted answer can be **promoted** into a procedure or onto the place's dossier,
 crediting both people. Every entry also takes **comments**, with one level of
-reply (see [intelligence.md](../intelligence.md)). Open
+reply. When you publish, **📣 Announce in Discord** posts a short card (title,
+teaser, a report's SALUTE lines, the first image, an optional role ping) to the
+org's intel channel; a major revision always posts "Revised: …", into the
+entry's own thread when the channel is a Discord forum, and a RESTRICTED entry
+posts only a placeholder link (see [intelligence.md](../intelligence.md)). Open
 `#/intel/overview` and you get org-wide totals for mapping coverage, cargo hauling,
 trade-route profit, belt surveying, marketplace volume, per-contributor
 leaderboards and an ops-attendance board, plus (if you're an admin) a member
