@@ -17206,6 +17206,272 @@ class IntelDebriefReadingTests(unittest.TestCase):
         self.assertEqual(len(self.client.get(f"/api/events/{ev}").json()["reading"]), 1)
 
 
+class IntelCollectWatchFlagTests(unittest.TestCase):
+    """Intelligence slice 8b (#50): collections (ordered reading lists, also an
+    event's required reading), watching an entry / tag / collection (the feed's
+    "updated" marker + Watching filter) and flag + hide (an admin queue; a
+    hidden entry is kept but out of every list and openable by admins only)."""
+
+    CLEAR_ROLE = IntelReportTests.CLEAR_ROLE
+    AUTHOR, OTHER, ADMIN, CLEARED = (IntelReportTests.AUTHOR, IntelReportTests.OTHER,
+                                     IntelReportTests.ADMIN, IntelReportTests.CLEARED)
+    setUpClass = IntelReportTests.__dict__["setUpClass"]
+    tearDownClass = IntelReportTests.__dict__["tearDownClass"]
+    as_ = IntelReportTests.as_
+    entry = IntelDiscussionTests.entry
+    make_event = IntelDebriefReadingTests.make_event
+
+    def setUp(self):
+        IntelReportTests.setUp(self)
+        with db._conn:
+            for t in ("intel_collections", "intel_collection_items", "intel_watches", "intel_flags",
+                      "intel_mod_log", "intel_reads", "events", "event_signups", "event_reading"):
+                db._conn.execute(f"DELETE FROM {t}")
+
+    def collection(self, title="New member handbook", ids=(), expect=200, **kw):
+        r = self.client.post("/api/intel/collections", json={"title": title, "entry_ids": list(ids), **kw})
+        self.assertEqual(r.status_code, expect, r.text)
+        return r.json()
+
+    def feed(self, **q):
+        r = self.client.get("/api/intel/entries", params={"section": "feed", **q})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def later(self, eid):
+        """Move an entry's history into the past, so the next thing that
+        happens is unambiguously newer (timestamps are to the second)."""
+        with db._conn:
+            db._conn.execute("UPDATE intel_revisions SET created_at='2026-01-01T00:00:00+00:00' WHERE entry_id=?", (eid,))
+            db._conn.execute("UPDATE intel_watches SET created_at='2026-01-02T00:00:00+00:00'")
+            db._conn.execute("UPDATE intel_reads SET seen_at='2026-01-02T00:00:00+00:00' WHERE seen_at IS NOT NULL")
+
+    # ---- collections ----
+    def test_collection_keeps_its_order_and_only_owner_or_admin_edits(self):
+        a, b = self.entry(title="Alpha"), self.entry(title="Bravo")
+        c = self.collection(ids=[b["id"], a["id"], b["id"]], summary="Read these first")
+        self.assertEqual([e["title"] for e in c["entries"]], ["Bravo", "Alpha"])
+        self.assertEqual(c["summary"], "Read these first")
+        self.assertTrue(c["can_edit"])
+        self.as_(self.OTHER)
+        v = self.client.get(f"/api/intel/collections/{c['id']}").json()
+        self.assertFalse(v["can_edit"])
+        self.assertEqual(self.client.put(f"/api/intel/collections/{c['id']}", json={"title": "Mine"}).status_code, 403)
+        self.as_(self.ADMIN)
+        r = self.client.put(f"/api/intel/collections/{c['id']}", json={"entry_ids": [a["id"], b["id"]]})
+        self.assertEqual([e["title"] for e in r.json()["entries"]], ["Alpha", "Bravo"])
+        self.as_(self.AUTHOR)
+        draft = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": "WIP"}).json()
+        r = self.client.post(f"/api/intel/collections/{c['id']}/add", json={"entry_id": draft["id"]})
+        self.assertEqual(r.status_code, 422)          # published entries only
+        self.assertEqual([x["title"] for x in self.client.get("/api/intel/collections").json()["collections"]],
+                         ["New member handbook"])
+
+    def test_restricted_entries_and_collections_need_clearance(self):
+        sop = self.entry(title="Open SOP")
+        self.as_(self.CLEARED)
+        secret = self.entry(title="Black ops", visibility="restricted")
+        c = self.collection(ids=[sop["id"], secret["id"]])
+        self.assertEqual(len(c["entries"]), 2)
+        self.as_(self.OTHER)
+        v = self.client.get(f"/api/intel/collections/{c['id']}").json()
+        self.assertEqual([e["title"] for e in v["entries"]], ["Open SOP"])
+        self.assertEqual(v["n"], 1)
+        self.collection(title="Officers only", visibility="restricted", expect=403)
+        self.as_(self.CLEARED)
+        rc = self.collection(title="Officers only", visibility="restricted")
+        self.as_(self.OTHER)
+        self.assertEqual(self.client.get(f"/api/intel/collections/{rc['id']}").status_code, 404)
+        self.assertNotIn("Officers only", str(self.client.get("/api/intel/collections").json()))
+
+    def test_a_list_save_keeps_entries_the_editor_cant_see(self):
+        a, b = self.entry(title="Alpha"), self.entry(title="Bravo")
+        c = self.collection(ids=[a["id"], b["id"]])
+        db.intel_set_fields(b["id"], {"visibility": "restricted"})
+        r = self.client.put(f"/api/intel/collections/{c['id']}", json={"entry_ids": [a["id"]]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(db.intel_collection_get(c["id"])["entry_ids"], [a["id"], b["id"]])
+
+    def test_add_from_the_entry_page_and_delete(self):
+        sop = self.entry()
+        c = self.collection()
+        page = self.client.get(f"/api/intel/entries/{sop['id']}").json()
+        self.assertEqual(page["collections"]["mine"], [{"id": c["id"], "title": c["title"], "has": False}])
+        r = self.client.post(f"/api/intel/collections/{c['id']}/add", json={"entry_id": sop["id"]})
+        self.assertEqual(r.json()["collections"]["in"], [{"id": c["id"], "title": c["title"]}])
+        self.client.put("/api/intel/watch", json={"target_kind": "collection", "target_id": str(c["id"])})
+        self.as_(self.OTHER)
+        self.assertEqual(self.client.delete(f"/api/intel/collections/{c['id']}").status_code, 403)
+        self.as_(self.AUTHOR)
+        self.assertEqual(self.client.delete(f"/api/intel/collections/{c['id']}").status_code, 200)
+        self.assertEqual(db.intel_watches(self.AUTHOR["id"]), [])
+        self.assertIsNotNone(db.intel_get_entry(sop["id"]))   # the entries stay
+
+    def test_event_can_require_a_whole_collection(self):
+        a, b = self.entry(title="Alpha"), self.entry(title="Bravo")
+        c = self.collection(ids=[a["id"], b["id"]])
+        ev = self.make_event()
+        r = self.client.put(f"/api/events/{ev}/reading", json={"entry_ids": [b["id"]], "collection_id": c["id"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        rd = r.json()
+        self.assertEqual([(x["title"], x["via_collection"]) for x in rd["reading"]],
+                         [("Bravo", False), ("Alpha", True)])
+        self.assertEqual(rd["reading_collection"]["title"], c["title"])
+        self.as_(self.OTHER)
+        page = self.client.get(f"/api/intel/entries/{a['id']}").json()
+        self.assertEqual([x["title"] for x in page["reading"]["required_by"]], ["Escort night"])
+        self.as_(self.AUTHOR)       # a PUT that doesn't mention the collection keeps it
+        r = self.client.put(f"/api/events/{ev}/reading", json={"entry_ids": []})
+        self.assertEqual(r.json()["reading_collection"]["id"], c["id"])
+        r = self.client.put(f"/api/events/{ev}/reading", json={"entry_ids": [], "collection_id": None})
+        self.assertIsNone(r.json()["reading_collection"])
+        self.as_(self.CLEARED)
+        rc = self.collection(title="Officers only", visibility="restricted")
+        self.as_(self.ADMIN)
+        r = self.client.put(f"/api/events/{ev}/reading", json={"collection_id": rc["id"]})
+        self.assertEqual(r.status_code, 422)
+
+    # ---- watch ----
+    def test_watched_entry_is_updated_when_someone_else_changes_it(self):
+        sop = self.entry()
+        self.as_(self.OTHER)
+        w = self.client.put("/api/intel/watch", json={"target_kind": "entry", "target_id": str(sop["id"])}).json()
+        self.assertEqual([(i["kind"], i["updated"]) for i in w["items"]], [("entry", 0)])
+        self.assertEqual(self.feed()["watching"]["updated"], 0)
+        self.assertTrue(self.client.get(f"/api/intel/entries/{sop['id']}").json()["watching"]["entry"])
+        self.later(sop["id"])
+        self.as_(self.AUTHOR)
+        self.client.put(f"/api/intel/entries/{sop['id']}", json={"title": "Hull-C escort", "body": "v2", "base_rev": 1})
+        self.assertEqual(self.feed()["watching"]["count"], 0)        # the author isn't watching
+        self.as_(self.OTHER)
+        f = self.feed()
+        self.assertEqual(f["watching"]["updated"], 1)
+        self.assertEqual(f["watch_updated"], [sop["id"]])
+        self.client.get(f"/api/intel/entries/{sop['id']}")           # opened: seen
+        self.assertEqual(self.feed()["watching"]["updated"], 0)
+        # opening it never counts as "I've read it" for required reading
+        self.assertEqual(db.intel_reads_for([sop["id"]], [self.OTHER["id"]]), {})
+        self.later(sop["id"])
+        self.client.post(f"/api/intel/entries/{sop['id']}/comments", json={"body": "Own comment"})
+        self.assertEqual(self.feed()["watching"]["updated"], 0)      # your own activity isn't news
+        self.client.put("/api/intel/watch", json={"target_kind": "entry", "target_id": str(sop["id"]), "on": False})
+        self.assertEqual(self.feed()["watching"]["count"], 0)
+
+    def test_tag_and_collection_watches(self):
+        old = self.entry(title="Old hathor note", tags=["hathor"])
+        self.as_(self.OTHER)
+        self.client.put("/api/intel/watch", json={"target_kind": "tag", "target_id": "#Hathor"})
+        self.assertEqual(self.feed()["watching"], {"count": 1, "updated": 0, "targets": 1})   # existed before
+        self.later(old["id"])
+        self.as_(self.AUTHOR)
+        new = self.entry(title="Hathor gate camp", tags=["hathor"])
+        other = self.entry(title="Unrelated")
+        c = self.collection(ids=[other["id"]])
+        self.as_(self.OTHER)
+        f = self.feed()
+        self.assertEqual(f["watch_updated"], [new["id"]])
+        w = self.client.get("/api/intel/watching").json()
+        self.assertEqual([(i["label"], i["n"], i["updated"]) for i in w["items"]], [("#hathor", 2, 1)])
+        self.client.put("/api/intel/watch", json={"target_kind": "collection", "target_id": str(c["id"])})
+        self.later(other["id"])
+        self.as_(self.AUTHOR)
+        self.client.post(f"/api/intel/entries/{other['id']}/comments", json={"body": "Still valid after 4.4"})
+        self.as_(self.OTHER)
+        f = self.feed(watching=1)
+        self.assertEqual(sorted(f["watch_updated"]), sorted([new["id"], other["id"]]))
+        self.assertEqual({e["title"] for e in f["entries"]}, {"Old hathor note", "Hathor gate camp", "Unrelated"})
+        self.assertEqual(self.client.put("/api/intel/watch", json={"target_kind": "tag", "target_id": "!!"}).status_code, 422)
+        self.assertEqual(self.client.put("/api/intel/watch", json={"target_kind": "entry", "target_id": "999"}).status_code, 404)
+
+    # ---- flag + hide ----
+    def test_any_member_flags_and_admins_see_the_queue(self):
+        sop = self.entry()
+        self.as_(self.OTHER)
+        r = self.client.post("/api/intel/flags", json={"target_kind": "entry", "target_id": sop["id"],
+                                                       "reason": "outdated", "note": "4.4 moved the pads"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.client.post("/api/intel/flags", json={"target_kind": "entry", "target_id": sop["id"],
+                                                   "reason": "inaccurate", "note": "wrong pad"})
+        self.assertEqual(len(db.intel_flags_open()), 1)        # one open flag per member per target
+        self.assertEqual(self.client.get(f"/api/intel/entries/{sop['id']}").json()["my_flag"]["reason"], "inaccurate")
+        self.assertEqual(self.client.get("/api/intel/flags").status_code, 403)
+        self.as_(self.CLEARED)
+        self.client.post("/api/intel/flags", json={"target_kind": "entry", "target_id": sop["id"],
+                                                   "reason": "names_player"})
+        self.as_(self.AUTHOR)                                  # the owner sees the content flags only
+        page = self.client.get(f"/api/intel/entries/{sop['id']}").json()
+        self.assertEqual(page["flag_counts"], {"outdated": 0, "inaccurate": 1})
+        self.assertNotIn("flags", page)
+        self.as_(self.ADMIN)
+        q = self.client.get("/api/intel/flags").json()
+        self.assertEqual(len(q["open"]), 1)
+        self.assertEqual([f["reason"] for f in q["open"][0]["flags"]], ["inaccurate", "names_player"])
+        self.assertEqual(self.client.get("/api/intel/review").json()["flags_open"], 1)
+        r = self.client.post("/api/intel/flags/resolve", json={"target_kind": "entry", "target_id": sop["id"],
+                                                               "action": "dismiss"})
+        self.assertEqual(r.json()["open"], [])
+        self.assertEqual(r.json()["resolved"][0]["resolution"], "dismissed")
+
+    def test_flag_a_comment_and_delete_it_from_the_queue(self):
+        sop = self.entry()
+        self.as_(self.OTHER)
+        cid = self.client.post(f"/api/intel/entries/{sop['id']}/comments",
+                               json={"body": "XYZ_Pilot is a pirate"}).json()["thread"][0]["id"]
+        r = self.client.post("/api/intel/flags", json={"target_kind": "comment", "target_id": cid, "reason": "names_player"})
+        self.assertEqual(r.status_code, 422)                   # your own: edit or delete it
+        self.as_(self.AUTHOR)
+        self.assertTrue(self.client.get(f"/api/intel/entries/{sop['id']}").json()["thread"][0]["can_flag"])
+        self.client.post("/api/intel/flags", json={"target_kind": "comment", "target_id": cid, "reason": "names_player"})
+        self.as_(self.ADMIN)
+        q = self.client.get("/api/intel/flags").json()
+        self.assertEqual(q["open"][0]["comment"]["excerpt"], "XYZ_Pilot is a pirate")
+        self.assertEqual(self.client.post("/api/intel/flags/resolve", json={
+            "target_kind": "comment", "target_id": cid, "action": "hide"}).status_code, 422)
+        self.client.post("/api/intel/flags/resolve", json={"target_kind": "comment", "target_id": cid, "action": "delete"})
+        self.assertIsNotNone(db.intel_get_comment(cid)["deleted_at"])
+        self.assertEqual(db.intel_flags_open(), [])
+
+    def test_hidden_entry_is_kept_but_out_of_every_list_and_admin_only(self):
+        sop = self.entry(title="Hathor escort", body="hathor formation")
+        self.as_(self.OTHER)
+        self.client.put("/api/intel/watch", json={"target_kind": "entry", "target_id": str(sop["id"])})
+        self.client.post("/api/intel/flags", json={"target_kind": "entry", "target_id": sop["id"], "reason": "inappropriate"})
+        self.assertEqual(self.client.post(f"/api/intel/entries/{sop['id']}/hide", json={"hidden": True}).status_code, 403)
+        self.as_(self.ADMIN)
+        self.client.post("/api/intel/flags/resolve", json={"target_kind": "entry", "target_id": sop["id"],
+                                                           "action": "hide", "note": "Pending a rewrite"})
+        for who in (self.AUTHOR, self.OTHER, self.ADMIN):
+            self.as_(who)
+            self.assertEqual(self.client.get("/api/intel/entries?section=library").json()["entries"], [])
+            self.assertEqual(self.feed()["entries"], [])
+            self.assertEqual(self.client.get("/api/intel/search?q=hathor").json()["results"], [])
+            if who is not self.ADMIN:
+                self.assertEqual(self.client.get(f"/api/intel/entries/{sop['id']}").status_code, 404)
+        self.as_(self.OTHER)
+        self.assertEqual(self.client.get("/api/intel/watching").json()["items"], [])
+        self.as_(self.ADMIN)
+        page = self.client.get(f"/api/intel/entries/{sop['id']}").json()
+        self.assertEqual(page["hidden"]["by"], "Admin")
+        self.assertEqual([(m["action"], m["note"]) for m in page["mod_log"]], [("hide", "Pending a rewrite")])
+        q = self.client.get("/api/intel/flags").json()
+        self.assertEqual([h["title"] for h in q["hidden"]], ["Hathor escort"])
+        self.assertEqual(q["resolved"][0]["resolution"], "hidden")
+        self.assertEqual(self.client.post(f"/api/intel/entries/{sop['id']}/hide", json={"hidden": True}).status_code, 409)
+        r = self.client.post(f"/api/intel/entries/{sop['id']}/hide", json={"hidden": False, "note": "Rewritten"})
+        self.assertEqual([m["action"] for m in r.json()["mod_log"]], ["unhide", "hide"])
+        self.as_(self.OTHER)
+        self.assertEqual(self.client.get(f"/api/intel/entries/{sop['id']}").status_code, 200)
+        self.assertEqual(len(self.client.get("/api/intel/entries?section=library").json()["entries"]), 1)
+
+    def test_flags_are_rate_limited(self):
+        sop = self.entry()
+        self.as_(self.OTHER)
+        for _ in range(app._RATE_LIMITS["flag"][0]):
+            self.client.post("/api/intel/flags", json={"target_kind": "entry", "target_id": sop["id"], "reason": "outdated"})
+        r = self.client.post("/api/intel/flags", json={"target_kind": "entry", "target_id": sop["id"], "reason": "outdated"})
+        self.assertEqual(r.status_code, 429)
+
+
 class IntelDiscordTests(unittest.TestCase):
     """Intelligence slice 6 (#50): announcing entries in Discord — the author's
     📣 choice on publish, always on a major revision, Push on a minor one,

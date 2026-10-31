@@ -939,6 +939,15 @@ CREATE TABLE IF NOT EXISTS intel_flags (
     member_id TEXT NOT NULL, reason TEXT NOT NULL, note TEXT,
     resolved_by TEXT, resolved_at TEXT, created_at TEXT
 );
+-- Hide / unhide (slice 8b): every moderation action on an entry, kept.
+CREATE TABLE IF NOT EXISTS intel_mod_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id INTEGER NOT NULL, action TEXT NOT NULL,   -- hide | unhide
+    admin_id TEXT NOT NULL, admin_name TEXT, note TEXT, created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS intel_mod_log_entry ON intel_mod_log(entry_id);
+CREATE INDEX IF NOT EXISTS intel_flags_target ON intel_flags(target_kind, target_id);
+CREATE INDEX IF NOT EXISTS intel_collection_items_entry ON intel_collection_items(entry_id);
 CREATE TABLE IF NOT EXISTS intel_discord_posts (
     entry_id INTEGER NOT NULL, rev INTEGER, channel_key TEXT NOT NULL,
     message_id TEXT, thread_id TEXT, posted_at TEXT
@@ -1175,6 +1184,17 @@ def init(db_path) -> None:
         # reviewer approves it (the post goes out at approval).
         _ensure_column("intel_discord_posts", "what", "TEXT")
         _ensure_column("intel_entries", "announce", "TEXT")
+        # Slice 8b (collections, watch, flag + hide). A hidden entry is kept but
+        # admin-visible only (every list filters it in _intel_vis_sql); `seen_at`
+        # is when a member last opened an entry (watch's "updated" marker), kept
+        # apart from `rev`, which stays the explicit "I've read it"; an event's
+        # required reading can be a whole collection.
+        _ensure_column("intel_entries", "hidden_at", "TEXT")
+        _ensure_column("intel_entries", "hidden_by", "TEXT")
+        _ensure_column("intel_reads", "seen_at", "TEXT")
+        _ensure_column("intel_flags", "resolution", "TEXT")
+        _ensure_column("intel_flags", "member_name", "TEXT")
+        _ensure_column("events", "reading_collection", "INTEGER")
         _init_intel_search()
 
 
@@ -5475,7 +5495,9 @@ def intel_revision(entry_id: int, rev: int) -> dict | None:
 def _intel_vis_sql(restricted_ok: bool) -> str:
     # The RESTRICTED filter lives in SQL, so no list, queue or search can leak
     # a restricted row to a member without clearance (#50 slice 2).
-    return "" if restricted_ok else " AND e.visibility='org'"
+    # A hidden entry (slice 8b) is out of every list for everyone, admins
+    # included: they reach it from the flag queue's Hidden list or its link.
+    return " AND e.hidden_at IS NULL" + ("" if restricted_ok else " AND e.visibility='org'")
 
 
 # ---- review (slice 2) ----
@@ -5597,7 +5619,8 @@ def intel_reads_for(entry_ids, member_ids=None) -> dict:
     entry_ids = list(entry_ids)
     if not entry_ids:
         return {}
-    q = f"SELECT member_id, entry_id, rev FROM intel_reads WHERE entry_id IN ({','.join('?' * len(entry_ids))})"
+    # rev IS NULL = only ever opened (seen_at, slice 8b), never "I've read it".
+    q = f"SELECT member_id, entry_id, rev FROM intel_reads WHERE rev IS NOT NULL AND entry_id IN ({','.join('?' * len(entry_ids))})"
     args = list(entry_ids)
     if member_ids is not None:
         member_ids = [str(m) for m in member_ids]
@@ -5763,7 +5786,7 @@ def intel_rfis_to_nudge(published_before: str, published_after: str) -> list[dic
     answer and never nudged. The window's far edge keeps a deploy from nudging
     every old question at once."""
     return [dict(r) for r in _conn.execute(
-        "SELECT * FROM intel_entries e WHERE e.kind='rfi' AND e.status='published' "
+        "SELECT * FROM intel_entries e WHERE e.kind='rfi' AND e.status='published' AND e.hidden_at IS NULL "
         "AND e.visibility='org' AND e.published_at <= ? AND e.published_at > ? "
         "AND NOT EXISTS (SELECT 1 FROM intel_comments c WHERE c.entry_id=e.id "
         "  AND c.kind='answer' AND c.deleted_at IS NULL) "
@@ -5890,7 +5913,7 @@ def ref_search_rows(q: str, limit: int = 6) -> dict[str, list[dict]]:
 def intel_subject_holder(subject_kind: str, subject_ref: str) -> dict | None:
     """The published (or archived) dossier holding a subject, if any: one
     dossier per place or org (the partial UNIQUE index backs this up)."""
-    r = _conn.execute("SELECT id, slug, title, status, visibility FROM intel_entries "
+    r = _conn.execute("SELECT id, slug, title, status, visibility, hidden_at FROM intel_entries "
                       "WHERE subject_kind=? AND subject_ref=?", (subject_kind, subject_ref)).fetchone()
     return dict(r) if r else None
 
@@ -6057,3 +6080,249 @@ def intel_search(q: str, *, kinds=None, restricted_ok=False, limit=40) -> list[d
             f"{kind_sql}{vis} ORDER BY e.title COLLATE NOCASE LIMIT ?",
             like_args + kind_args + [limit]).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---- collections (#50 slice 8b): ordered reading lists ----
+@_intel_read
+def intel_collections_list(restricted_ok: bool) -> list[dict]:
+    vis = "" if restricted_ok else " WHERE c.visibility='org'"
+    return [dict(r) for r in _conn.execute(
+        "SELECT c.*, (SELECT COUNT(*) FROM intel_collection_items i WHERE i.collection_id=c.id) AS n "
+        f"FROM intel_collections c{vis} ORDER BY c.title COLLATE NOCASE")]
+
+
+@_intel_read
+def intel_collection_get(collection_id: int) -> dict | None:
+    r = _conn.execute("SELECT * FROM intel_collections WHERE id=?", (collection_id,)).fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    d["entry_ids"] = [x[0] for x in _conn.execute(
+        "SELECT entry_id FROM intel_collection_items WHERE collection_id=? ORDER BY position, entry_id",
+        (collection_id,))]
+    return d
+
+
+def _intel_collection_items(collection_id: int, entry_ids) -> None:
+    _conn.execute("DELETE FROM intel_collection_items WHERE collection_id=?", (collection_id,))
+    _conn.executemany("INSERT INTO intel_collection_items (collection_id, entry_id, position) VALUES (?,?,?)",
+                      [(collection_id, int(e), n) for n, e in enumerate(entry_ids)])
+
+
+def intel_collection_create(d: dict, entry_ids) -> int:
+    with _lock, _conn:
+        cur = _conn.execute(
+            "INSERT INTO intel_collections (title, summary, owner_id, visibility, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (d["title"], d.get("summary"), d["owner_id"], d.get("visibility") or "org",
+             d["created_at"], d["created_at"]))
+        _intel_collection_items(cur.lastrowid, entry_ids)
+    return cur.lastrowid
+
+
+def intel_collection_update(collection_id: int, fields: dict, entry_ids=None) -> None:
+    allowed = {k: v for k, v in fields.items() if k in ("title", "summary", "visibility", "owner_id", "updated_at")}
+    with _lock, _conn:
+        if allowed:
+            sets = ", ".join(f"{k}=?" for k in allowed)
+            _conn.execute(f"UPDATE intel_collections SET {sets} WHERE id=?", list(allowed.values()) + [collection_id])
+        if entry_ids is not None:
+            _intel_collection_items(collection_id, entry_ids)
+
+
+def intel_collection_add(collection_id: int, entry_id: int, at: str) -> bool:
+    """Append an entry (False when it's already in the collection)."""
+    with _lock, _conn:
+        if _conn.execute("SELECT 1 FROM intel_collection_items WHERE collection_id=? AND entry_id=?",
+                         (collection_id, entry_id)).fetchone():
+            return False
+        pos = _conn.execute("SELECT COALESCE(MAX(position), -1) + 1 FROM intel_collection_items "
+                            "WHERE collection_id=?", (collection_id,)).fetchone()[0]
+        _conn.execute("INSERT INTO intel_collection_items (collection_id, entry_id, position) VALUES (?,?,?)",
+                      (collection_id, entry_id, pos))
+        _conn.execute("UPDATE intel_collections SET updated_at=? WHERE id=?", (at, collection_id))
+    return True
+
+
+def intel_collection_delete(collection_id: int) -> None:
+    """The collection and its list go; its entries don't. Watches on it and an
+    event's 'read this collection' go with it."""
+    with _lock, _conn:
+        _conn.execute("DELETE FROM intel_collection_items WHERE collection_id=?", (collection_id,))
+        _conn.execute("DELETE FROM intel_watches WHERE target_kind='collection' AND target_id=?",
+                      (str(collection_id),))
+        _conn.execute("UPDATE events SET reading_collection=NULL WHERE reading_collection=?", (collection_id,))
+        _conn.execute("DELETE FROM intel_collections WHERE id=?", (collection_id,))
+
+
+@_intel_read
+def intel_collections_with(entry_id: int, restricted_ok: bool) -> list[dict]:
+    vis = "" if restricted_ok else " AND c.visibility='org'"
+    return [dict(r) for r in _conn.execute(
+        "SELECT c.id, c.title, c.owner_id FROM intel_collections c JOIN intel_collection_items i "
+        f"ON i.collection_id=c.id WHERE i.entry_id=?{vis} ORDER BY c.title COLLATE NOCASE", (entry_id,))]
+
+
+@_intel_read
+def event_reading_collection(event_id: int) -> int | None:
+    r = _conn.execute("SELECT reading_collection FROM events WHERE id=?", (event_id,)).fetchone()
+    return r[0] if r else None
+
+
+def set_event_reading_collection(event_id: int, collection_id: int | None) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE events SET reading_collection=? WHERE id=?", (collection_id, event_id))
+
+
+@_intel_read
+def events_requiring_via_collection(entry_id: int, since_iso: str) -> list[dict]:
+    """Scheduled events whose required collection holds this entry."""
+    return [dict(r) for r in _conn.execute(
+        "SELECT ev.id, ev.title, ev.start_at FROM events ev JOIN intel_collection_items i "
+        "ON i.collection_id = ev.reading_collection WHERE i.entry_id=? AND ev.status='scheduled' "
+        "AND ev.start_at > ? ORDER BY ev.start_at", (entry_id, since_iso))]
+
+
+# ---- watch (slice 8b): entry | tag | collection ----
+INTEL_WATCH_KINDS = ("entry", "tag", "collection")
+
+
+def intel_watch_set(member_id: str, target_kind: str, target_id: str, on: bool, at: str) -> None:
+    with _lock, _conn:
+        if on:
+            _conn.execute("INSERT OR IGNORE INTO intel_watches (member_id, target_kind, target_id, created_at) "
+                          "VALUES (?,?,?,?)", (str(member_id), target_kind, str(target_id), at))
+        else:
+            _conn.execute("DELETE FROM intel_watches WHERE member_id=? AND target_kind=? AND target_id=?",
+                          (str(member_id), target_kind, str(target_id)))
+
+
+@_intel_read
+def intel_watches(member_id: str) -> list[dict]:
+    return [dict(r) for r in _conn.execute(
+        "SELECT target_kind, target_id, created_at FROM intel_watches WHERE member_id=? "
+        "ORDER BY created_at DESC", (str(member_id),))]
+
+
+@_intel_read
+def intel_watched_entries(member_id: str) -> dict[int, str]:
+    """{entry_id: when the member started watching it} — directly, through a
+    watched tag, or through a watched collection (the earliest wins)."""
+    out: dict[int, str] = {}
+    for eid, at in _conn.execute(
+            "SELECT CAST(w.target_id AS INTEGER), w.created_at FROM intel_watches w "
+            "WHERE w.member_id=? AND w.target_kind='entry' "
+            "UNION ALL SELECT t.entry_id, w.created_at FROM intel_watches w JOIN intel_tags t "
+            "ON t.tag = w.target_id WHERE w.member_id=? AND w.target_kind='tag' "
+            "UNION ALL SELECT i.entry_id, w.created_at FROM intel_watches w JOIN intel_collection_items i "
+            "ON i.collection_id = CAST(w.target_id AS INTEGER) WHERE w.member_id=? AND w.target_kind='collection'",
+            (str(member_id),) * 3):
+        if eid not in out or (at or "") < out[eid]:
+            out[eid] = at or ""
+    return out
+
+
+@_intel_read
+def intel_activity_since(entry_ids, member_id: str) -> dict[int, dict]:
+    """Per entry: the latest thing someone ELSE did to it (a live revision, a
+    comment, answer or report update) and when this member last opened it."""
+    entry_ids = [int(i) for i in entry_ids]
+    if not entry_ids:
+        return {}
+    q = ",".join("?" * len(entry_ids))
+    mid = str(member_id)
+    out = {i: {"last": None, "seen": None} for i in entry_ids}
+    for eid, at in _conn.execute(
+            f"SELECT entry_id, MAX(created_at) FROM intel_revisions WHERE entry_id IN ({q}) "
+            "AND status='live' AND COALESCE(editor_id,'') != ? GROUP BY entry_id", entry_ids + [mid]):
+        out[eid]["last"] = at
+    for eid, at in _conn.execute(
+            f"SELECT entry_id, MAX(created_at) FROM intel_comments WHERE entry_id IN ({q}) "
+            "AND kind IN ('comment','answer','addendum') AND deleted_at IS NULL AND author_id != ? "
+            "GROUP BY entry_id", entry_ids + [mid]):
+        if at and (out[eid]["last"] or "") < at:
+            out[eid]["last"] = at
+    for eid, at in _conn.execute(
+            f"SELECT entry_id, seen_at FROM intel_reads WHERE member_id=? AND entry_id IN ({q})",
+            [mid] + entry_ids):
+        out[eid]["seen"] = at
+    return out
+
+
+def intel_mark_seen(member_id: str, entry_id: int, at: str) -> None:
+    """Opened (not "I've read it": that's `rev`, set only by the read button)."""
+    with _lock, _conn:
+        _conn.execute("INSERT INTO intel_reads (member_id, entry_id, seen_at) VALUES (?,?,?) "
+                      "ON CONFLICT(member_id, entry_id) DO UPDATE SET seen_at=excluded.seen_at",
+                      (str(member_id), entry_id, at))
+
+
+# ---- flag + hide (slice 8b) ----
+def intel_flag_add(target_kind: str, target_id: str, member_id: str, member_name: str | None,
+                   reason: str, note: str | None, at: str) -> int:
+    """One open flag per member per target: flagging again replaces the
+    reason and note rather than stacking a second row."""
+    with _lock, _conn:
+        r = _conn.execute("SELECT id FROM intel_flags WHERE target_kind=? AND target_id=? AND member_id=? "
+                          "AND resolved_at IS NULL", (target_kind, str(target_id), str(member_id))).fetchone()
+        if r:
+            _conn.execute("UPDATE intel_flags SET reason=?, note=?, created_at=? WHERE id=?",
+                          (reason, note, at, r[0]))
+            return r[0]
+        cur = _conn.execute(
+            "INSERT INTO intel_flags (target_kind, target_id, member_id, member_name, reason, note, created_at) "
+            "VALUES (?,?,?,?,?,?,?)", (target_kind, str(target_id), str(member_id), member_name, reason, note, at))
+    return cur.lastrowid
+
+
+@_intel_read
+def intel_flags_open(target_kind: str | None = None, target_id: str | None = None) -> list[dict]:
+    q, args = "SELECT * FROM intel_flags WHERE resolved_at IS NULL", []
+    if target_kind:
+        q += " AND target_kind=? AND target_id=?"
+        args += [target_kind, str(target_id)]
+    return [dict(r) for r in _conn.execute(q + " ORDER BY created_at, id", args)]
+
+
+@_intel_read
+def intel_flags_resolved(limit: int = 20) -> list[dict]:
+    return [dict(r) for r in _conn.execute(
+        "SELECT * FROM intel_flags WHERE resolved_at IS NOT NULL ORDER BY resolved_at DESC, id DESC LIMIT ?",
+        (limit,))]
+
+
+def intel_flags_resolve(target_kind: str, target_id: str, by: str, resolution: str, at: str) -> int:
+    with _lock, _conn:
+        cur = _conn.execute("UPDATE intel_flags SET resolved_by=?, resolved_at=?, resolution=? "
+                            "WHERE target_kind=? AND target_id=? AND resolved_at IS NULL",
+                            (by, at, resolution, target_kind, str(target_id)))
+    return cur.rowcount
+
+
+@_intel_read
+def intel_flag_count_open() -> int:
+    return _conn.execute("SELECT COUNT(DISTINCT target_kind || ':' || target_id) FROM intel_flags "
+                         "WHERE resolved_at IS NULL").fetchone()[0]
+
+
+def intel_set_hidden(entry_id: int, hidden: bool, admin_id: str, admin_name: str | None,
+                     note: str | None, at: str) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE intel_entries SET hidden_at=?, hidden_by=? WHERE id=?",
+                      (at if hidden else None, admin_id if hidden else None, entry_id))
+        _conn.execute("INSERT INTO intel_mod_log (entry_id, action, admin_id, admin_name, note, created_at) "
+                      "VALUES (?,?,?,?,?,?)", (entry_id, "hide" if hidden else "unhide", admin_id,
+                                               admin_name, note, at))
+
+
+@_intel_read
+def intel_mod_log(entry_id: int) -> list[dict]:
+    return [dict(r) for r in _conn.execute(
+        "SELECT * FROM intel_mod_log WHERE entry_id=? ORDER BY created_at DESC, id DESC", (entry_id,))]
+
+
+@_intel_read
+def intel_hidden_entries(limit: int = 100) -> list[dict]:
+    return [dict(r) for r in _conn.execute(
+        "SELECT id, kind, title, slug, hidden_at, hidden_by, author_name FROM intel_entries "
+        "WHERE hidden_at IS NOT NULL ORDER BY hidden_at DESC LIMIT ?", (limit,))]

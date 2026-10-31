@@ -12,7 +12,8 @@ placeholders, the 24 h RFI nudge), built 2026-10-31; slice 7, debriefs + require
 reading (op **Write debrief →** with a read-only OP RECORD, event required reading,
 read receipts that only a major revision resets), built 2026-10-31; slice 8 part 1, images +
 portability (one-click image loading, Import Markdown (.zip) storing its images,
-Export Markdown (.zip)), built 2026-10-31 (as-built detail in
+Export Markdown (.zip)), built 2026-10-31; slice 8 part 2, collections, watch and
+flag + hide, built 2026-10-31 (as-built detail in
 [implementation-notes.md](implementation-notes.md#intelligence-50)). Settled
 calls are marked **(user)**. Everything else is a recommendation open to change.
 

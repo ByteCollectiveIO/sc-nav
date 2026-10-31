@@ -896,6 +896,78 @@
   .ix-danger .ix-ico { color: var(--warn); margin-top: 2px; }
   .ix-danger.sev-deadly .ix-ico { color: var(--bad); }
   .ix-danger a { color: var(--accent); }
+  /* slice 8b: watch / collect / flag controls, collections, the flag queue */
+  .ix-btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+  .ix-inpop { display: grid; gap: 10px; margin-top: 12px; padding: 12px 14px; border: 1px solid var(--border);
+    border-radius: 6px; background: var(--inset-tint); font-size: 12px; }
+  .ix-inpop[hidden] { display: none; }
+  .ix-inpop .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .ix-inpop .row .sp { flex: 1; }
+  .ix-inpop textarea.ti { width: 100%; resize: vertical; }
+  .ix-inpop-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+  .ix-inpop-list button { width: 100%; text-align: left; display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+  .ix-inpop-list button[disabled] { opacity: 1; cursor: default; color: var(--dim); }
+  .ix-inpop-in { display: grid; gap: 10px; }
+  .ix-reasons { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ix-banner.hidden-entry { background: var(--bad-wash); }
+  .ix-banner.hidden-entry > .ix-ico { color: var(--bad); }
+  .ix-modlog { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; font-size: 12px; }
+  .ix-modlog li { display: grid; gap: 2px; padding-top: 6px; border-top: 1px solid var(--border-soft); }
+  .ix-modlog li:first-child { border-top: none; padding-top: 0; }
+  .ix-modlog small { color: var(--dim); }
+  .ix-modlog q { color: var(--text); }
+  .ix-cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
+  .ix-col { display: grid; gap: 4px; align-content: start; padding: 12px 14px; border: 1px solid var(--border);
+    border-radius: 6px; color: inherit; text-decoration: none; min-width: 0; }
+  .ix-col:hover { border-color: var(--accent); }
+  .ix-col:hover .ix-t { color: var(--accent); }
+  .ix-col:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+  .ix-col .ix-t { display: flex; gap: 8px; align-items: flex-start; font-weight: 600; }
+  .ix-col .ix-t .ix-ico { margin-top: 1px; color: var(--dim); }
+  .ix-col small { font-size: 11px; color: var(--dim); }
+  .ix-col-new { border-style: dashed; color: var(--dim); align-content: center; justify-items: start; }
+  .ix-ol { counter-reset: ix-ol; }
+  .ix-ol > .ix-row { grid-template-columns: 34px 112px minmax(0, 1fr) auto; counter-increment: ix-ol; }
+  .ix-ol > .ix-row::before { content: counter(ix-ol, decimal-leading-zero); font-size: 12px; color: var(--dim);
+    font-variant-numeric: tabular-nums; padding-top: 2px; }
+  .ix-ol > .ix-row.read::before { content: "✓"; color: var(--good); }
+  .ix-read-st { font-size: 11px; color: var(--dim); white-space: nowrap; padding-top: 2px; text-align: right; }
+  .ix-read-st.ok { color: var(--good); }
+  .ix-upd-mark { font-size: 11px; color: var(--accent); white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
+  .ix-progress { height: 3px; border-radius: 2px; background: var(--border); margin-top: 12px; max-width: 320px; overflow: hidden; }
+  .ix-progress > i { display: block; height: 100%; background: var(--good); }
+  .ix-ced { display: grid; gap: 12px; }
+  .ix-ced .ix-pick input.ti { width: 100%; box-sizing: border-box; }
+  .ix-ced-list { list-style: none; margin: 0; padding: 0; display: grid; }
+  .ix-ced-list li { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 10px; align-items: center;
+    padding: 8px 4px; border-top: 1px solid var(--border-soft); font-size: 13px; }
+  .ix-ced-list li:first-child { border-top: none; }
+  .ix-ced-list .n { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .ix-ced-list .t { min-width: 0; display: flex; gap: 8px; align-items: center; }
+  .ix-ced-list .t span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ix-ced-list .acts { display: flex; gap: 4px; }
+  .ix-ced-list .acts button { padding: 3px 8px; font-size: 12px; }
+  .ix-flagq { display: grid; gap: 0; margin-top: 6px; }
+  .ix-flagq > article { display: grid; gap: 8px; padding: 12px 8px; border-top: 1px solid var(--border-soft); }
+  .ix-flagq > article:first-child { border-top: none; }
+  .ix-flagq .what { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; font-size: 13px; }
+  .ix-flagq .what a { color: var(--text); }
+  .ix-flagq blockquote { margin: 0; padding: 6px 10px; border-left: 2px solid var(--border); color: var(--dim); font-size: 12px; }
+  .ix-flagq ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 12px; color: var(--dim); }
+  .ix-flagq ul b { color: var(--text); font-weight: 400; }
+  .ix-flagq .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ix-flagq .row button, .ix-flagq .row a { padding: 5px 10px; }
+  .ix-tag.flag { color: var(--warn); border-color: var(--warn); }
+  .ix-tagw { cursor: pointer; background: transparent; }
+  .ix-tagw[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+  .ix-tagw .ix-ico { width: 11px; height: 11px; vertical-align: -1px; margin-right: 3px; }
+  @media (max-width: 600px) {
+    .ix-ol > .ix-row { grid-template-columns: 26px minmax(0, 1fr) auto; }
+    .ix-ol > .ix-row::before { grid-column: 1; grid-row: 1; }
+    .ix-ol > .ix-row > .ix-kind { grid-column: 2; grid-row: 1; }
+    .ix-ol > .ix-row > .ix-read-st { grid-column: 3; grid-row: 1; }
+    .ix-ol > .ix-row > .ix-body { grid-column: 2 / 4; grid-row: 2; }
+  }
   .ix-rl { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 2px; font-size: 12px; }
   .ix-rl li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; padding: 6px 0; border-top: 1px solid var(--border-soft); }
   .ix-rl li:first-child { border-top: none; }
@@ -2707,6 +2779,10 @@
   .ev-rd-st.ok { color: var(--good); }
   .ev-rd-st.stale { color: var(--warn); }
   .ev-rd-add { margin-top: 8px; max-width: 520px; }
+  .ev-rd-col { margin-top: 8px; max-width: 520px; }
+  .ev-rd-col[hidden] { display: none; }
+  .ev-rd-colline { display: flex; align-items: center; gap: 6px; }
+  .ev-rd-colline > span { flex: 0 1 auto; min-width: 0; }
   .ev-rd-msg { font-size: 12px; }
   .ev-name.wait { opacity: .8; border-style: dashed; border-color: var(--warn); }
   /* board bar (2026-08 review): range seg + mine toggle + category chips */
@@ -5777,6 +5853,10 @@
       <symbol id="ix-i-neutral" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="1.5"/></symbol>
       <symbol id="ix-i-unknown" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M9.6 9.6a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.6"/><path d="M12 16.6v.4"/></symbol>
       <symbol id="ix-i-member" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.6"/><path d="M5 20c.8-3.8 3.6-6 7-6s6.2 2.2 7 6"/></symbol>
+      <symbol id="ix-i-watch" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></symbol>
+      <symbol id="ix-i-flag" viewBox="0 0 24 24"><path d="M5.5 21V4"/><path d="M5.5 4.5h11l-2.5 4 2.5 4h-11"/></symbol>
+      <symbol id="ix-i-collection" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="1.5"/><path d="M6.5 5h11M9 2.5h6"/></symbol>
+      <symbol id="ix-i-hidden" viewBox="0 0 24 24"><path d="M4 4l16 16"/><path d="M9.6 5.8A9.5 9.5 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-3 3.6M6.2 7.7A16 16 0 0 0 2.5 12S6 18.5 12 18.5c1.3 0 2.5-.3 3.6-.8"/></symbol>
     </defs></svg>
     <div class="panel intel-mast" id="intel-mast">
       <div class="intel-mast-row">
@@ -15215,18 +15295,24 @@ async function renderDetailBody(e) {
 const EVENT_READING_KINDS = ["procedure", "tactic", "debrief", "dossier"];
 function eventReadingHtml(e, cancelled) {
   const list = e.reading || [];
-  if (!list.length && !(e.can_edit && !cancelled)) return "";
+  const col = e.reading_collection;     // a whole collection (slice 8b)
+  const own = list.filter(x => !x.via_collection);
+  if (!list.length && !col && !(e.can_edit && !cancelled)) return "";
   const going = (e.attendees || []).filter(a => a.status === "going");
   const done = list.length ? going.filter(a => (a.read || []).length === list.length).length : 0;
   const row = (x) => `<li><a href="#/intel/e/${+x.id}-${encodeURIComponent(x.slug || "entry")}">${intelIco(x.kind, "ix-ico sm")}${esc(x.title)}</a>` +
     `<small>${esc((INTEL_KIND[x.kind] || x.kind).toLowerCase())}</small>` +
     `<span class="ev-rd-st ${x.read ? "ok" : x.stale ? "stale" : ""}">${x.read ? "✓ You've read it" : x.stale ? "Revised since you read it" : "Not read yet"}</span>` +
-    (e.can_edit ? `<button type="button" class="op-x" data-rd-rm="${+x.id}" aria-label="Remove ${esc(x.title)} from required reading">✕</button>` : "") + `</li>`;
+    (e.can_edit && !x.via_collection ? `<button type="button" class="op-x" data-rd-rm="${+x.id}" aria-label="Remove ${esc(x.title)} from required reading">✕</button>` : "") + `</li>`;
   return `<div class="ev-reading" id="ev-reading"><div class="ev-section-h">Required reading` +
     (list.length && going.length ? ` <span class="muted">· ${done} of ${going.length} going have read it all</span>` : "") + `</div>` +
+    (col ? `<p class="ev-note ev-rd-colline">${intelIco("collection", "ix-ico sm")}<span>Includes the collection <a href="#/intel/c/${+col.id}">${esc(col.title)}</a></span>` +
+      (e.can_edit && !cancelled ? ` <button type="button" class="op-x" id="ev-rd-col-rm" aria-label="Stop requiring the collection ${esc(col.title)}">✕</button>` : "") + `</p>` : "") +
     (list.length ? `<ul class="ev-rd-list">${list.map(row).join("")}</ul>`
       : `<p class="ev-note">Nothing yet. Add the procedures, tactics, debriefs or dossiers the crew should read before this; a ✓ on the roster shows who has.</p>`) +
-    (e.can_edit && !cancelled && list.length < 10 ? `<div class="ev-field ix-pick ev-rd-add"><input class="ti" id="ev-rd-q" autocomplete="off" ` +
+    (e.can_edit && !cancelled && !col ? `<div class="ev-field ev-rd-col" id="ev-rd-col-wrap" hidden><select class="ti" id="ev-rd-col" aria-label="Require a whole collection">` +
+      `<option value="">Or require a whole collection…</option></select></div>` : "") +
+    (e.can_edit && !cancelled && own.length < 10 ? `<div class="ev-field ix-pick ev-rd-add"><input class="ti" id="ev-rd-q" autocomplete="off" ` +
       `placeholder="Add required reading: find an entry…" aria-label="Add required reading">` +
       `<ul id="ev-rd-res" hidden></ul></div><span class="muted ev-rd-msg" id="ev-rd-msg" role="status"></span>` : "") + `</div>`;
 }
@@ -15242,8 +15328,27 @@ function bindEventReading(e) {
       const q = $("ev-rd-q"); if (q) q.focus();
     } catch { if (msg) msg.textContent = "Couldn't save the list. Try again."; }
   };
-  const ids = (e.reading || []).map(x => x.id);
+  const ids = (e.reading || []).filter(x => !x.via_collection).map(x => x.id);
   document.querySelectorAll("[data-rd-rm]").forEach(b => b.onclick = () => save(ids.filter(i => i !== +b.dataset.rdRm)));
+  const saveCol = async (cid) => {
+    const msg = $("ev-rd-msg");
+    try {
+      const r = await fetch(`/api/events/${e.id}/reading`, { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entry_ids: ids, collection_id: cid }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { if (msg) msg.textContent = (typeof d.detail === "string" && d.detail) || "Couldn't save the list."; return; }
+      await renderDetailBody(d);
+    } catch { if (msg) msg.textContent = "Couldn't save the list. Try again."; }
+  };
+  const crm = $("ev-rd-col-rm"); if (crm) crm.onclick = () => saveCol(null);
+  const sel = $("ev-rd-col");
+  if (sel) intelApi("/api/intel/collections").then(d => {
+    const cols = d.collections.filter(c => c.visibility === "org" && c.n);
+    if (!cols.length || !$("ev-rd-col")) return;
+    sel.insertAdjacentHTML("beforeend", cols.map(c => `<option value="${+c.id}">${esc(c.title)} (${c.n})</option>`).join(""));
+    $("ev-rd-col-wrap").hidden = false;
+    sel.onchange = () => { if (sel.value) saveCol(+sel.value); };
+  }).catch(() => {});
   const q = $("ev-rd-q");
   if (q) intelRefPicker(q, $("ev-rd-res"),
     (x) => x.kind === "entry" && EVENT_READING_KINDS.includes(x.entry_kind) && !x.restricted && !ids.includes(+x.key.split(":")[1]),
@@ -27645,7 +27750,7 @@ let intelBoard = "mapping";   // which leaderboard the Boards section shows
 const INTEL_KNOW_SECS = ["feed", "library", "dossiers", "rfi", "review"];
 // Intelligence's deeper routes (#50 slice 1): an entry, its history, its
 // editor, a new entry, search results. All sit under the Library tab.
-const INTEL_KNOW_VIEWS = ["entry", "history", "edit", "new", "search", "reviewing"];
+const INTEL_KNOW_VIEWS = ["entry", "history", "edit", "new", "search", "reviewing", "collection", "colledit"];
 let intelRoute = {};   // the parsed params of the current deeper route
 function intelParseRoute(sub) {
   if (sub == null) return null;
@@ -27673,6 +27778,12 @@ function intelParseRoute(sub) {
     return "new";
   }
   if (sub === "search") { intelRoute = {}; return "search"; }
+  // Collections (slice 8b): #/intel/c/<id>, …/edit, #/intel/c/new[?add=<entry>]
+  m = /^c\/(?:(\d+)(\/edit)?|new(?:\?add=(\d+))?)$/.exec(sub);
+  if (m) {
+    intelRoute = { cid: m[1] ? +m[1] : null, add: m[3] ? +m[3] : null };
+    return m[1] && !m[2] ? "collection" : "colledit";
+  }
   return null;
 }
 const INTEL_ACT_SECS = ["overview", "mapping", "hauling", "trading", "surveying",
@@ -28541,7 +28652,8 @@ function renderIntel(section) {
     : section === "new" && intelRoute.kind === "rfi" ? "rfi" : "library";
   // Reviewers see a Review tab while the gate is on (#50 slice 2).
   const ia = intelAccess();
-  $("intel-tab-review").hidden = !(ia.reviewer && ia.review_kinds.length) && section !== "review";
+  // Admins too: the flag queue lives on it (slice 8b).
+  $("intel-tab-review").hidden = !((ia.reviewer && ia.review_kinds.length) || (currentMe && currentMe.is_admin)) && section !== "review";
   const half = know ? "intel" : "activity";
   try { localStorage.setItem("scIntelHalf", half); } catch {}
   document.querySelectorAll("#intel-half button").forEach(b => {
@@ -28725,7 +28837,7 @@ function renderIntelKnow(section) {
   if (section !== "feed") intelFeedSeen = undefined;
   if (section !== "search") $("intel-search").value = "";
   if (!$("intel-tab-review").hidden && section !== "review")
-    intelApi("/api/intel/review").then(d => intelSetReviewCount(d.items.length)).catch(() => {});
+    intelApi("/api/intel/review").then(d => intelSetReviewCount(d.items.length + (d.flags_open || 0))).catch(() => {});
   if (INTEL_KNOW_EMPTY[section]) {
     const [title, lead, body] = INTEL_KNOW_EMPTY[section];
     box.innerHTML = `<div class="panel intel-know-empty"><h2>${title}</h2>` +
@@ -28735,14 +28847,15 @@ function renderIntelKnow(section) {
   }
   ({ feed: intelFeed, library: intelLibrary, dossiers: intelDossiers, rfi: intelRfiList, search: intelSearchView, entry: intelEntryView,
      history: intelHistory, edit: intelEditor, new: intelEditor,
-     review: intelReviewQueue, reviewing: intelReviewView })[section](box);
+     review: intelReviewQueue, reviewing: intelReviewView,
+     collection: intelCollectionView, colledit: intelCollectionEditor })[section](box);
 }
 
 // ---- FEED (#50 slice 3) ----
 // Reverse-chronological: reports, plus procedures and tactics on first publish
 // and major revision. Expired reports drop off unless asked for. "New since
 // you looked" is a server-side mark per member (set once per visit).
-let intelFeedFilter = { kind: "", system: "", activity: "", expired: false };
+let intelFeedFilter = { kind: "", system: "", activity: "", expired: false, watching: false };
 let intelFeedSeen;   // undefined = not loaded this visit; null = never looked
 // Discussion count on a row: answers on an RFI, comments on everything else.
 function intelTalkChip(c) {
@@ -28751,9 +28864,10 @@ function intelTalkChip(c) {
   const t = [c.answer ? `${c.answer} answer${c.answer === 1 ? "" : "s"}` : "", c.comment ? `${c.comment} comment${c.comment === 1 ? "" : "s"}` : ""].filter(Boolean).join(", ");
   return `<span title="${t}">${intelIco("comment")}${n}</span>`;
 }
-function intelFeedRow(e, seen) {
+function intelFeedRow(e, seen, updated) {
   const at = e.revised_at || e.published_at;
-  const unread = !!(seen && at && at > seen);
+  // New since you looked, or (slice 8b) a watched entry someone changed.
+  const unread = !!(seen && at && at > seen) || !!updated;
   const r = e.report, c = e.counts || {};
   const revised = e.kind !== "report" && e.revised_at && e.published_at && e.revised_at !== e.published_at;
   const who = e.kind === "report" ? e.author_name : (e.owner && e.owner.name) || e.author_name;
@@ -28768,7 +28882,8 @@ function intelFeedRow(e, seen) {
     e.activity ? `<span class="ix-tag">${esc(e.activity)}</span>` : "",
     r && r.valid_until ? `<span class="${r.expired ? "" : "ix-ttl"}">${esc(intelTtl(r.valid_until))}</span>` : "",
     e.kind !== "report" ? intelPatchChip(e.patch) : "",
-    who ? `<span>by <b>${esc(who)}</b></span>` : ""].filter(Boolean).join("");
+    who ? `<span>by <b>${esc(who)}</b></span>` : "",
+    updated ? `<span class="ix-upd-mark">${intelIco("watch", "ix-ico sm")}Updated</span>` : ""].filter(Boolean).join("");
   const side = (r ? intelGradeChip(r.grade) : "") +
     (c.corroborate ? `<span title="${c.corroborate} corroborated">${intelIco("corrob")}${c.corroborate}</span>` : "") +
     (c.dispute ? `<span class="bad" title="${c.dispute} disputed">${intelIco("dispute")}${c.dispute}</span>` : "") +
@@ -28777,7 +28892,7 @@ function intelFeedRow(e, seen) {
   const time = at ? new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "";
   return `<a class="ix-row ix-feed-row${unread ? " unread" : ""}${r && r.expired ? " expired" : ""}" href="${intelHref(e)}">` +
     `<span class="ix-kind"><span class="ix-dot" aria-hidden="true"></span>${intelIco(e.kind)}${esc(INTEL_KIND[e.kind] || e.kind)}</span>` +
-    `<span class="ix-body">${unread ? `<span class="sr-only">New. </span>` : ""}<span class="ix-t">${esc(e.title || "Untitled")}</span>` +
+    `<span class="ix-body">${unread ? `<span class="sr-only">${updated ? "Updated" : "New"}. </span>` : ""}<span class="ix-t">${esc(e.title || "Untitled")}</span>` +
     (revised ? `<span class="ix-verb"> · revised, rev ${e.rev}</span>` : "") +
     (e.summary ? `<div class="ix-teaser">${esc(e.summary)}</div>` : "") +
     (meta ? `<span class="ix-meta">${meta}</span>` : "") + `</span>` +
@@ -28802,7 +28917,8 @@ async function intelFeed(box) {
     `<span class="muted">Reports, questions and debriefs, plus procedures, tactics and dossiers when they're published or revised</span></div>` +
     `<div class="ix-filters" role="group" aria-label="Filter the feed">` +
     chip("", "All") + chip("report", "Reports", "report") + chip("procedure", "Procedures", "procedure") + chip("tactic", "Tactics", "tactic") +
-    chip("dossier", "Dossiers", "dossier") + chip("rfi", "Questions", "rfi") + chip("debrief", "Debriefs", "debrief") + `<span class="sp"></span>` +
+    chip("dossier", "Dossiers", "dossier") + chip("rfi", "Questions", "rfi") + chip("debrief", "Debriefs", "debrief") +
+    `<span id="ix-f-watch-slot"></span><span class="sp"></span>` +
     `<select class="ti" id="ix-f-sys" aria-label="System">${opt(INTEL_SYSTEM_OPTS, f.system, "Every system")}</select>` +
     `<select class="ti" id="ix-f-act" aria-label="Activity">${opt(tags, f.activity, "Every activity")}</select>` +
     `<label class="ix-chip ix-check"><input type="checkbox" id="ix-f-exp"${f.expired ? " checked" : ""}> Show expired</label></div>` +
@@ -28817,8 +28933,18 @@ async function intelFeed(box) {
   if (f.system) q.set("system", f.system);
   if (f.activity) q.set("activity", f.activity);
   if (f.expired) q.set("expired", "1");
+  if (f.watching) q.set("watching", "1");
   try {
     const d = await intelApi(`/api/intel/entries?${q}`);
+    const wt = d.watching || { count: 0, updated: 0, targets: 0 };
+    const upd = new Set(d.watch_updated || []);
+    if (!wt.targets && f.watching) f.watching = false;
+    const ws = $("ix-f-watch-slot");
+    if (ws && (wt.targets || f.watching)) {
+      ws.outerHTML = `<button type="button" class="ix-chip" id="ix-f-watch" aria-pressed="${f.watching}" ` +
+        `title="Everything you watch: entries, tags and collections">${intelIco("watch")}Watching${wt.updated ? ` · ${wt.updated} updated` : ""}</button>`;
+      $("ix-f-watch").onclick = () => { f.watching = !f.watching; intelFeed(box); };
+    }
     intelImageHosts = d.image_hosts || intelImageHosts;
     const el = $("ix-feed"); if (!el) return;
     // The mark from BEFORE this visit stays put while filters re-render.
@@ -28827,7 +28953,15 @@ async function intelFeed(box) {
       intelApi("/api/intel/feed/seen", { method: "POST" }).catch(() => {});
     }
     const seen = intelFeedSeen;
-    if (!d.entries.length) {
+    if (!d.entries.length && f.watching) {
+      el.innerHTML = intelStatus("Nothing you watch matches that filter.");
+    } else if (f.watching) {
+      // Watching: the changed ones first, then the rest; no day groups.
+      const a = d.entries.filter(e => upd.has(e.id)), b = d.entries.filter(e => !upd.has(e.id));
+      el.innerHTML = (a.length ? `<div class="ix-group-h"><span>UPDATED SINCE YOU LOOKED</span><span>${a.length}</span></div>` + a.map(e => intelFeedRow(e, null, true)).join("") : "") +
+        (b.length ? `<div class="ix-group-h"><span>NO CHANGES</span><span>${b.length}</span></div>` + b.map(e => intelFeedRow(e, null, false)).join("") : "");
+      intelResolveRefs(el, null);
+    } else if (!d.entries.length) {
       el.innerHTML = f.kind || f.system || f.activity ? intelStatus(f.expired ? "Nothing matches that filter."
         : "Nothing matches that filter. Expired reports are hidden; tick Show expired to include them.")
         : `<div class="intel-know-empty" style="padding:14px 8px"><p class="lead">Nothing in the feed yet.</p>` +
@@ -28850,7 +28984,7 @@ async function intelFeed(box) {
           parts.push(`<div class="ix-group-h"><span>${intelDayLabel(dt)}</span><span>%N%</span></div>`);
         }
         n++;
-        parts.push(intelFeedRow(e, seen));
+        parts.push(intelFeedRow(e, seen, upd.has(e.id)));
       });
       if (day !== null) parts[groupStart] = parts[groupStart].replace("%N%", n);
       el.innerHTML = html + parts.join("");
@@ -28858,13 +28992,37 @@ async function intelFeed(box) {
     }
     const ood = d.out_of_date || [];
     const rail = $("ix-feed-rail");
-    if (ood.length && rail) {
+    if (rail && (ood.length || wt.targets)) {
       rail.hidden = false;
-      rail.innerHTML = `<div class="panel"><div class="ix-panel-h"><h2>OUT OF DATE</h2><span class="muted">${ood.length} on an older patch</span></div>` +
+      rail.innerHTML = `<div class="panel" id="ix-watch-p" hidden></div>` + (ood.length ? `<div class="panel"><div class="ix-panel-h"><h2>OUT OF DATE</h2><span class="muted">${ood.length} on an older patch</span></div>` +
         `<ul class="ix-rl">${ood.map(o => `<li>${intelIco("patch", "ix-ico warn")}<span><a href="${intelHref(o)}">${esc(o.title)}</a>` +
-        `<small>${esc(INTEL_KIND[o.kind].toLowerCase())}${o.owner ? ` · owner ${esc(o.owner)}` : ""}${o.written ? ` · written ${esc(intelMinor(o.written))}` : ""}</small></span></li>`).join("")}</ul></div>`;
+        `<small>${esc(INTEL_KIND[o.kind].toLowerCase())}${o.owner ? ` · owner ${esc(o.owner)}` : ""}${o.written ? ` · written ${esc(intelMinor(o.written))}` : ""}</small></span></li>`).join("")}</ul></div>` : "");
+      if (wt.targets) intelWatchingPanel(box);
     } else $("ix-feed-grid").classList.add("solo");
   } catch (err) { const el = $("ix-feed"); if (el) el.innerHTML = intelStatus(err.message, true); }
+}
+
+// The Feed rail's WATCHING panel: what you watch, how much of each changed,
+// one-click unwatch.
+async function intelWatchingPanel(box) {
+  let d;
+  try { d = await intelApi("/api/intel/watching"); } catch { return; }
+  const p = $("ix-watch-p"); if (!p) return;
+  if (!d.items.length) { p.hidden = true; return; }
+  const href = (i) => i.kind === "entry" ? intelHref({ id: i.id, slug: i.slug }) : i.kind === "collection" ? `#/intel/c/${+i.id}` : null;
+  const ico = (i) => i.kind === "entry" ? (i.entry_kind || "procedure") : i.kind === "collection" ? "collection" : "ref";
+  p.hidden = false;
+  p.innerHTML = `<div class="ix-panel-h"><h2>WATCHING</h2><span class="muted">${d.items.length}</span></div>` +
+    `<ul class="ix-rl">${d.items.map((i, n) => `<li style="grid-template-columns:18px minmax(0,1fr) auto">${intelIco(ico(i))}<span>` +
+      (href(i) ? `<a href="${href(i)}">${esc(i.label)}</a>` : `<b style="font-weight:400">${esc(i.label)}</b>`) +
+      `<small>${i.kind === "entry" ? esc((INTEL_KIND[i.entry_kind] || "entry").toLowerCase()) : `${i.n} entr${i.n === 1 ? "y" : "ies"}`}` +
+      `${i.updated ? ` · <span class="ix-upd-mark">${i.kind === "entry" ? "updated" : `${i.updated} updated`}</span>` : ""}</small></span>` +
+      `<button type="button" class="op-x" data-unw="${n}" aria-label="Stop watching ${esc(i.label)}" title="Stop watching">✕</button></li>`).join("")}</ul>`;
+  p.querySelectorAll("[data-unw]").forEach(b => b.onclick = async () => {
+    const i = d.items[+b.dataset.unw];
+    try { await intelApi("/api/intel/watch", { method: "PUT", body: { target_kind: i.kind, target_id: String(i.id), on: false } }); intelFeed(box); }
+    catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
+  });
 }
 
 // ---- LIBRARY ----
@@ -28873,7 +29031,7 @@ async function intelLibrary(box) {
   const f = intelLibFilter;
   const chip = (k, label, ico) => `<button type="button" class="ix-chip" data-k="${k}" aria-pressed="${f.kind === k}">` +
     `${ico ? intelIco(ico) : ""}${label}</button>`;
-  box.innerHTML = `<div class="panel" id="ix-drafts" hidden></div>` +
+  box.innerHTML = `<div class="panel" id="ix-drafts" hidden></div><div class="panel" id="ix-cols-p" hidden></div>` +
     `<div class="panel"><div class="ix-panel-h"><h2>LIBRARY</h2>` +
     `<span class="muted">The org's procedures and tactics, by activity · ` +
     `<a href="/api/intel/export" download title="Every published entry you can open, as Markdown with its images (a .zip)">Export (.zip)</a></span></div>` +
@@ -28885,6 +29043,7 @@ async function intelLibrary(box) {
     `</select></div><div class="ix-list" id="ix-lib">${intelStatus("Loading…")}</div></div>`;
   box.querySelectorAll(".ix-chip").forEach(b => b.onclick = () => { f.kind = b.dataset.k; intelLibrary(box); });
   $("ix-act").onchange = (ev) => { f.activity = ev.target.value; intelLibrary(box); };
+  intelCollectionsPanel();
   const q = new URLSearchParams({ section: "library" });
   if (f.kind) q.set("kind", f.kind);
   if (f.activity) q.set("activity", f.activity);
@@ -28919,6 +29078,145 @@ async function intelLibrary(box) {
     el.innerHTML = order.map(g => `<div class="ix-group-h"><span>${esc(g)}</span><span>${groups.get(g).length}</span></div>` +
       groups.get(g).slice().sort((a, b) => b.doctrine - a.doctrine).map(e => intelRow(e)).join("")).join("");
   } catch (err) { const el = $("ix-lib"); if (el) el.innerHTML = intelStatus(err.message, true); }
+}
+
+// ---- COLLECTIONS (#50 slice 8b): ordered reading lists ----
+// A collection gathers entries into a handbook ("New member handbook") with
+// its own title and summary. Anyone can make one; its owner (or an admin)
+// edits it. An event can require a whole collection. Entries a reader can't
+// open (restricted, hidden, archived) silently drop out of what they see.
+async function intelCollectionsPanel() {
+  const el = $("ix-cols-p"); if (!el) return;
+  let d;
+  try { d = await intelApi("/api/intel/collections"); } catch { el.hidden = true; return; }
+  if (!$("ix-cols-p")) return;
+  const cols = d.collections;
+  el.hidden = false;
+  el.innerHTML = `<div class="ix-panel-h"><h2>COLLECTIONS</h2><span class="muted">Ordered reading lists: a handbook, a crew brief, a survival guide</span></div>` +
+    `<div class="ix-cols">${cols.map(c => `<a class="ix-col" href="#/intel/c/${+c.id}">` +
+      `<span class="ix-t">${intelIco("collection")}<span>${esc(c.title)}</span></span>` +
+      (c.summary ? `<span class="ix-teaser">${esc(c.summary)}</span>` : "") +
+      `<small>${c.n} entr${c.n === 1 ? "y" : "ies"}${c.owner.name ? ` · ${esc(c.owner.name)}` : ""}` +
+      `${c.visibility === "restricted" ? " · restricted" : ""}${c.watching ? " · watching" : ""}</small></a>`).join("")}` +
+    `<a class="ix-col ix-col-new" href="#/intel/c/new">${intelIco("plus")}<span>New collection</span>` +
+    (cols.length ? "" : `<small>Put entries in the order a new member should read them.</small>`) + `</a></div>`;
+}
+async function intelCollectionView(box) {
+  const id = intelRoute.cid;
+  box.innerHTML = `<div class="panel">${intelStatus("Loading…")}</div>`;
+  let c;
+  try { c = await intelApi(`/api/intel/collections/${id}`); }
+  catch (err) { box.innerHTML = `<div class="panel">${intelStatus(err.status === 404 ? "This collection doesn't exist, or it was deleted." : err.message, true)}</div>`; return; }
+  if (intelCurSec !== "collection" || intelRoute.cid !== id) return;
+  const n = c.entries.length, pct = n ? Math.round(100 * c.read_count / n) : 0;
+  const upd = c.entries.filter(e => e.watch_updated).length;
+  const rows = c.entries.map(e => {
+    const meta = [intelMarkTags(e), e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "",
+      e.activity ? `<span class="ix-tag">${esc(e.activity)}</span>` : "",
+      e.kind !== "report" && e.kind !== "rfi" ? intelPatchChip(e.patch) : "",
+      e.watch_updated ? `<span class="ix-upd-mark">${intelIco("watch", "ix-ico sm")}Updated</span>` : ""].filter(Boolean).join("");
+    return `<a class="ix-row${e.read ? " read" : ""}" href="${intelHref(e)}">` +
+      `<span class="ix-kind">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind] || e.kind)}</span>` +
+      `<span class="ix-body"><span class="ix-t">${esc(e.title)}</span>` +
+      (e.summary ? `<div class="ix-teaser">${esc(e.summary)}</div>` : "") + (meta ? `<span class="ix-meta">${meta}</span>` : "") + `</span>` +
+      `<span class="ix-read-st${e.read ? " ok" : ""}">${e.read ? "Read" : ""}</span></a>`;
+  }).join("");
+  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/library">Library</a><span>/</span><span>Collection</span></nav>` +
+    `<div class="ix-grid solo"><article class="panel ix-article"><div class="ix-head">` +
+    `<div class="ix-kindline">${intelIco("collection")}Collection${c.visibility === "restricted" ? `<span class="ix-tag restricted">Restricted</span>` : ""}</div>` +
+    `<h1 class="ix-title">${esc(c.title)}</h1>` + (c.summary ? `<p class="ix-lead">${esc(c.summary)}</p>` : "") +
+    `<div class="ix-by">${c.owner.name ? `<span>Owner <b>${esc(c.owner.name)}</b></span>` : ""}` +
+    `<span><b>${n}</b> entr${n === 1 ? "y" : "ies"}</span>` +
+    (n ? `<span>You've read <b>${c.read_count}</b> of ${n}</span>` : "") +
+    (upd ? `<span class="ix-upd-mark">${upd} updated since you looked</span>` : "") +
+    (c.updated_at ? `<span>Changed ${esc(intelWhen(c.updated_at))}</span>` : "") + `</div>` +
+    (n ? `<div class="ix-progress" role="progressbar" aria-label="Read" aria-valuemin="0" aria-valuemax="${n}" aria-valuenow="${c.read_count}"><i style="width:${pct}%"></i></div>` : "") +
+    `<div class="ix-actions"><button type="button" class="ix-btn" id="ix-cwatch" aria-pressed="${c.watching}" ` +
+    `title="${c.watching ? "Stop watching" : "Your feed marks each entry in it when it changes"}">${intelIco("watch")}${c.watching ? "Watching" : "Watch"}</button>` +
+    (c.can_edit ? `<a class="ix-primary" href="#/intel/c/${+c.id}/edit">${intelIco("edit")}Edit</a>` : "") +
+    `<button type="button" class="ix-btn" id="ix-copy">${intelIco("link")}Copy link</button></div></div>` +
+    `<div class="ix-list ix-ol" style="padding:6px 14px 14px">${rows || intelStatus(c.can_edit ? "Nothing in it yet. Edit it to add entries, or use Add to collection on any entry." : "Nothing in it yet.")}</div>` +
+    `</article></div>`;
+  $("ix-copy").onclick = () => intelCopy(location.origin + location.pathname + `#/intel/c/${+c.id}`, "Link copied");
+  $("ix-cwatch").onclick = async () => {
+    try {
+      await intelApi("/api/intel/watch", { method: "PUT", body: { target_kind: "collection", target_id: String(c.id), on: !c.watching } });
+      intelToast(c.watching ? "Stopped watching." : "Watching. Your feed marks each entry in it when it changes.");
+      intelCollectionView(box);
+    } catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
+  };
+  intelSetTab("library");
+  window.scrollTo(0, 0);
+}
+async function intelCollectionEditor(box) {
+  const id = intelRoute.cid, add = intelRoute.add;
+  box.innerHTML = `<div class="panel">${intelStatus("Loading…")}</div>`;
+  let c = { title: "", summary: "", visibility: "org", entries: [] };
+  try {
+    if (id) c = await intelApi(`/api/intel/collections/${id}`);
+    else if (add) { const e = await intelApi(`/api/intel/entries/${add}`); c.entries = [e]; }
+  } catch (err) { box.innerHTML = `<div class="panel">${intelStatus(err.message, true)}</div>`; return; }
+  if (intelCurSec !== "colledit" || intelRoute.cid !== id) return;
+  if (id && !c.can_edit) { location.hash = `#/intel/c/${id}`; return; }
+  const cleared = intelAccess().cleared;
+  let items = c.entries.map(e => ({ id: e.id, kind: e.kind, title: e.title }));
+  box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/library">Library</a><span>/</span>` +
+    (id ? `<a href="#/intel/c/${+id}">${esc(c.title)}</a><span>/</span><span>Edit</span>` : `<span>New collection</span>`) + `</nav>` +
+    `<form class="panel ix-ced" id="ix-ced"><div class="ix-panel-h"><h2>${id ? "EDIT COLLECTION" : "NEW COLLECTION"}</h2>` +
+    `<span class="muted">An ordered reading list. Readers see it in this order.</span></div>` +
+    `<label class="ix-lbl"><span>TITLE</span><input class="ti" id="ix-ced-t" maxlength="140" required placeholder="e.g. New member handbook" value="${esc(c.title)}"></label>` +
+    `<label class="ix-lbl"><span>SUMMARY <i>optional</i></span><textarea class="ti" id="ix-ced-s" rows="2" maxlength="600" ` +
+    `placeholder="Who it's for and when to read it">${esc(c.summary || "")}</textarea></label>` +
+    (cleared || c.visibility === "restricted" ? `<label class="ix-lbl"><span>MARKING</span><select class="ti" id="ix-ced-v">` +
+      `<option value="org"${c.visibility !== "restricted" ? " selected" : ""}>Org: every member</option>` +
+      `<option value="restricted"${c.visibility === "restricted" ? " selected" : ""}>Restricted: cleared members only</option></select></label>` : "") +
+    `<div class="ix-lbl"><span>ENTRIES <i id="ix-ced-n"></i></span></div><ol class="ix-ced-list" id="ix-ced-list"></ol>` +
+    `<div class="ix-pick"><input class="ti" id="ix-ced-q" autocomplete="off" placeholder="Add an entry: find it by title…" aria-label="Add an entry">` +
+    `<ul id="ix-ced-res" hidden></ul></div>` +
+    `<div class="row" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">` +
+    (id ? `<button type="button" class="ix-btn" id="ix-ced-del">Delete collection</button>` : "") +
+    `<span style="flex:1"></span><a class="ix-btn" href="${id ? `#/intel/c/${+id}` : "#/intel/library"}">Cancel</a>` +
+    `<button type="submit" class="ix-primary" id="ix-ced-go">${id ? "Save" : "Create collection"}</button></div>` +
+    `<p class="ix-save-err" id="ix-ced-err" role="alert" hidden></p></form>`;
+  const draw = () => {
+    $("ix-ced-n").textContent = `${items.length} of 50`;
+    $("ix-ced-list").innerHTML = items.length ? items.map((it, i) => `<li><span class="n">${String(i + 1).padStart(2, "0")}</span>` +
+      `<span class="t">${intelIco(it.kind, "ix-ico sm")}<span>${esc(it.title)}</span></span><span class="acts">` +
+      `<button type="button" class="ix-btn" data-mv="${i}" data-d="-1" aria-label="Move ${esc(it.title)} up"${i ? "" : " disabled"}>↑</button>` +
+      `<button type="button" class="ix-btn" data-mv="${i}" data-d="1" aria-label="Move ${esc(it.title)} down"${i < items.length - 1 ? "" : " disabled"}>↓</button>` +
+      `<button type="button" class="ix-btn" data-rm="${i}" aria-label="Remove ${esc(it.title)}">✕</button></span></li>`).join("")
+      : `<li class="muted" style="grid-template-columns:1fr">Nothing yet. Find entries below; they're added at the end.</li>`;
+    $("ix-ced-list").querySelectorAll("[data-mv]").forEach(b => b.onclick = () => {
+      const i = +b.dataset.mv, j = i + +b.dataset.d;
+      [items[i], items[j]] = [items[j], items[i]]; draw();
+      const again = $("ix-ced-list").querySelector(`[data-mv="${j}"][data-d="${b.dataset.d}"]`) || $("ix-ced-list").querySelector(`[data-mv="${j}"]`);
+      if (again) again.focus();
+    });
+    $("ix-ced-list").querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { items.splice(+b.dataset.rm, 1); draw(); $("ix-ced-q").focus(); });
+  };
+  draw();
+  intelRefPicker($("ix-ced-q"), $("ix-ced-res"),
+    (x) => x.kind === "entry" && !items.some(it => it.id === +x.key.split(":")[1]),
+    (it) => { if (items.length >= 50) return; items.push({ id: +it.key.split(":")[1], kind: it.entry_kind, title: it.label }); draw(); $("ix-ced-q").focus(); });
+  if ($("ix-ced-del")) $("ix-ced-del").onclick = async () => {
+    const ok = await confirmDialog(`“${c.title}” goes, and so do watches on it and any event's “read this collection”. The entries in it stay.`,
+      { title: "Delete this collection?", confirmLabel: "Delete", danger: true });
+    if (!ok) return;
+    try { await intelApi(`/api/intel/collections/${id}`, { method: "DELETE" }); location.hash = "#/intel/library"; }
+    catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
+  };
+  $("ix-ced").onsubmit = async (ev) => {
+    ev.preventDefault();
+    const body = { title: $("ix-ced-t").value, summary: $("ix-ced-s").value, entry_ids: items.map(it => it.id) };
+    if ($("ix-ced-v")) body.visibility = $("ix-ced-v").value;
+    $("ix-ced-go").disabled = true;
+    try {
+      const d = await intelApi(id ? `/api/intel/collections/${id}` : "/api/intel/collections", { method: id ? "PUT" : "POST", body });
+      location.hash = `#/intel/c/${d.id}`;
+    } catch (err) { $("ix-ced-go").disabled = false; const x = $("ix-ced-err"); x.textContent = err.message; x.hidden = false; }
+  };
+  intelSetTab("library");
+  if (!id) $("ix-ced-t").focus();
 }
 
 // ---- DOSSIERS (#50 slice 4) ----
@@ -29034,7 +29332,7 @@ function intelDossierView(box, e) {
     `<a class="ix-btn" href="${repHref}">${intelIco("report")}${isOrg ? "Report a sighting" : "Report from here"}</a>` +
     `<a class="ix-btn" href="${askHref}">${intelIco("rfi")}Ask about it</a>` +
     `<a class="ix-btn" href="${intelHref(e)}/history">${intelIco("history")}History</a>` +
-    `<button type="button" class="ix-btn" id="ix-copy">${intelIco("link")}Copy link</button><span class="sp"></span>` +
+    `<button type="button" class="ix-btn" id="ix-copy">${intelIco("link")}Copy link</button>${intelMemberBtns(e)}<span class="sp"></span>` +
     (e.can_manage ? `<button type="button" class="ix-btn" id="ix-archive">Archive</button>` : "") + `</div>`;
   const edited = `<div class="ix-dx-edited"><span>open edit · any member</span>` +
     `<span>rev ${e.rev}${e.last_editor ? ` by <b>${esc(e.last_editor)}</b>` : ""} · ${esc(intelWhen(e.updated_at || e.revised_at || e.published_at))}</span>` +
@@ -29105,12 +29403,12 @@ function intelDossierView(box, e) {
         (!sv.ores.length && !(sv.harvestables || []).length ? `<p class="ix-dx-none" style="padding:0">Nothing logged here yet.</p>` : "") + `</div>`;
     }
   }
-  rail += intelDiscordPanel(e);
+  rail += intelMemberRail(e) + intelDiscordPanel(e);
   rail += `<div class="panel"><h2>DETAILS</h2><dl class="ix-dl"><dt>KIND</dt><dd>${isOrg ? "Org dossier" : "Place dossier"}</dd>` +
     (e.system ? `<dt>SYSTEM</dt><dd>${esc(e.system)}</dd>` : "") +
     `<dt>STARTED</dt><dd>${esc(e.published_at ? new Date(e.published_at).toLocaleDateString() : "")} by ${esc(e.author_name || "?")}</dd>` +
     `<dt>MARKING</dt><dd>${e.visibility === "restricted" ? "Restricted: cleared members only" : "Org: every member"}</dd>` +
-    (e.tags.length ? `<dt>TAGS</dt><dd>${e.tags.map(t => `<span class="ix-tag free">#${esc(t)}</span>`).join("")}</dd>` : "") + `</dl></div>`;
+    (e.tags.length ? `<dt>TAGS</dt><dd>${e.tags.map(t => intelTagChip(e, t)).join("")}</dd>` : "") + `</dl></div>`;
   box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/dossiers">Dossiers</a><span>/</span>` +
     `<span>${isOrg ? "Orgs" : "Places"}</span></nav>` +
     `<div class="ix-grid"><div style="display:grid;gap:14px;min-width:0"><article class="panel ix-article"><div class="ix-head">` +
@@ -29152,6 +29450,185 @@ function intelDiscordPanel(e) {
     (d.thread_url ? `<a class="ix-btn ix-dc-go" href="${esc(d.thread_url)}" target="_blank" rel="noopener">${intelIco("comment")}Discuss in Discord</a>` : "") + `</div>`;
 }
 
+// ---- WATCH · COLLECT · FLAG (#50 slice 8b) ----
+// Every published entry page (generic, dossier, RFI) carries the same three
+// controls. Watching = an "updated" marker in the feed and its Watching
+// filter, never a notification. A flag goes to the admins only (nothing is
+// posted, the author isn't told who). Admins also get Hide: the entry is kept
+// but leaves every list, and only admins can open it; reversible, logged.
+const INTEL_FLAG_REASONS = { outdated: "Out of date", inaccurate: "Inaccurate",
+  inappropriate: "Inappropriate", names_player: "Names a player" };
+const INTEL_FLAG_HINT = {
+  outdated: "The game changed and this hasn't caught up.",
+  inaccurate: "Something in it is wrong.",
+  inappropriate: "Breaks the org's conduct rules.",
+  names_player: "Describes an individual player. Intel covers ships, orgs and behaviour, not people." };
+function intelMemberBtns(e) {
+  if (e.status !== "published" || !e.watching) return "";
+  const w = e.watching.entry;
+  return `<button type="button" class="ix-btn" id="ix-watch" aria-pressed="${w}" ` +
+    `title="${w ? "Stop watching" : "Your feed marks it when someone revises, answers or comments on it"}">${intelIco("watch")}${w ? "Watching" : "Watch"}</button>` +
+    `<button type="button" class="ix-btn" id="ix-collect" aria-expanded="false" aria-controls="ix-collect-pop">${intelIco("collection")}Add to collection</button>` +
+    `<button type="button" class="ix-btn" id="ix-flag" aria-expanded="false" aria-controls="ix-flag-pop"` +
+    `${e.my_flag ? ` aria-pressed="true" title="You flagged it: ${esc(INTEL_FLAG_REASONS[e.my_flag.reason] || "")}"` : ""}>${intelIco("flag")}${e.my_flag ? "Flagged" : "Flag"}</button>`;
+}
+// A free tag on the entry page doubles as its Watch toggle.
+function intelTagChip(e, t) {
+  if (!e.watching) return `<span class="ix-tag free">#${esc(t)}</span>`;
+  const on = (e.watching.tags || []).includes(t);
+  return `<button type="button" class="ix-tag free ix-tagw" data-watch-tag="${esc(t)}" aria-pressed="${on}" ` +
+    `title="${on ? `Stop watching #${esc(t)}` : `Watch #${esc(t)}: your feed marks every entry tagged with it when it changes`}">` +
+    `${on ? intelIco("watch") : ""}#${esc(t)}</button>`;
+}
+function intelMemberRail(e) {
+  const out = [];
+  const cin = (e.collections || {}).in || [];
+  if (cin.length) out.push(`<div class="panel"><div class="ix-panel-h"><h2>IN COLLECTIONS</h2><span class="muted">${cin.length}</span></div>` +
+    `<ul class="ix-rl">${cin.map(c => `<li>${intelIco("collection")}<span><a href="#/intel/c/${+c.id}">${esc(c.title)}</a></span></li>`).join("")}</ul></div>`);
+  if (e.flag_counts) {
+    const c = e.flag_counts, bits = [c.outdated ? `${c.outdated} out of date` : "", c.inaccurate ? `${c.inaccurate} inaccurate` : ""].filter(Boolean);
+    out.push(`<div class="panel"><h2>FLAGGED</h2><p class="muted" style="margin:6px 0 0;font-size:12px;line-height:1.5">` +
+      `Members flagged it as ${esc(bits.join(" and "))}. Check it, then edit it` +
+      `${e.patch && e.patch.stale ? " or confirm it's still valid" : ""}. An admin clears the flags.</p></div>`);
+  }
+  const admin = currentMe && currentMe.is_admin;
+  if (admin && ((e.flags || []).length || e.hidden || (e.mod_log || []).length)) {
+    const flags = e.flags || [];
+    out.push(`<div class="panel" id="ix-mod-p"><div class="ix-panel-h"><h2>MODERATION</h2><span class="muted">admins only</span></div>` +
+      (flags.length ? `<ul class="ix-modlog">${flags.map(f => `<li><span><span class="ix-tag flag">${esc(INTEL_FLAG_REASONS[f.reason] || f.reason)}</span> ` +
+        `from <b>${esc(f.by)}</b></span>${f.note ? `<q>${esc(f.note)}</q>` : ""}<small>${esc(intelWhen(f.at))}</small></li>`).join("")}</ul>` +
+        `<p style="margin:10px 0 0"><a class="ix-btn" href="#/intel/review">Open the flag queue</a></p>` : "") +
+      ((e.mod_log || []).length ? `<h2 style="margin-top:14px">LOG</h2><ul class="ix-modlog">${e.mod_log.map(m =>
+        `<li><span><b>${m.action === "hide" ? "Hidden" : "Unhidden"}</b> by ${esc(m.by)}</span>${m.note ? `<q>${esc(m.note)}</q>` : ""}` +
+        `<small>${esc(new Date(m.at).toLocaleString())}</small></li>`).join("")}</ul>` : "") + `</div>`);
+  }
+  return out.join("");
+}
+// The flag form: reason chips + an optional note. `host` gets the form;
+// `target` = {kind: "entry"|"comment", id}; `mine` = an open flag of yours.
+function intelFlagForm(host, target, mine, onDone) {
+  let reason = mine ? mine.reason : "";
+  host.hidden = false;
+  host.innerHTML = `<form class="ix-inpop-in"><div class="ix-lbl"><span>WHAT'S WRONG?</span></div>` +
+    `<div class="ix-reasons" role="radiogroup" aria-label="Reason">${Object.entries(INTEL_FLAG_REASONS).map(([k, l]) =>
+      `<button type="button" class="ix-chip" role="radio" data-r="${k}" aria-checked="${reason === k}" aria-pressed="${reason === k}">${esc(l)}</button>`).join("")}</div>` +
+    `<p class="muted ix-flag-hint" style="margin:0">${esc(reason ? INTEL_FLAG_HINT[reason] : "Pick one. Flags go to the org's admins, not the author, and nothing is posted.")}</p>` +
+    `<label class="ix-lbl"><span>NOTE <i>optional</i></span><textarea class="ti" rows="2" maxlength="500" ` +
+    `placeholder="e.g. 4.4 moved the landing pads to the north side">${esc(mine && mine.note || "")}</textarea></label>` +
+    `<div class="row"><small class="muted">${mine ? "Sending again replaces your flag." : "Admins see who flagged it."}</small><span class="sp"></span>` +
+    `<button type="button" class="ix-btn" data-x>Cancel</button><button type="submit" class="ix-primary" disabled>${mine ? "Update flag" : "Send flag"}</button></div>` +
+    `<p class="ix-save-err" role="alert" hidden></p></form>`;
+  const f = host.querySelector("form"), go = f.querySelector("[type=submit]");
+  go.disabled = !reason;
+  f.querySelectorAll("[data-r]").forEach(b => b.onclick = () => {
+    reason = b.dataset.r;
+    f.querySelectorAll("[data-r]").forEach(x => { const on = x === b; x.setAttribute("aria-checked", on); x.setAttribute("aria-pressed", on); });
+    f.querySelector(".ix-flag-hint").textContent = INTEL_FLAG_HINT[reason];
+    go.disabled = false;
+  });
+  f.querySelector("[data-x]").onclick = () => { host.hidden = true; host.innerHTML = ""; onDone(false); };
+  f.onsubmit = async (ev) => {
+    ev.preventDefault();
+    if (!reason) return;
+    go.disabled = true;
+    try {
+      await intelApi("/api/intel/flags", { method: "POST", body: { target_kind: target.kind, target_id: target.id,
+        reason, note: f.querySelector("textarea").value } });
+      host.hidden = true; host.innerHTML = "";
+      intelToast("Flag sent to the admins. Thanks.");
+      onDone(true);
+    } catch (err) { go.disabled = false; const x = f.querySelector(".ix-save-err"); x.textContent = err.message; x.hidden = false; }
+  };
+  const first = f.querySelector(`[data-r="${reason}"]`) || f.querySelector("[data-r]"); first.focus();
+}
+function intelBindMember(box, e, rerender) {
+  const fail = (err) => intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000);
+  const acts = box.querySelector(".ix-head .ix-actions");
+  const admin = currentMe && currentMe.is_admin;
+  // Hidden: say so above everything (only admins ever get this far).
+  const art = box.querySelector(".ix-article");
+  if (e.hidden && art && !art.querySelector(".hidden-entry")) {
+    art.insertAdjacentHTML("afterbegin", `<div class="ix-banner hidden-entry">${intelIco("hidden")}<span><b>Hidden</b> by ${esc(e.hidden.by || "an admin")} ` +
+      `${esc(intelWhen(e.hidden.at))}. It's out of every list and search, and only admins can open it.</span>` +
+      `<button type="button" class="ix-btn" id="ix-unhide">Unhide</button></div>`);
+  }
+  if (admin && acts && e.status === "published" && !e.hidden && !acts.querySelector("#ix-hide"))
+    acts.insertAdjacentHTML("beforeend", `<button type="button" class="ix-btn" id="ix-hide" title="Keep it, but only admins can see it">${intelIco("hidden")}Hide</button>`);
+  const hideIt = async (hidden) => {
+    const note = await promptDialog(hidden ? "It leaves every list and search, and only admins can open it. You can unhide it any time; both are logged."
+      : "It goes back where it was, for everyone who could see it before.",
+      { title: hidden ? "Hide this entry?" : "Unhide this entry?", confirmLabel: hidden ? "Hide" : "Unhide",
+        placeholder: hidden ? "Why (for the log), e.g. names a player" : "Optional note for the log" });
+    if (note === null) return;
+    try { await intelApi(`/api/intel/entries/${e.id}/hide`, { method: "POST", body: { hidden, note } }); rerender(); }
+    catch (err) { fail(err); }
+  };
+  if ($("ix-hide")) $("ix-hide").onclick = () => hideIt(true);
+  if ($("ix-unhide")) $("ix-unhide").onclick = () => hideIt(false);
+  if (!e.watching || !acts) return;
+  if (!$("ix-member-pops")) acts.insertAdjacentHTML("afterend", `<div id="ix-member-pops"><div class="ix-inpop" id="ix-collect-pop" hidden></div>` +
+    `<div class="ix-inpop" id="ix-flag-pop" hidden></div></div>`);
+  const watch = async (kind, id, on) => {
+    try { await intelApi("/api/intel/watch", { method: "PUT", body: { target_kind: kind, target_id: String(id), on } }); }
+    catch (err) { fail(err); return false; }
+    return true;
+  };
+  $("ix-watch").onclick = async () => {
+    const on = !e.watching.entry;
+    if (!(await watch("entry", e.id, on))) return;
+    e.watching.entry = on;
+    const b = $("ix-watch");
+    b.setAttribute("aria-pressed", on);
+    b.innerHTML = `${intelIco("watch")}${on ? "Watching" : "Watch"}`;
+    b.title = on ? "Stop watching" : "Your feed marks it when someone revises, answers or comments on it";
+    intelToast(on ? "Watching. Your feed marks it when it changes." : "Stopped watching.");
+  };
+  box.querySelectorAll("[data-watch-tag]").forEach(b => b.onclick = async () => {
+    const t = b.dataset.watchTag, on = !(e.watching.tags || []).includes(t);
+    if (!(await watch("tag", t, on))) return;
+    e.watching.tags = on ? [...(e.watching.tags || []), t] : e.watching.tags.filter(x => x !== t);
+    b.outerHTML = intelTagChip(e, t);
+    intelBindMember(box, e, rerender);
+    intelToast(on ? `Watching #${esc(t)}.` : `Stopped watching #${esc(t)}.`);
+  });
+  const pop = (id, btn) => {
+    const p = $(id), open = p.hidden;
+    ["ix-collect-pop", "ix-flag-pop"].forEach(x => { if (x !== id) { $(x).hidden = true; $(x).innerHTML = ""; } });
+    ["ix-collect", "ix-flag"].forEach(x => $(x).setAttribute("aria-expanded", x === btn && open));
+    if (!open) { p.hidden = true; p.innerHTML = ""; }
+    return open;
+  };
+  $("ix-collect").onclick = () => {
+    if (!pop("ix-collect-pop", "ix-collect")) return;
+    const p = $("ix-collect-pop"), mine = (e.collections || {}).mine || [];
+    p.hidden = false;
+    p.innerHTML = `<div class="ix-lbl"><span>ADD TO A COLLECTION</span></div>` +
+      (mine.length ? `<ul class="ix-inpop-list">${mine.map(c => `<li><button type="button" class="ix-btn" data-col="${+c.id}"${c.has ? " disabled" : ""}>` +
+        `<span>${esc(c.title)}</span><small>${c.has ? `${intelIco("check", "ix-ico sm")}in it` : "Add"}</small></button></li>`).join("")}</ul>`
+        : `<p class="muted" style="margin:0">You don't have a collection yet. A collection is an ordered reading list, like a New member handbook.</p>`) +
+      `<div class="row"><a class="ix-btn" href="#/intel/c/new?add=${+e.id}">${intelIco("plus")}New collection with this</a><span class="sp"></span>` +
+      `<button type="button" class="ix-btn" data-x>Close</button></div>`;
+    p.querySelector("[data-x]").onclick = () => { pop("ix-collect-pop", "ix-collect"); $("ix-collect").focus(); };
+    p.querySelectorAll("[data-col]").forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      try {
+        const d = await intelApi(`/api/intel/collections/${b.dataset.col}/add`, { method: "POST", body: { entry_id: e.id } });
+        e.collections = d.collections;
+        b.querySelector("small").innerHTML = `${intelIco("check", "ix-ico sm")}in it`;
+        intelToast(`Added to “${esc(b.querySelector("span").textContent)}”.`);
+      } catch (err) { b.disabled = false; fail(err); }
+    });
+    const first = p.querySelector("button:not([disabled]), a"); if (first) first.focus();
+  };
+  $("ix-flag").onclick = () => {
+    if (!pop("ix-flag-pop", "ix-flag")) return;
+    intelFlagForm($("ix-flag-pop"), { kind: "entry", id: e.id }, e.my_flag, (sent) => {
+      $("ix-flag").setAttribute("aria-expanded", "false");
+      if (sent) rerender(); else $("ix-flag").focus();
+    });
+  };
+}
+
 // ---- DISCUSSION (#50 slice 5): comments under every entry, RFI answers ----
 // Flat, one level of reply. Markdown, rendered + sanitized by the server.
 // Every write returns the entry, and the page re-renders from it.
@@ -29169,7 +29646,8 @@ function intelThreadHtml(e, opts = {}) {
       acc && opts.promote ? opts.promote(c) : "",
       !isReply ? `<button type="button" class="ix-link" data-reply="${c.id}">${intelIco("comment", "ix-ico sm")}Reply</button>` : "",
       c.mine ? `<button type="button" class="ix-link" data-edit="${c.id}">Edit</button>` : "",
-      c.can_delete ? `<button type="button" class="ix-link" data-del="${c.id}">Delete</button>` : ""].filter(Boolean).join("");
+      c.can_delete ? `<button type="button" class="ix-link" data-del="${c.id}">Delete</button>` : "",
+      c.can_flag ? `<button type="button" class="ix-link" data-flag-c="${c.id}">${intelIco("flag", "ix-ico sm")}Flag</button>` : ""].filter(Boolean).join("");
     return `<article class="ix-cmt${isReply ? " reply" : ""}${c.kind === "answer" ? " answer" : ""}${acc ? " accepted" : ""}" id="ix-c-${c.id}">` +
       `<div class="ix-cmt-h"><b>${esc(c.by)}</b><span>${esc(intelWhen(c.at))}</span>` +
       (c.edited_at && !c.deleted ? `<span title="Edited ${esc(new Date(c.edited_at).toLocaleString())}">edited</span>` : "") +
@@ -29194,6 +29672,7 @@ function intelThreadHtml(e, opts = {}) {
       `<p class="ix-save-err" id="ix-cmt-err" role="alert" hidden></p></form>` : "") + `</section>`;
 }
 function intelBindThread(box, e, rerender) {
+  intelBindMember(box, e, rerender);
   const th = box.querySelector("#ix-thread"); if (!th) return;
   th.querySelectorAll(".ix-cmt-body").forEach(b => intelHydrate(b, null));
   const fail = (err) => intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000);
@@ -29249,6 +29728,14 @@ function intelBindThread(box, e, rerender) {
     try { await call(`/api/intel/entries/${e.id}/accept`, { method: "POST", body: { comment_id: b.dataset.accept ? +b.dataset.accept : null } }, "ix-thread"); }
     catch (err) { fail(err); }
   });
+  th.querySelectorAll("[data-flag-c]").forEach(b => b.onclick = () => {
+    const acts = b.closest(".ix-cmt-acts");
+    let host = acts.nextElementSibling;
+    if (!host || !host.classList.contains("ix-inpop")) {
+      host = document.createElement("div"); host.className = "ix-inpop"; acts.after(host);
+    } else if (!host.hidden) { host.hidden = true; host.innerHTML = ""; return; }
+    intelFlagForm(host, { kind: "comment", id: +b.dataset.flagC }, null, (sent) => { if (!sent) b.focus(); });
+  });
 }
 
 // ---- RFI (#50 slice 5): questions, open ones first ----
@@ -29298,7 +29785,7 @@ async function intelRfiView(box, e) {
   const actions = `<div class="ix-actions">` +
     (e.can_edit ? `<a class="ix-btn" href="${intelHref(e)}/edit">${intelIco("edit")}Edit question</a>` : "") +
     `<a class="ix-primary" href="#ix-cmt-form" id="ix-answer-go">${intelIco("comment")}Answer</a>` +
-    `<button type="button" class="ix-btn" id="ix-copy">${intelIco("link")}Copy link</button><span class="sp"></span>` +
+    `<button type="button" class="ix-btn" id="ix-copy">${intelIco("link")}Copy link</button>${intelMemberBtns(e)}<span class="sp"></span>` +
     (e.can_manage ? `<button type="button" class="ix-btn" id="ix-archive">Archive</button>` : "") + `</div>`;
   const linked = (e.linked_from || []).length ? `<div class="panel"><div class="ix-panel-h"><h2>LINKED FROM</h2><span class="muted">${e.linked_from.length}</span></div>` +
     `<ul class="ix-rl">${e.linked_from.map(b => `<li>${intelIco(b.kind)}<span><a href="${intelHref(b)}">${esc(b.title)}</a>` +
@@ -29314,7 +29801,7 @@ async function intelRfiView(box, e) {
     `</div>${actions}</div>` +
     (e.body_md && e.body_md.trim() ? `<div class="ix-prose" id="ix-prose">${e.body_html}</div>` : `<div id="ix-prose"></div>`) +
     intelThreadHtml(e, { promote }) + `</article>` +
-    `<aside class="ix-rail"><div class="panel" id="ix-loc-p" hidden></div>${linked}${intelDiscordPanel(e)}` +
+    `<aside class="ix-rail"><div class="panel" id="ix-loc-p" hidden></div>${linked}${intelMemberRail(e)}${intelDiscordPanel(e)}` +
     `<div class="panel"><h2>HOW IT WORKS</h2><p class="muted" style="font-size:12px;line-height:1.5;margin:0">` +
     `Anyone can answer. ${esc(e.author_name || "The asker")} (or an admin) marks the answer that answered it. ` +
     `An accepted answer can be promoted into a procedure${h.location_ref ? " or onto the place's dossier" : ""}, crediting both of you.` +
@@ -29604,7 +30091,7 @@ async function intelEntryView(box) {
       (st.dispute ? ` · <span class="bad">${st.dispute} disputed</span>` : "") + `</span>` : "") +
     (isReport && e.can_update ? `<button type="button" class="ix-btn" id="ix-add-upd" aria-expanded="false" aria-controls="ix-upd-form">${intelIco("addend")}Add update</button>` : "") +
     (inReview ? "" : `<a class="ix-btn" href="${intelHref(e)}/history">${intelIco("history")}History</a>`) +
-    `<button type="button" class="ix-btn" id="ix-copy">${intelIco("link")}Copy link</button>` +
+    `<button type="button" class="ix-btn" id="ix-copy">${intelIco("link")}Copy link</button>${intelMemberBtns(e)}` +
     `<span class="sp"></span>${doctrineBtn}` +
     (e.can_manage && !inReview ? `<button type="button" class="ix-btn" id="ix-archive">Archive</button>` : "") + `</div>`;
   const sal = (k, l, v) => v ? `<dt><span class="k">${k}</span><span class="l">${l}</span></dt><dd>${v}</dd>` : "";
@@ -29649,7 +30136,7 @@ async function intelEntryView(box) {
     (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") +
     `<div class="ix-by">${by}</div>${actions}</div>${salute}${e.kind === "debrief" ? intelOpRecordHtml(e.header) : ""}${intelReadBar(e)}` +
     `<div class="ix-prose" id="ix-prose">${e.body_html || `<p class="muted">This entry has no body yet.</p>`}</div>${updates}${e.thread ? intelThreadHtml(e) : ""}</article>` +
-    `<aside class="ix-rail">${repRail}<div class="panel" id="ix-toc-p" hidden><h2>ON THIS PAGE</h2><ul class="ix-toc" id="ix-toc"></ul></div>${linked}${intelDiscordPanel(e)}` +
+    `<aside class="ix-rail">${repRail}<div class="panel" id="ix-toc-p" hidden><h2>ON THIS PAGE</h2><ul class="ix-toc" id="ix-toc"></ul></div>${linked}${intelMemberRail(e)}${intelDiscordPanel(e)}` +
     `<div class="panel"><h2>DETAILS</h2><dl class="ix-dl">` +
     `<dt>KIND</dt><dd>${esc(INTEL_KIND[e.kind])}</dd>` +
     (isReport && !e.activity ? "" : `<dt>ACTIVITY</dt><dd>${esc(e.activity || "General")}</dd>`) +
@@ -29659,7 +30146,7 @@ async function intelEntryView(box) {
       : `<dt>PUBLISHED</dt><dd>${esc(e.published_at ? new Date(e.published_at).toLocaleDateString() : "")} by ${esc(e.author_name || "?")}</dd>`) +
     `<dt>MARKING</dt><dd>${e.visibility === "restricted" ? "Restricted: cleared members only" : "Org: every member"}</dd>` +
     (e.doctrine ? `<dt>DOCTRINE</dt><dd>Marked by ${esc(e.doctrine_by || "a reviewer")}</dd>` : "") +
-    (e.tags.length ? `<dt>TAGS</dt><dd>${e.tags.map(t => `<span class="ix-tag free">#${esc(t)}</span>`).join("")}</dd>` : "") +
+    (e.tags.length ? `<dt>TAGS</dt><dd>${e.tags.map(t => intelTagChip(e, t)).join("")}</dd>` : "") +
     `</dl></div></aside></div>`;
   const prose = $("ix-prose");
   intelHydrate(prose, e);
@@ -29773,12 +30260,16 @@ async function intelReportRail(e) {
 // The gate is optional and per kind (Settings › Members). A reviewer approves a
 // new entry (rev 1) or a waiting major revision, or returns it with a note.
 async function intelReviewQueue(box) {
-  box.innerHTML = `<div class="panel"><div class="ix-panel-h"><h2>REVIEW</h2>` +
+  const admin = currentMe && currentMe.is_admin;
+  box.innerHTML = (admin ? `<div class="panel" id="ix-fq-p"><div class="ix-panel-h"><h2>FLAGS</h2>` +
+    `<span class="muted">What members flagged, oldest first · admins only</span></div><div id="ix-fq">${intelStatus("Loading…")}</div></div>` : "") +
+    `<div class="panel"><div class="ix-panel-h"><h2>REVIEW</h2>` +
     `<span class="muted" id="ix-rq-sub"></span></div><div class="ix-list" id="ix-rq">${intelStatus("Loading…")}</div></div>`;
+  if (admin) intelFlagQueue();
   try {
     const d = await intelApi("/api/intel/review");
     const el = $("ix-rq"); if (!el) return;
-    intelSetReviewCount(d.items.length);
+    intelSetReviewCount(d.items.length + (d.flags_open || 0));
     $("ix-rq-sub").textContent = d.required
       ? `Reviewed before publishing: ${d.kinds.map(k => INTEL_KIND[k].toLowerCase() + "s").join(", ") || "nothing"}`
       : "The review gate is off; anything left here was submitted while it was on";
@@ -29794,6 +30285,63 @@ async function intelReviewQueue(box) {
         `<span class="ix-when">${esc(intelWhen(i.submitted_at))}</span></a>`;
     }).join("") : intelStatus("Nothing waiting. Submissions show up here, oldest first.");
   } catch (err) { const el = $("ix-rq"); if (el) el.innerHTML = intelStatus(err.message, true); }
+}
+// The flag queue (slice 8b): open flags grouped by what they're about, each
+// with the calls an admin can make; then the hidden entries (the only list
+// they appear in) and the last few decisions.
+async function intelFlagQueue(data) {
+  const el = $("ix-fq"); if (!el) return;
+  let d = data;
+  if (!d) { try { d = await intelApi("/api/intel/flags"); } catch (err) { el.innerHTML = intelStatus(err.message, true); return; } }
+  if (!$("ix-fq")) return;
+  const R = d.reasons || INTEL_FLAG_REASONS;
+  const ent = (x) => x ? `<a href="${intelHref(x)}">${esc(x.title)}</a>${x.hidden ? ` <span class="ix-tag restricted">Hidden</span>` : ""}` : "<span class=\"muted\">a deleted entry</span>";
+  const groups = d.open.map((g, n) => {
+    const isC = g.target_kind === "comment";
+    return `<article><div class="what">${intelIco(isC ? "comment" : (g.entry || {}).kind || "procedure")}` +
+      (isC ? `<span>Comment by <b>${esc(g.comment.by)}</b> on ${ent(g.entry)}</span>` : `<span>${ent(g.entry)}</span>`) +
+      `<small class="muted">${esc((INTEL_KIND[(g.entry || {}).kind] || "").toLowerCase())}</small></div>` +
+      (isC ? `<blockquote>${g.comment.deleted ? "<i>Already deleted.</i>" : esc(g.comment.excerpt)}</blockquote>` : "") +
+      `<ul>${g.flags.map(f => `<li><span class="ix-tag flag">${esc(R[f.reason] || f.reason)}</span> <b>${esc(f.by)}</b> · ${esc(intelWhen(f.at))}` +
+        `${f.note ? ` · “${esc(f.note)}”` : ""}</li>`).join("")}</ul>` +
+      `<div class="row">` + (isC
+        ? `<button type="button" class="ix-btn" data-fq="${n}" data-act="delete"${g.comment.deleted ? " disabled" : ""}>Delete comment</button>`
+        : `<button type="button" class="ix-btn" data-fq="${n}" data-act="hide"${g.entry && g.entry.hidden ? " disabled" : ""}>${intelIco("hidden")}Hide entry</button>`) +
+      `<button type="button" class="ix-btn" data-fq="${n}" data-act="dismiss">Dismiss: nothing to do</button>` +
+      (g.entry ? `<a class="ix-btn" href="${intelHref(g.entry)}">Open</a>` : "") + `</div></article>`;
+  }).join("");
+  const verdict = { dismissed: "dismissed", hidden: "hid the entry", deleted: "deleted the comment" };
+  el.innerHTML = (d.open.length ? `<div class="ix-flagq">${groups}</div>` : intelStatus("No open flags. When a member flags an entry or a comment, it lands here.")) +
+    (d.hidden.length ? `<h2 style="margin-top:16px">HIDDEN · ${d.hidden.length}</h2><ul class="ix-rl">${d.hidden.map(h =>
+      `<li style="grid-template-columns:18px minmax(0,1fr) auto">${intelIco("hidden")}<span><a href="${intelHref(h)}">${esc(h.title)}</a>` +
+      `<small>hidden by ${esc(h.by || "an admin")} · ${esc(intelWhen(h.at))}</small></span>` +
+      `<button type="button" class="ix-btn" data-unhide="${+h.id}">Unhide</button></li>`).join("")}</ul>` : "") +
+    (d.resolved.length ? `<details style="margin-top:14px"><summary class="muted" style="font-size:12px;cursor:pointer">Recent decisions</summary>` +
+      `<ul class="ix-rl">${d.resolved.map(r => `<li>${intelIco("check")}<span>${esc(r.resolved_by || "An admin")} ${esc(verdict[r.resolution] || r.resolution || "resolved")}` +
+      `<small>${esc(R[r.reason] || r.reason)} from ${esc(r.by)} · ${r.entry ? esc(r.entry.title) : r.target_kind} · ${esc(intelWhen(r.at))}</small></span></li>`).join("")}</ul></details>` : "");
+  const fail = (err) => intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000);
+  el.querySelectorAll("[data-fq]").forEach(b => b.onclick = async () => {
+    const g = d.open[+b.dataset.fq], act = b.dataset.act;
+    let note = null;
+    if (act === "hide") {
+      note = await promptDialog("It leaves every list and search, and only admins can open it. Unhide it any time; both are logged.",
+        { title: `Hide “${(g.entry || {}).title || "this entry"}”?`, confirmLabel: "Hide", placeholder: "Why (for the log)" });
+      if (note === null) return;
+    } else if (act === "delete") {
+      if (!(await confirmDialog(`${g.comment.by}'s text is removed. Replies to it stay.`, { title: "Delete this comment?", confirmLabel: "Delete", danger: true }))) return;
+    }
+    b.disabled = true;
+    try {
+      const nd = await intelApi("/api/intel/flags/resolve", { method: "POST", body: { target_kind: g.target_kind, target_id: g.target_id, action: act, note } });
+      intelFlagQueue(nd);
+      intelApi("/api/intel/review").then(r => intelSetReviewCount(r.items.length + (r.flags_open || 0))).catch(() => {});
+    } catch (err) { b.disabled = false; fail(err); }
+  });
+  el.querySelectorAll("[data-unhide]").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try { await intelApi(`/api/intel/entries/${b.dataset.unhide}/hide`, { method: "POST", body: { hidden: false } }); intelFlagQueue(); }
+    catch (err) { b.disabled = false; fail(err); }
+  });
 }
 function intelSetReviewCount(n) {
   const el = $("intel-review-n"); if (el) el.textContent = n ? String(n) : "";
