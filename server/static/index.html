@@ -30775,7 +30775,11 @@ async function intelEntryView(box) {
     `<dt>KIND</dt><dd>${esc(INTEL_KIND[e.kind])}</dd>` +
     (isReport && !e.activity ? "" : `<dt>ACTIVITY</dt><dd>${esc(e.activity || "General")}</dd>`) +
     (e.system ? `<dt>SYSTEM</dt><dd>${esc(e.system)}</dd>` : "") +
-    (isReport ? "" : `<dt>PATCH</dt><dd>${p.written ? `${esc(p.written)}${p.confirmed ? " (re-confirmed)" : ""}` : "Not recorded"}` +
+    // A built-in app guide is about the app, not a game version: SOURCE replaces PATCH.
+    (e.app_guide ? `<dt>SOURCE</dt><dd>${e.app_guide.managed ? "Built-in app guide" : "Built-in app guide, edited by the org"}` +
+      (e.can_edit ? `<small>${e.app_guide.managed ? "The app updates it when the app changes. Once someone edits it, it's the org's and the app stops updating it."
+        : "The app no longer updates it, so your org's changes stay."}</small>` : "") + `</dd>` :
+    isReport ? "" : `<dt>PATCH</dt><dd>${p.written ? `${esc(p.written)}${p.confirmed ? " (re-confirmed)" : ""}` : "Not recorded"}` +
       `<small>${p.written ? "The game version it was written for. It turns amber when the org's game moves on." : "Written before the app knew the game version. Re-confirm it to stamp the current patch."}</small></dd>`) +
     (inReview ? `<dt>SUBMITTED</dt><dd>${esc(new Date(e.submitted_at).toLocaleDateString())} by ${esc(e.author_name || "?")}</dd>`
       : `<dt>PUBLISHED</dt><dd>${esc(e.published_at ? new Date(e.published_at).toLocaleDateString() : "")} by ${esc(e.author_name || "?")}</dd>`) +
