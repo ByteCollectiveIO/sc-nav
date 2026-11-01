@@ -4509,6 +4509,21 @@
     .ix-tb { min-width: 40px; height: 40px; }
     .ix-new-menu .ix-new-it { padding-top: 11px; padding-bottom: 11px; }
   }
+  /* Writing guide: the accepted image services. */
+  .ix-gd-hosts { border-collapse: collapse; margin: 6px 0 4px; max-width: 72ch; width: 100%; font-size: 13px; }
+  .ix-gd-hosts th, .ix-gd-hosts td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--border-soft); }
+  .ix-gd-hosts thead th { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .ix-gd-hosts tbody th { font-weight: 600; }
+  .ix-gd-hosts tbody th { white-space: nowrap; width: 1%; padding-right: 18px; }
+  .ix-gd-hosts td .muted { display: block; font-size: 12px; margin-top: 4px; }
+  .ix-gd-hosts code { white-space: nowrap; }
+  @media (max-width: 560px) {
+    .ix-gd-hosts thead { display: none; }
+    .ix-gd-hosts tr { display: block; padding: 7px 0; border-bottom: 1px solid var(--border-soft); }
+    .ix-gd-hosts th, .ix-gd-hosts td { display: block; border: 0; padding: 0 2px; width: auto; }
+    .ix-gd-hosts td { margin-top: 4px; }
+    .ix-gd-hosts code { white-space: normal; word-break: break-all; }
+  }
 </style>
 </head>
 <body>
@@ -29377,6 +29392,14 @@ const INTEL_GUIDE_SECS = [["kinds", "Which kind to write"], ["procedure", "Write
   ["report", "Write a report"], ["dossier", "Start a dossier"], ["question", "Ask a question"], ["markdown", "Formatting"],
   ["images", "Add an image"], ["links", "Link places, ops and entries"], ["paste", "Bring in an existing doc"], ["revise", "Change it later"]];
 let intelGuideSpy = null;   // the guide's scroll-spy, disconnected on every re-render
+// Where an entry's image links may come from, for the guide's "Add an image"
+// table. One row per host in app.IMAGE_PREVIEW_HOSTS (a test holds them in step).
+const INTEL_IMAGE_SERVICES = [
+  ["imgur", "https://i.imgur.com/", "Screenshots. No account needed."],
+  ["ImgBB", "https://i.ibb.co/", "Screenshots. No account needed."],
+  ["Postimages", "https://i.postimg.cc/", "Screenshots. No account needed."],
+  ["X (Twitter)", "https://pbs.twimg.com/", "An image in a post: open it, right-click, Copy image address."],
+  ["RSI", "https://media.robertsspaceindustries.com/", "Images on the RSI website, such as Comm-Links. Links on robertsspaceindustries.com itself work too."]];
 const INTEL_GUIDE_MD = [
   ["Headings", "Split a long entry into sections. Each one gets a link you can share and a line in ON THIS PAGE.", "## Loadout\n### Ships"],
   ["Bold, italic, underline, strikethrough", "Underline is two underscores, the same as Discord.", "**Bold**, *italic*, __underline__ and ~~struck out~~"],
@@ -29457,7 +29480,10 @@ async function intelGuide(box) {
     `<p>A blank line starts a new paragraph. A single <code>#</code> heading becomes a section heading too: the entry's title is the top level.</p>` +
     `<p class="muted">Not available, on purpose: colours, fonts and sizes, HTML, videos or other sites embedded in the page, and @mentions that ping (use <b>Announce in Discord</b> for that).</p>`;
   const images = `<p>Images aren't uploaded: an entry stores a <b>link</b> to an image hosted somewhere else, and each reader loads the images in an entry with one click. ` +
-    `The link has to come from <b>imgur</b>, <b>ImgBB</b>, <b>Postimages</b>, <b>X</b> or <b>RSI</b>.</p>` +
+    `The link has to come from one of these services:</p>` +
+    `<table class="ix-gd-hosts"><thead><tr><th scope="col">Service</th><th scope="col">The link starts with</th></tr></thead><tbody>` +
+    INTEL_IMAGE_SERVICES.map(([n, pre, note]) => `<tr><th scope="row">${esc(n)}</th><td><code>${esc(pre)}</code><span class="muted">${esc(note)}</span></td></tr>`).join("") +
+    `</tbody></table><p class="muted">A link from anywhere else won't show. Ask an admin if your org needs another service.</p>` +
     step([`Upload your screenshot to <a href="https://imgur.com/upload" target="_blank" rel="noopener noreferrer">imgur.com</a> (no account needed).`,
       `Right-click the uploaded image and pick <b>Copy image address</b>. The link should start with <code>https://i.imgur.com/</code> and end in <code>.png</code> or <code>.jpg</code>. ` +
         `A link to the imgur <i>page</i> (<code>imgur.com/abc123</code>) won't work.`,

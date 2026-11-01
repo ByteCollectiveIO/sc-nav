@@ -17042,6 +17042,17 @@ class IntelImportExportTests(unittest.TestCase):
         self.assertIsNone(db.intel_file_get(fid))
         self.assertFalse(path.exists())
 
+    def test_the_writing_guide_lists_every_accepted_image_host(self):
+        # The guide's "Add an image" table is hand-written in the SPA; it must
+        # name exactly the hosts the server lets an entry load from.
+        import re
+        src = (Path(app.__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
+        block = src[src.index("const INTEL_IMAGE_SERVICES"):src.index("const INTEL_GUIDE_MD")]
+        listed = set(re.findall(r'"https://([a-z0-9.-]+)/"', block))
+        for host in app.IMAGE_PREVIEW_HOSTS:
+            self.assertIn(host, block)
+        self.assertLessEqual(listed, set(app.IMAGE_PREVIEW_HOSTS))
+
     def test_rendered_entries_never_carry_an_img_tag(self):
         import intel_md
         html = intel_md.render("![a](https://i.imgur.com/a.png) ![b](/api/intel/files/3)",
