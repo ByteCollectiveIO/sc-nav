@@ -17248,6 +17248,102 @@ class IntelDebriefReadingTests(unittest.TestCase):
         self.assertEqual(len(self.client.get(f"/api/events/{ev}").json()["reading"]), 1)
 
 
+class IntelAppGuideTests(unittest.TestCase):
+    """Built-in app guides (#50): one procedure per app, seeded from
+    server/intel_guides/. The rule under test: an org's edit always wins. The
+    app refreshes a guide only while its live revision is still the app's own,
+    never re-creates one the org deleted, and leaves archived ones alone."""
+
+    CLEAR_ROLE = IntelReportTests.CLEAR_ROLE
+    AUTHOR, OTHER, ADMIN, CLEARED = (IntelReportTests.AUTHOR, IntelReportTests.OTHER,
+                                     IntelReportTests.ADMIN, IntelReportTests.CLEARED)
+    setUpClass = IntelReportTests.__dict__["setUpClass"]
+    tearDownClass = IntelReportTests.__dict__["tearDownClass"]
+    as_ = IntelReportTests.as_
+
+    def setUp(self):
+        IntelReportTests.setUp(self)
+        with db._conn:
+            for t in ("intel_collections", "intel_collection_items"):
+                db._conn.execute(f"DELETE FROM {t}")
+        db.set_setting("intel_guides", "")
+
+    def src(self, key, body, title=None, order=1):
+        text = f"---\nkey: {key}\ntitle: {title or key.title()}\n---\n{body}"
+        return {"key": key, "title": title or key.title(), "summary": f"About {key}.",
+                "tags": ["app-guide", "tutorial", key], "activity": None, "order": order,
+                "body": body.strip() + "\n", "hash": app.hashlib.sha256(text.encode()).hexdigest()}
+
+    def test_shipped_guides_parse_and_render_clean(self):
+        guides = app._intel_guide_sources()
+        self.assertGreaterEqual(len(guides), 11)
+        keys = {g["key"] for g in guides}
+        for g in guides:
+            self.assertIn("app-guide", g["tags"], g["key"])
+            self.assertTrue(g["summary"], g["key"])
+            for ref in app._INTEL_GUIDE_REF_RE.findall(g["body"]):
+                self.assertIn(ref, keys, f"{g['key']} links to a guide that doesn't exist: {ref}")
+            self.assertNotRegex(g["body"], "[\u2013\u2014]", f"{g['key']} has an em/en dash")
+            self.assertLess(len(g["body"]), app.intel_md.MAX_BODY_CHARS)
+
+    def test_seed_publishes_links_and_lists_the_guides(self):
+        did = app.seed_intel_guides([self.src("nav", "Read [[guide:cargo]]."), self.src("cargo", "Hauling.", order=2)])
+        self.assertEqual(did, {"nav": "created", "cargo": "created"})
+        ids = {k: v["id"] for k, v in app._intel_guide_state()["guides"].items()}
+        e = db.intel_get_entry(ids["nav"])
+        self.assertEqual((e["status"], e["kind"], e["rev"]), ("published", "procedure", 1))
+        self.assertIn(f"[[entry:{ids['cargo']}]]", e["body_md"])
+        self.assertEqual(e["tags"], ["app-guide", "nav", "tutorial"])
+        r = self.client.get(f"/api/intel/entries/{ids['nav']}")
+        self.assertEqual(r.json()["app_guide"], {"key": "nav", "managed": True})
+        coll = db.intel_collection_get(app._intel_guide_state()["collection"])
+        self.assertEqual(coll["entry_ids"], [ids["nav"], ids["cargo"]])
+        # A second boot with the same text is a no-op.
+        self.assertEqual(app.seed_intel_guides([self.src("nav", "Read [[guide:cargo]]."),
+                                                self.src("cargo", "Hauling.", order=2)]),
+                         {"nav": "unchanged", "cargo": "unchanged"})
+
+    def test_untouched_guide_takes_the_new_text_an_edited_one_never_does(self):
+        app.seed_intel_guides([self.src("nav", "v1"), self.src("cargo", "v1")])
+        ids = {k: v["id"] for k, v in app._intel_guide_state()["guides"].items()}
+        self.as_(self.ADMIN)
+        r = self.client.put(f"/api/intel/entries/{ids['cargo']}",
+                            json={"title": "Cargo", "body": "Our org's way.", "base_rev": 1})
+        self.assertEqual(r.status_code, 200, r.text)
+        did = app.seed_intel_guides([self.src("nav", "v2"), self.src("cargo", "v2")])
+        self.assertEqual(did, {"nav": "updated", "cargo": "edited"})
+        self.assertEqual(db.intel_get_entry(ids["nav"])["body_md"], "v2\n")
+        self.assertEqual(db.intel_get_entry(ids["cargo"])["body_md"], "Our org's way.")
+        self.assertFalse(self.client.get(f"/api/intel/entries/{ids['cargo']}").json()["app_guide"]["managed"])
+        # Reverting to the app's text is still the org's choice: it stays theirs.
+        r = self.client.post(f"/api/intel/entries/{ids['cargo']}/revert", json={"rev": 1, "base_rev": 2})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(app.seed_intel_guides([self.src("cargo", "v3")])["cargo"], "edited")
+        self.assertNotIn("v3", db.intel_get_entry(ids["cargo"])["body_md"])
+
+    def test_deleted_or_archived_guides_stay_gone(self):
+        app.seed_intel_guides([self.src("nav", "v1"), self.src("cargo", "v1")])
+        st = app._intel_guide_state()
+        ids = {k: v["id"] for k, v in st["guides"].items()}
+        self.as_(self.ADMIN)
+        self.assertEqual(self.client.delete(f"/api/intel/entries/{ids['nav']}").status_code, 200)
+        with db._conn:
+            db._conn.execute("DELETE FROM intel_entries WHERE id=?", (ids["cargo"],))
+        did = app.seed_intel_guides([self.src("nav", "v2"), self.src("cargo", "v2")])
+        self.assertEqual(did, {"nav": "archived", "cargo": "removed"})
+        self.assertEqual(db.intel_get_entry(ids["nav"])["status"], "archived")
+        self.assertIsNone(db.intel_get_entry(ids["cargo"]))
+
+    def test_a_later_guide_joins_the_list_but_a_removed_one_is_not_put_back(self):
+        app.seed_intel_guides([self.src("nav", "v1"), self.src("cargo", "v1")])
+        st = app._intel_guide_state()
+        cid, ids = st["collection"], {k: v["id"] for k, v in st["guides"].items()}
+        db.intel_collection_update(cid, {}, [ids["cargo"]])          # the org took nav out
+        app.seed_intel_guides([self.src("nav", "v1"), self.src("cargo", "v1"), self.src("ops", "v1", order=3)])
+        ops = app._intel_guide_state()["guides"]["ops"]["id"]
+        self.assertEqual(db.intel_collection_get(cid)["entry_ids"], [ids["cargo"], ops])
+
+
 class IntelPinTests(unittest.TestCase):
     """Admins pin entries and #tags; the Feed and Library show them to every
     member, filtered per viewer."""

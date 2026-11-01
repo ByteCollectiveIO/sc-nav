@@ -3807,6 +3807,14 @@ async def _start_presence_broadcaster():
         _drop_legacy_notify_images()
     except Exception as exc:   # housekeeping must never block startup
         print(f"[sc-nav] legacy announcement-image cleanup skipped: {exc}")
+    # Built-in app guides (#50): created once, refreshed only while nobody has
+    # edited them. Never fatal to startup.
+    try:
+        did = seed_intel_guides()
+        if any(v in ("created", "updated") for v in did.values()):
+            print(f"[sc-nav] app guides: {did}")
+    except Exception as exc:
+        print(f"[sc-nav] app guide seeding skipped: {exc}")
 
 
 def nav_summary(state: dict | None) -> dict | None:
@@ -17979,6 +17987,8 @@ def _intel_entry_view(e: dict, user: dict) -> dict:
         # The hosts an admin could turn on: with image_load empty, the page
         # explains why these images show as links instead of saying nothing.
         "image_hosts": list(IMAGE_PREVIEW_HOSTS),
+        # A built-in app guide: the page says whether the app still keeps it current.
+        "app_guide": intel_guide_info(e["id"]) if e["author_id"] == INTEL_GUIDE_AUTHOR else None,
     })
     uid = str(user["id"])
     pend = db.intel_pending(e["id"]) if e["status"] == "published" else None
@@ -18883,6 +18893,145 @@ def _intel_run_import(import_id: int, admin: dict, publish: bool, meta: dict) ->
     db.intel_import_update(import_id, {
         "status": status, "files_total": len(report["entries"]), "files_skipped": len(report["skipped"]),
         "bytes_stored": report["bytes_stored"], "report": json.dumps(report)})
+
+
+# ---- built-in app guides (#50) ----
+# One "how to use this app" PROCEDURE per app, shipped as Markdown in
+# server/intel_guides/ and seeded into the Library at startup so a new member
+# finds them where the org keeps its other procedures. They are ordinary
+# entries: the org edits, archives or deletes them like anything else.
+#
+# THE RULE: an org's change always wins. The setting `intel_guides` records, per
+# guide, the entry id, the revision the APP last wrote and a hash of the shipped
+# source. A newer shipped text is written ONLY while the entry's live revision
+# is still the app's own (nobody has saved over it) and nothing is waiting in
+# review. Once anyone edits it, the entry is the org's and the app never writes
+# it again. A deleted guide is never re-created, and an archived or hidden one
+# is left alone. `[[guide:<key>]]` in a source resolves to `[[entry:<id>]]`.
+INTEL_GUIDES_DIR = Path(__file__).parent / "intel_guides"
+INTEL_GUIDE_AUTHOR = "app-guide"           # not a Discord id: no member can be it
+INTEL_GUIDE_AUTHOR_NAME = "Built-in guide"
+INTEL_GUIDE_COLLECTION = ("New member guides",
+                          "How to use each of the org's apps. Start with the one you'll use first.")
+_INTEL_GUIDE_REF_RE = re.compile(r"\[\[guide:([a-z0-9-]{1,40})\]\]")
+
+
+def _intel_guide_sources() -> list[dict]:
+    """The shipped guides, in launcher order (`order` in the front matter)."""
+    out = []
+    for p in sorted(INTEL_GUIDES_DIR.glob("*.md")):
+        text = p.read_text(encoding="utf-8")
+        meta, body = intel_files.parse_front_matter(text)
+        key, title = str(meta.get("key") or p.stem), " ".join(str(meta.get("title") or "").split())[:140]
+        if not title or not body.strip():
+            print(f"[sc-nav] app guide {p.name} skipped: no title or body")
+            continue
+        out.append({"key": key, "title": title, "summary": str(meta.get("summary") or "")[:300],
+                    "tags": _intel_tags([str(t) for t in (meta.get("tags") or [])]),
+                    "activity": meta.get("activity") if meta.get("activity") in PLAYSTYLE_TAGS else None,
+                    "order": int(meta.get("order") or 99), "body": body.strip() + "\n",
+                    "hash": hashlib.sha256(text.encode("utf-8")).hexdigest()})
+    return sorted(out, key=lambda g: (g["order"], g["key"]))
+
+
+def _intel_guide_state() -> dict:
+    try:
+        st = json.loads(db.get_setting("intel_guides", "") or "{}")
+        return st if isinstance(st, dict) else {}
+    except ValueError:
+        return {}
+
+
+def seed_intel_guides(sources: list[dict] | None = None) -> dict:
+    """Create or refresh the built-in app guides. Returns what it did per key
+    ("created" | "updated" | "edited" | "unchanged" | "removed" | "archived")."""
+    sources = _intel_guide_sources() if sources is None else sources
+    state, done = _intel_guide_state(), {}
+    guides = state.setdefault("guides", {})
+    now = _now_iso()
+    # Pass 1: an id for every guide first, so guides can link to each other.
+    for g in sources:
+        if g["key"] not in guides:
+            eid = db.intel_create_entry({
+                "kind": "procedure", "status": "draft", "visibility": "org", "title": g["title"],
+                "slug": intel_md.section_slug(g["title"]), "summary": g["summary"], "body_md": "",
+                "author_id": INTEL_GUIDE_AUTHOR, "author_name": INTEL_GUIDE_AUTHOR_NAME,
+                "owner_id": None, "maintainers": [], "created_at": now, "updated_at": now}, [], [])
+            guides[g["key"]] = {"id": eid, "rev": 0, "hash": None}
+    db.set_setting("intel_guides", json.dumps(state))
+    ids = {k: v["id"] for k, v in guides.items()}
+    titles = {g["key"]: g["title"] for g in sources}
+
+    def resolve(m):
+        k = m.group(1)
+        return f"[[entry:{ids[k]}]]" if k in ids else titles.get(k, k)
+
+    # Pass 2: publish new guides, refresh untouched ones.
+    for g in sources:
+        rec = guides[g["key"]]
+        e = db.intel_get_entry(rec["id"])
+        if e is None:
+            done[g["key"]] = "removed"
+            continue
+        if e["status"] == "archived" or e.get("hidden_at"):
+            done[g["key"]] = "archived"
+            continue
+        if rec.get("edited") or e["rev"] != rec["rev"] or db.intel_pending(rec["id"]) \
+                or (rec["rev"] == 0 and e["status"] != "draft"):
+            rec["edited"] = rec.get("edited") or e["rev"] != rec["rev"]
+            done[g["key"]] = "edited"
+            continue
+        if rec["hash"] == g["hash"]:
+            done[g["key"]] = "unchanged"
+            continue
+        body = _INTEL_GUIDE_REF_RE.sub(resolve, g["body"])
+        r = intel_md.render(body, IMAGE_PREVIEW_HOSTS)
+        refs = _intel_link_rows(r["refs"], None)
+        fields = {"title": g["title"], "slug": intel_md.section_slug(g["title"]), "summary": g["summary"],
+                  "body_md": body, "body_html": r["html"], "activity": g["activity"],
+                  "updated_at": now, "revised_at": now}
+        first = rec["rev"] == 0
+        if first:
+            fields.update({"status": "published", "published_at": now})
+        try:
+            rec["rev"] = db.intel_save_revision(rec["id"], None if first else rec["rev"], fields,
+                                                g["tags"], refs, {
+                "editor_id": INTEL_GUIDE_AUTHOR, "editor_name": INTEL_GUIDE_AUTHOR_NAME,
+                "note": "Built-in app guide" if first else "Built-in app guide updated",
+                "major": first, "created_at": now})
+        except db.IntelConflict:     # someone saved in between: it's theirs now
+            rec["edited"] = True
+            done[g["key"]] = "edited"
+            continue
+        rec["hash"] = g["hash"]
+        done[g["key"]] = "created" if first else "updated"
+        db.set_setting("intel_guides", json.dumps(state))
+    # The reading list, made once. Later guides are appended while it exists;
+    # one the org took out of it isn't put back (only never-listed keys are).
+    listed = state.setdefault("listed", [])
+    new = [ids[g["key"]] for g in sources if g["key"] not in listed and done.get(g["key"]) == "created"]
+    coll = db.intel_collection_get(state["collection"]) if state.get("collection") else None
+    if new and coll is None and not state.get("collection"):
+        state["collection"] = db.intel_collection_create(
+            {"title": INTEL_GUIDE_COLLECTION[0], "summary": INTEL_GUIDE_COLLECTION[1],
+             "owner_id": None, "created_at": now}, new)
+    elif new and coll is not None:
+        for eid in new:
+            db.intel_collection_add(coll["id"], eid, now)
+    listed += [g["key"] for g in sources if done.get(g["key"]) == "created"]
+    db.set_setting("intel_guides", json.dumps(state))
+    return done
+
+
+def intel_guide_info(entry_id: int) -> dict | None:
+    """For the entry page: is this a built-in guide, and does the app still
+    keep it current (False once the org has edited it)?"""
+    for key, rec in _intel_guide_state().get("guides", {}).items():
+        if rec.get("id") == entry_id:
+            e = db.intel_get_entry(entry_id)
+            managed = bool(e) and not rec.get("edited") and e["rev"] == rec.get("rev")
+            return {"key": key, "managed": managed}
+    return None
 
 
 def intel_files_sweep(now: datetime | None = None) -> dict:
