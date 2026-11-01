@@ -2461,7 +2461,7 @@ _ACTIVITY_MAX = 60   # free-text "what I'm up to" on the online roster
 # /api/playstyles so both surfaces draw from the same source of truth.
 PLAYSTYLE_TAGS = [
     "hauling", "mining", "salvage", "trading", "bunkers", "bounty",
-    "PvE", "PvP", "FPS", "flight", "exploration", "medical/rescue",
+    "PvE", "PvP", "FPS", "flight", "exploration", "surveying", "medical/rescue",
     "RP", "casual", "serious", "new-player-friendly",
 ]
 # Member profile (#30): persistent declared playstyles, capped — a profile is a
@@ -17967,6 +17967,7 @@ def _intel_entry_view(e: dict, user: dict) -> dict:
                         for m in e.get("maintainers") or []],
         "can_edit": _intel_can_edit(e, user), "can_manage": _intel_can_manage(e, user),
         "created_at": e.get("created_at"),
+        "pinned": any(p["id"] == e["id"] for p in _intel_pins_raw()["entries"]),
         "doctrine_by": _resolve_member_name(e["doctrine_by"], None) if e.get("doctrine_by") else None,
         "is_reviewer": intel_reviewer(user),
         # Would this member's publish / major revision go to review?
@@ -18238,6 +18239,83 @@ def _intel_entry_collections(e: dict, user: dict) -> dict:
     mine = [{"id": c["id"], "title": c["title"], "has": c["id"] in have}
             for c in db.intel_collections_list(cleared) if _intel_collection_can_edit(c, user)]
     return {"in": [{"id": c["id"], "title": c["title"]} for c in inn], "mine": mine}
+
+
+# ---- Pins: what admins want every member to read ----
+# Admins pin entries and #tags; the Feed and the Library show them in a PINNED
+# panel at the top for everyone, filtered per viewer (a RESTRICTED or hidden
+# entry never shows to someone who can't open it). Stored as one small JSON
+# setting: a handful of items, written rarely, read with every list.
+INTEL_PINS_KEY = "intel_pins"
+INTEL_PIN_MAX = 8            # per kind (entries, tags)
+INTEL_PIN_TAG_SHOW = 5       # newest entries listed under a pinned tag
+
+
+def _intel_pins_raw() -> dict:
+    try:
+        d = json.loads(db.get_setting(INTEL_PINS_KEY) or "{}")
+    except ValueError:
+        d = {}
+    ents = [p for p in d.get("entries") or [] if isinstance(p, dict) and isinstance(p.get("id"), int)]
+    tags = [p for p in d.get("tags") or [] if isinstance(p, dict) and isinstance(p.get("tag"), str)]
+    return {"entries": ents, "tags": tags}
+
+
+def _intel_pins_view(user: dict) -> dict:
+    raw = _intel_pins_raw()
+    ok = intel_cleared(user)
+    current = _intel_patch_now()
+    by_id = {e["id"]: e for e in db.intel_list(ids=[p["id"] for p in raw["entries"]], restricted_ok=ok)} \
+        if raw["entries"] else {}
+    entries = [{**_intel_summary(by_id[p["id"]], current), "pin_note": p.get("note") or ""}
+               for p in raw["entries"] if p["id"] in by_id]
+    tags = []
+    now = _now_iso()
+    for p in raw["tags"]:
+        rows = db.intel_list(tag=p["tag"], order="recent", restricted_ok=ok, live_at=now, limit=200)
+        tags.append({"tag": p["tag"], "note": p.get("note") or "", "n": len(rows),
+                     "entries": [{"id": e["id"], "kind": e["kind"], "title": e["title"], "slug": e["slug"]}
+                                 for e in rows[:INTEL_PIN_TAG_SHOW]]})
+    return {"entries": entries, "tags": tags}
+
+
+class IntelPinIn(BaseModel):
+    target_kind: Literal["entry", "tag"]
+    target_id: str = Field(min_length=1, max_length=40)
+    on: bool = True
+    note: str = Field(default="", max_length=140)
+
+
+@app.put("/api/intel/pins")
+def intel_pin(body: IntelPinIn, user: dict = Depends(require_admin)):
+    """Admins only. Pinning again updates the note and keeps the place."""
+    raw = _intel_pins_raw()
+    tid, note = body.target_id.strip(), " ".join(body.note.split())
+    if body.target_kind == "entry":
+        if not tid.isdigit():
+            raise HTTPException(status_code=422, detail="Not an entry.")
+        key, lst, val = "id", raw["entries"], int(tid)
+        if body.on:
+            e = _intel_require(val, user)
+            if e["status"] != "published":
+                raise HTTPException(status_code=409, detail="Only a published entry can be pinned.")
+    else:
+        tags = _intel_tags([tid])
+        if not tags:
+            raise HTTPException(status_code=422, detail="Not a tag.")
+        key, lst, val = "tag", raw["tags"], tags[0]
+    have = next((p for p in lst if p[key] == val), None)
+    if body.on:
+        if have:
+            have["note"] = note
+        else:
+            if len(lst) >= INTEL_PIN_MAX:
+                raise HTTPException(status_code=422, detail=f"Up to {INTEL_PIN_MAX} pinned {'entries' if key == 'id' else 'tags'}. Unpin one first.")
+            lst.append({key: val, "note": note, "by": str(user["id"]), "at": _now_iso()})
+    elif have:
+        lst.remove(have)
+    db.set_setting(INTEL_PINS_KEY, json.dumps(raw))
+    return _intel_pins_view(user)
 
 
 class IntelWatchIn(BaseModel):
@@ -19548,6 +19626,7 @@ def intel_entries(section: str = "library", kind: str = "", activity: str = "",
     extra: dict = {}
     if section == "library":
         rows = db.intel_list(kinds=kinds or INTEL_LIBRARY_KINDS, order="title", **kw)
+        extra["pins"] = _intel_pins_view(user)
     elif section == "feed":
         uid = str(user["id"])
         watched = db.intel_watched_entries(uid)
@@ -19566,6 +19645,7 @@ def intel_entries(section: str = "library", kind: str = "", activity: str = "",
             rows = db.intel_list(kinds=kinds, order="recent", limit=150,
                                  live_at=None if expired else _now_iso(), **kw)
         extra["seen"] = db.intel_feed_seen(user["id"])
+        extra["pins"] = _intel_pins_view(user)
         extra["watch_updated"] = sorted(updated)
         current = _intel_patch_now()
         extra["out_of_date"] = [
@@ -19601,6 +19681,19 @@ def intel_entries(section: str = "library", kind: str = "", activity: str = "",
 # pipes + rules, emphasis, quote marks, task boxes). The \x02/\x03 match
 # markers are untouched.
 _MD_NOISE_RE = re.compile(r"-{3,}|\[[ xX]\]|[#|*_>`~]+")
+# A table reads as run-on words once its pipes go ("Role Ship Escort Arrow"):
+# drop the |---| rule, end each row at its line break and keep a separator
+# between cells.
+_MD_TABLE_RULE_RE = re.compile(r"^[ \t]*\|?[ \t:|-]*-[ \t:|-]*\|?[ \t]*$", re.M)
+_MD_CELL_RE = re.compile(r"[ \t]*\|[ \t]*")
+
+
+def _intel_snippet_text(s: str) -> str:
+    s = _MD_TABLE_RULE_RE.sub("", s)
+    s = re.sub(r"^[ \t]*(?:[-+*]|\d+[.)])[ \t]+", "", s, flags=re.M)     # list markers
+    s = "\n".join(_MD_CELL_RE.sub(" · ", ln.strip().strip("|")) if "|" in ln else ln for ln in s.split("\n"))
+    s = re.sub(r"\n+", " / ", s.strip())
+    return " ".join(_MD_NOISE_RE.sub(" ", s).split())
 
 
 @app.get("/api/intel/search")
@@ -19613,8 +19706,8 @@ def intel_search(q: str = "", kind: str = "", user: dict = Depends(require_sessi
     current = _intel_patch_now()
     out = []
     for e in rows:
-        snip = _MD_NOISE_RE.sub(" ", e.get("snippet") or "")
-        snip = html.escape(" ".join(snip.split())).replace("\x02", "<mark>").replace("\x03", "</mark>")
+        snip = _intel_snippet_text(e.get("snippet") or "")
+        snip = html.escape(snip).replace("\x02", "<mark>").replace("\x03", "</mark>")
         d = _intel_summary({**e, "status": "published", "tags": []}, current)
         d["snippet"] = snip
         out.append(d)
@@ -19789,6 +19882,20 @@ def intel_delete(entry_id: int, user: dict = Depends(require_session)):
         raise HTTPException(status_code=403, detail="Only the owner or an admin can archive this.")
     db.intel_set_fields(entry_id, {"status": "archived", "updated_at": _now_iso()})
     return {"archived": True}
+
+
+@app.post("/api/intel/entries/{entry_id}/restore")
+def intel_restore(entry_id: int, user: dict = Depends(require_admin)):
+    """Undo an archive: the entry goes back to published, exactly as it was
+    (rev, history, links). Admins only; an admin is the one who can still open
+    an archived entry, so the Restore button lives on its page."""
+    e = db.intel_get_entry(entry_id)
+    if not e:
+        raise HTTPException(status_code=404, detail="Entry not found.")
+    if e["status"] != "archived":
+        raise HTTPException(status_code=409, detail="It isn't archived.")
+    db.intel_set_fields(entry_id, {"status": "published", "updated_at": _now_iso()})
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
 
 
 @app.post("/api/intel/entries/{entry_id}/confirm")

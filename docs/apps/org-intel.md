@@ -51,7 +51,7 @@ you ask the org a question (optionally about a place, so it shows on that
 place's dossier). Anyone answers; the asker marks the answer that did it, and an
 accepted answer can be **promoted** into a procedure or onto the place's dossier,
 crediting both people. Every entry also takes **comments**, with one level of
-reply. When you publish, **📣 Announce in Discord** posts a short card (title,
+reply. When you publish, **📣 Announce in Discord** (ticked by default for reports only) posts a short card (title,
 teaser, a report's SALUTE lines, the first image, an optional role ping) to the
 org's intel channel; a major revision always posts "Revised: …", into the
 entry's own thread when the channel is a Discord forum, and a RESTRICTED entry
@@ -66,7 +66,7 @@ in an entry load with one click (**Load N images**), or always if you tick that
 box. An admin can move a handbook in with **Settings → Data → Import Markdown
 (.zip)** (a Notion or Google Docs export; its screenshots are stored on the
 server, within a quota the admin sets), and anyone can take the knowledge base
-out with **Export (.zip)** on the Library. A **collection** puts entries in
+out with **Export .zip** on the Library. A **collection** puts entries in
 reading order ("New member handbook") and lives on the Library; an event can
 require a whole collection. **Watch** an entry, a #tag (click it on the entry)
 or a collection, and the Feed marks it when someone revises, answers or
@@ -78,7 +78,12 @@ unhidden. New to writing? **Writing guide**, at the end of the Intelligence
 tab row (and next to each form's header in the editor), walks through writing
 a procedure, a report, a dossier and a question, the formatting you can use
 with a live "you type / readers see" example of each, and how to get an image
-link in.
+link in. **New**, in the masthead, opens a menu of every kind with a line on
+what each is for. Admins can **pin** an entry (**More → Pin for everyone**,
+with an optional note) or a #tag to a **PINNED** strip at the top of the Feed
+and the Library; everyone sees the pins they're allowed to open, and a pinned
+tag shows its newest entries. An archived entry isn't gone: an admin can open
+it and pick **Restore**.
 Open
 `#/intel/overview` and you get org-wide totals for mapping coverage, cargo hauling,
 trade-route profit, belt surveying, marketplace volume, per-contributor

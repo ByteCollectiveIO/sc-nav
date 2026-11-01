@@ -72,7 +72,7 @@ Group Finder composer use.
    hosting — set **Players needed**, up to 40) or **Want to join** (you're
    solo — a raised hand, no slot count).
 3. Tap up to 6 playstyle tags that describe the run — `PvE`, `PvP`,
-   `hauling`, `bunkers`, `bounty`, `exploration`, `new-player-friendly`, and
+   `hauling`, `bunkers`, `bounty`, `exploration`, `surveying`, `new-player-friendly`, and
    more.
 4. Optionally set a **Rally point** (it autocompletes from POIs, but free
    text is fine), check **Voice comms expected**, and add a short note (up to

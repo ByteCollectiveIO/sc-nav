@@ -4416,6 +4416,99 @@
      tap cancelled whatever capture was armed (FIELD critique round 2). */
   .ev-cat-chip[hidden], .route-chip[hidden], .del[hidden], .edit[hidden],
   .ev-row-del[hidden], .pkg-del[hidden], .pick-del[hidden] { display: none; }
+
+  /* ---- Intelligence: critique pass 2 (pins, New menu, editor fields, phone) ----
+     Last in the sheet on purpose: these override earlier equal-specificity
+     Intelligence rules, and an earlier override silently loses. */
+  .ix-skip { position: absolute; left: 12px; top: -60px; z-index: 50; padding: 8px 12px; border-radius: 6px;
+    background: var(--accent); color: var(--ink-on-accent); font-weight: 700; font-size: 12px; text-decoration: none; }
+  .ix-skip:focus { top: 8px; outline: none; box-shadow: 0 0 0 2px var(--bg); }
+  .ix-skip[hidden] { display: none; }
+  #intel-know:focus { outline: none; }
+  /* New: a menu of kinds */
+  .ix-new-wrap[hidden] { display: none; }
+  #intel-new-btn[aria-expanded="true"] { filter: brightness(1.08); }
+  .ix-new-menu { min-width: 280px; }
+  .ix-new-menu .ix-new-it { display: grid; gap: 1px; padding: 9px 10px; border-radius: 5px; text-decoration: none; color: var(--text); }
+  .ix-new-menu .ix-new-it b { font-size: 13px; font-weight: 600; }
+  .ix-new-menu .ix-new-it small { font-size: 12px; color: var(--dim); line-height: 1.4; }
+  .ix-new-menu .ix-new-it:hover, .ix-new-menu .ix-new-it:focus-visible { background: var(--panel2); outline: none; }
+  .ix-new-menu .ix-new-it:first-child b { color: var(--accent); }
+  /* Editor: labels, required, field errors, SALUTE letters, the optional fold */
+  .ix-lbl > span { justify-content: flex-start; align-items: baseline; }
+  .ix-lbl > span > i { margin-left: auto; }
+  .ix-lbl > span > i.ix-req { color: var(--dim); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+  .ix-sk { display: inline-grid; place-items: center; width: 16px; height: 16px; margin-right: 6px; border-radius: 3px;
+    background: var(--accent-wash); color: var(--accent); font-size: 10px; letter-spacing: 0; font-weight: 700; }
+  .ix-fld-err { color: var(--bad); font-size: 12px; letter-spacing: 0; line-height: 1.4; }
+  .ti[aria-invalid="true"] { border-color: var(--bad); }
+  .ix-rep-more { border: 1px solid var(--border-soft); border-radius: 6px; padding: 0 12px; }
+  .ix-rep-more > summary { cursor: pointer; padding: 10px 0; font-size: 12px; color: var(--text); list-style-position: inside; }
+  .ix-rep-more > summary i { font-style: normal; color: var(--dim); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; margin: 0 4px; }
+  .ix-rep-more[open] > summary { border-bottom: 1px solid var(--border-soft); margin-bottom: 10px; }
+  .ix-rep-more > .ix-rep-grid { padding-bottom: 12px; }
+  /* Reading view */
+  .ix-title.wide { max-width: 60ch; }
+  .ix-grade-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; font-size: 12px; color: var(--dim); }
+  .ix-crumb-act { text-transform: capitalize; }
+  .ix-dl dd small { display: block; color: var(--dim); font-size: 11px; line-height: 1.45; margin-top: 2px; }
+  .ix-export { margin-left: auto; padding: 5px 10px; font-size: 12px; text-decoration: none; }
+  /* PINNED strip */
+  .panel.ix-pins { border-color: var(--accent); }
+  .ix-pins .ix-panel-h h2 { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); }
+  .ix-pin-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+  .ix-pin-it { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 10px 10px 10px 12px;
+    border: 1px solid var(--border-soft); border-radius: 6px; background: var(--panel2); font-size: 13px; }
+  .ix-pin-it > .ix-ico { margin-top: 2px; color: var(--dim); }
+  .ix-pin-it a { color: var(--text); text-decoration: none; font-weight: 600; }
+  .ix-pin-it a:hover { color: var(--accent); }
+  .ix-pin-it small { display: block; color: var(--dim); font-size: 12px; margin-top: 2px; line-height: 1.4; }
+  .ix-pin-sub { display: grid; gap: 3px; margin-top: 6px; }
+  .ix-pin-sub a { font-weight: 400; font-size: 12px; color: var(--accent); }
+  .ix-pin-sub a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .ix-pin-more { margin-top: 10px; }
+  .ix-pin-more > summary { cursor: pointer; font-size: 12px; color: var(--dim); width: max-content; padding: 4px 0; }
+  .ix-pin-more > summary:hover { color: var(--accent); }
+  .ix-pin-add { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .ix-pin-add .ti { flex: 1 1 180px; min-width: 0; }
+  /* Guide */
+  .ix-gd-cta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+  .ix-gd-cta a { color: var(--accent); font-weight: 600; text-decoration: none; }
+  .ix-gd-cta a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .ix-gd-demo-h { color: var(--text); letter-spacing: 1px; text-transform: uppercase; margin: .4em 0 .5em; font-weight: 700; }
+  .ix-gd-demo-h.h2, .ix-gd-demo-h.h1 { font-size: 13px; }
+  .ix-gd-demo-h.h3, .ix-gd-demo-h.h4 { font-size: 12px; color: var(--dim); }
+  /* Phone filter fold: desktop never shows the toggle */
+  .ix-f-toggle { display: none; }
+  @media (max-width: 600px) {
+    .ix-f-toggle { display: inline-flex; margin: 10px 0 0; }
+    .ix-f-toggle[aria-expanded="true"] .ix-caret { transform: rotate(180deg); }
+    #ix-f-feed:not(.open) { display: none; }
+    #ix-f-feed select.ti { flex: 1 1 140px; }
+    /* the kind buttons wrap instead of clipping QUESTION */
+    #ix-ed-kind { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    #ix-ed-kind button { border-right: 1px solid var(--border); border-top: 1px solid var(--border); padding-left: 4px; padding-right: 4px; }
+    #ix-ed-kind button:nth-child(-n+3) { border-top: none; }
+    #ix-ed-kind button:nth-child(3n) { border-right: none; }
+    #ix-ed-kind button:last-child { border-right: 1px solid var(--border); }
+    .ix-new-menu { min-width: min(280px, calc(100vw - 32px)); }
+    .ix-export { margin-left: 0; }
+  }
+  @media (max-width: 520px) {
+    .intel-mast-row:first-child { column-gap: 10px; }
+    .intel-half button { letter-spacing: .04em; padding: 8px 4px; }
+  }
+  @media (max-width: 860px) {
+    /* Publish stays in reach on a phone: the rail sits under a long editor. */
+    #ix-save-p .ix-save-acts { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; margin: 0;
+      padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: var(--panel); border-top: 1px solid var(--border);
+      box-shadow: 0 -8px 20px rgba(0, 0, 0, .35); }
+    .ix-ed-grid { padding-bottom: 76px; }
+  }
+  @media (pointer: coarse) {
+    .ix-tb { min-width: 40px; height: 40px; }
+    .ix-new-menu .ix-new-it { padding-top: 11px; padding-bottom: 11px; }
+  }
 </style>
 </head>
 <body>
@@ -5970,8 +6063,10 @@
       <symbol id="ix-i-flag" viewBox="0 0 24 24"><path d="M5.5 21V4"/><path d="M5.5 4.5h11l-2.5 4 2.5 4h-11"/></symbol>
       <symbol id="ix-i-collection" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="1.5"/><path d="M6.5 5h11M9 2.5h6"/></symbol>
       <symbol id="ix-i-guide" viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11v16H5.5A1.5 1.5 0 0 1 4 18.5z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H13v16h5.5a1.5 1.5 0 0 0 1.5-1.5z"/><path d="M6.5 8h2.5M6.5 11h2.5M15 8h2.5M15 11h2.5"/></symbol>
+      <symbol id="ix-i-pin-top" viewBox="0 0 24 24"><path d="M9 3.5h6l-1 6 3.5 3.5h-11L10 9.5z"/><path d="M12 13v7.5"/></symbol>
       <symbol id="ix-i-hidden" viewBox="0 0 24 24"><path d="M4 4l16 16"/><path d="M9.6 5.8A9.5 9.5 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-3 3.6M6.2 7.7A16 16 0 0 0 2.5 12S6 18.5 12 18.5c1.3 0 2.5-.3 3.6-.8"/></symbol>
     </defs></svg>
+    <a class="ix-skip" href="#intel-know" id="intel-skip">Skip to content</a>
     <div class="panel intel-mast" id="intel-mast">
       <div class="intel-mast-row">
         <span class="rm-mast-name">ORG INTEL</span>
@@ -5984,8 +6079,11 @@
           <input class="ti" id="intel-search" type="search" maxlength="200" autocomplete="off"
             placeholder="Search the org's knowledge…" aria-label="Search Intelligence">
         </label>
-        <a class="ix-primary ix-new" id="intel-new" href="#/intel/new/procedure" hidden>
-          <svg class="ix-ico" aria-hidden="true"><use href="#ix-i-plus"/></svg>New</a>
+        <span class="ix-more ix-new-wrap" id="intel-new" hidden>
+          <button type="button" class="ix-primary ix-new" id="intel-new-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="intel-new-menu">
+            <svg class="ix-ico" aria-hidden="true"><use href="#ix-i-plus"/></svg>New<svg class="ix-ico sm ix-caret" aria-hidden="true" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+          <span class="ix-more-menu ix-new-menu" id="intel-new-menu" role="menu" aria-label="Write something new" hidden></span>
+        </span>
       </div>
       <div class="intel-mast-row" id="intel-know-row">
         <nav class="rm-tabs" id="intel-tabs" aria-label="Intelligence sections">
@@ -6011,7 +6109,7 @@
     </nav>
       </div>
     </div>
-    <div id="intel-know" hidden></div>
+    <div id="intel-know" tabindex="-1" hidden></div>
     <p class="intel-intro muted" id="intel-act-intro">Your guild's activity at a glance — mapping coverage, cargo hauling,
       marketplace trade, and contributor leaderboards. Read-only; use ← → to move between sections.
       <span id="intel-fresh" class="intel-fresh"></span></p>
@@ -10032,7 +10130,7 @@ function lfgUndoToast(entry) {
 const LFG_TAG_TYPE = {
   hauling: "Cargo Haul", trading: "Cargo Haul", mining: "Mining Op",
   salvage: "Salvage Op", bounty: "Bounty Hunt", bunkers: "Combat Patrol",
-  FPS: "Combat Patrol", exploration: "Exploration", "medical/rescue": "Medical Op",
+  FPS: "Combat Patrol", exploration: "Exploration", surveying: "Survey Op", "medical/rescue": "Medical Op",
 };
 const LFG_TAG_CAT = {
   PvE: "PvE", PvP: "PvP", RP: "Social", casual: "Social",
@@ -28787,9 +28885,16 @@ function renderIntel(section) {
   $("intel-know").hidden = !know;
   $("intel-search-wrap").hidden = !know;
   $("intel-new").hidden = !know;
-  // The Feed's natural "new" is a report; everywhere else it's a procedure.
-  $("intel-new").href = tab === "feed" ? "#/intel/new/report" : tab === "dossiers" ? "#/intel/new/dossier"
-    : tab === "rfi" ? "#/intel/new/rfi" : "#/intel/new/procedure";
+  // New opens a menu of every kind, the current tab's natural kind first
+  // (Feed → report, Dossiers → dossier, Questions → question).
+  // Skip link past the masthead (Intelligence half): focus moves to the
+  // content without touching the hash route.
+  const skip = $("intel-skip");
+  if (skip) {
+    skip.hidden = !know;
+    skip.onclick = (ev) => { ev.preventDefault(); const k = $("intel-know"); k.focus({ preventScroll: true }); k.scrollIntoView({ block: "start" }); };
+  }
+  intelNewMenu(tab === "feed" ? "report" : tab === "dossiers" ? "dossier" : tab === "rfi" ? "rfi" : "procedure");
   document.querySelectorAll("#intel-tabs a, #intel-guide-link").forEach(a => {
     const on = a.dataset.sec === tab;
     a.classList.toggle("on", on);
@@ -28848,7 +28953,7 @@ const INTEL_SYSTEM_OPTS = ["Stanton", "Nyx", "Pyro"];
 // reads like every other procedure. Swapped freely until the author types.
 const INTEL_TEMPLATE = {
   procedure: "## Purpose\nWhat this gets done, in one or two sentences.\n\n## When to use it\n\n" +
-    "## Steps\n- [ ] First step\n- [ ] Next step\n\n## Loadout\n\n## Notes\n",
+    "## Steps\n1. First step\n2. Next step\n\n## Loadout\n\n## Notes\n",
   tactic: "## Situation\nWhat you're up against, and where.\n\n## Most likely\nWhat they usually do.\n\n" +
     "## Most dangerous\nThe worst case worth planning for.\n\n## Counter\n- What to do about it\n\n## Loadout\n",
   report: "## What happened\nWhat you saw, in the order it happened.\n\n## What to do\n- \n",
@@ -28885,8 +28990,13 @@ function intelWhen(iso) {
   if (!iso) return "";
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return "";
-  const days = Math.floor((Date.now() - d) / 86400000);
-  if (days < 1) return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  const ms = Date.now() - d, days = Math.floor(ms / 86400000);
+  // Under a day: how long ago, which reads the same in every time zone.
+  if (days < 1) {
+    const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto", style: "short" });
+    const min = Math.max(0, Math.round(ms / 60000));
+    return min < 1 ? "just now" : min < 60 ? rtf.format(-min, "minute") : rtf.format(-Math.floor(min / 60), "hour");
+  }
   if (days < 7) return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(-days, "day");
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: days > 300 ? "numeric" : undefined });
 }
@@ -29025,6 +29135,49 @@ function intelDayLabel(d) {
     year: diff > 300 ? "numeric" : undefined }).toUpperCase();
   return diff === 0 ? `<b>TODAY</b> · ${esc(date)}` : diff === 1 ? `<b>YESTERDAY</b> · ${esc(date)}` : esc(date);
 }
+let intelFeedFiltersOpen = false;   // phone only: the folded filter row
+// PINNED: what admins want everyone to read, on top of the Feed and the
+// Library. Entries (with the admin's note) and #tags (their newest entries).
+// The server already filtered it to what this viewer can open.
+function intelPinsPanel(pins, reload) {
+  const el = $("ix-pins"); if (!el) return;
+  const admin = currentMe && currentMe.is_admin;
+  const ents = (pins && pins.entries) || [], tags = (pins && pins.tags) || [];
+  if (!ents.length && !tags.length && !admin) { el.hidden = true; return; }
+  const x = (kind, id, label) => admin ? `<button type="button" class="op-x" data-unpin="${kind}:${esc(String(id))}" aria-label="Unpin ${esc(label)}" title="Unpin for everyone">✕</button>` : "";
+  el.hidden = false;
+  el.innerHTML = `<div class="ix-panel-h"><h2>${intelIco("pin-top", "ix-ico sm")}PINNED</h2>` +
+    `<span class="muted">${ents.length || tags.length ? "Your org wants you to read these" : "Nothing pinned. Pin an entry from its More menu, or a tag here."}</span></div>` +
+    (ents.length || tags.length ? `<ul class="ix-pin-list">` +
+      ents.map(e => `<li class="ix-pin-it">${intelIco(e.kind)}<span><a href="${intelHref(e)}">${esc(e.title || "Untitled")}</a>` +
+        `<small>${esc((INTEL_KIND[e.kind] || e.kind).toLowerCase())}${e.pin_note ? ` · ${esc(e.pin_note)}` : ""}</small></span>${x("entry", e.id, e.title)}</li>`).join("") +
+      tags.map(g => `<li class="ix-pin-it ix-pin-tag">${intelIco("ref")}<span><a href="#/intel/feed" data-pin-tag="${esc(g.tag)}" title="Everything tagged #${esc(g.tag)}, in the Feed">#${esc(g.tag)}</a>` +
+        `<small>${g.n} entr${g.n === 1 ? "y" : "ies"}${g.note ? ` · ${esc(g.note)}` : ""}</small>` +
+        (g.entries.length ? `<span class="ix-pin-sub">${g.entries.map(s => `<a href="${intelHref(s)}">${esc(s.title || "Untitled")}</a>`).join("")}</span>` : "") +
+        `</span>${x("tag", g.tag, "#" + g.tag)}</li>`).join("") + `</ul>` : "") +
+    (admin ? `<details class="ix-pin-more"${ents.length || tags.length ? "" : " open"}><summary>Pin a tag for everyone</summary><form class="ix-pin-add" id="ix-pin-add"><input class="ti" id="ix-pin-tag" maxlength="40" autocomplete="off" placeholder="Pin a tag, e.g. new-members" aria-label="Pin a tag for everyone">` +
+      `<input class="ti" id="ix-pin-note" maxlength="140" autocomplete="off" placeholder="Note (optional)" aria-label="Note for the pinned tag">` +
+      `<button type="submit" class="ix-btn">${intelIco("pin-top")}Pin tag</button></form></details>` : "");
+  const put = async (body, msg) => {
+    try { await intelApi("/api/intel/pins", { method: "PUT", body }); intelToast(msg); reload(); }
+    catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
+  };
+  // A pinned tag opens the Feed filtered to it.
+  el.querySelectorAll("[data-pin-tag]").forEach(a => a.onclick = (ev) => {
+    intelFeedFilter.tag = a.dataset.pinTag;
+    if (intelCurSec === "feed") { ev.preventDefault(); intelFeed($("intel-know")); window.scrollTo(0, 0); }
+  });
+  el.querySelectorAll("[data-unpin]").forEach(b => b.onclick = () => {
+    const [kind, ...rest] = b.dataset.unpin.split(":");
+    put({ target_kind: kind, target_id: rest.join(":"), on: false }, "Unpinned.");
+  });
+  if ($("ix-pin-add")) $("ix-pin-add").onsubmit = (ev) => {
+    ev.preventDefault();
+    const tag = $("ix-pin-tag").value.trim().replace(/^#/, "");
+    if (!tag) { $("ix-pin-tag").focus(); return; }
+    put({ target_kind: "tag", target_id: tag, on: true, note: $("ix-pin-note").value.trim() }, `#${tag} pinned for everyone.`);
+  };
+}
 async function intelFeed(box) {
   const [tags] = await Promise.all([intelLoadPlaystyles()]);
   const f = intelFeedFilter;
@@ -29032,18 +29185,29 @@ async function intelFeed(box) {
     `${ico ? intelIco(ico) : ""}${label}</button>`;
   const opt = (list, cur, none) => `<option value="">${none}</option>` +
     list.map(x => `<option value="${esc(x)}"${x === cur ? " selected" : ""}>${esc(x)}</option>`).join("");
-  box.innerHTML = `<div class="ix-grid" id="ix-feed-grid"><div class="panel"><div class="ix-panel-h"><h2>FEED</h2>` +
+  const nf = [f.kind, f.system, f.activity, f.expired, f.watching, f.tag].filter(Boolean).length;
+  box.innerHTML = `<div class="panel ix-pins" id="ix-pins" hidden></div><div class="ix-grid" id="ix-feed-grid"><div class="panel"><div class="ix-panel-h"><h2>FEED</h2>` +
     `<span class="muted">Reports, questions and debriefs, plus procedures, tactics and dossiers when they're published or revised</span></div>` +
-    `<div class="ix-filters" role="group" aria-label="Filter the feed">` +
+    // Phone: the filters fold behind one button that counts what's set.
+    `<button type="button" class="ix-btn ix-f-toggle" id="ix-f-toggle" aria-expanded="${intelFeedFiltersOpen}" aria-controls="ix-f-feed">` +
+    `Filter${nf ? ` (${nf})` : ""}<svg class="ix-ico sm ix-caret" aria-hidden="true" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>` +
+    `<div class="ix-filters${intelFeedFiltersOpen ? " open" : ""}" id="ix-f-feed" role="group" aria-label="Filter the feed">` +
     chip("", "All") + chip("report", "Reports", "report") + chip("procedure", "Procedures", "procedure") + chip("tactic", "Tactics", "tactic") +
     chip("dossier", "Dossiers", "dossier") + chip("rfi", "Questions", "rfi") + chip("debrief", "Debriefs", "debrief") +
-    `<span id="ix-f-watch-slot"></span><span class="sp"></span>` +
+    `<span id="ix-f-watch-slot"></span>` +
+    (f.tag ? `<button type="button" class="ix-chip" id="ix-f-tag" aria-pressed="true" title="Stop filtering by this tag">#${esc(f.tag)} <span aria-hidden="true">✕</span><span class="sr-only">, clear</span></button>` : "") +
+    `<span class="sp"></span>` +
     `<select class="ti" id="ix-f-sys" aria-label="System">${opt(INTEL_SYSTEM_OPTS, f.system, "Every system")}</select>` +
     `<select class="ti" id="ix-f-act" aria-label="Activity">${opt(tags, f.activity, "Every activity")}</select>` +
     `<label class="ix-chip ix-check"><input type="checkbox" id="ix-f-exp"${f.expired ? " checked" : ""}> Show expired</label></div>` +
     `<div class="ix-list" id="ix-feed">${intelStatus("Loading…")}</div></div>` +
     `<aside class="ix-rail" id="ix-feed-rail" hidden></aside></div>`;
   box.querySelectorAll(".ix-chip[data-k]").forEach(b => b.onclick = () => { f.kind = b.dataset.k; intelFeed(box); });
+  if ($("ix-f-tag")) $("ix-f-tag").onclick = () => { f.tag = ""; intelFeed(box); };
+  $("ix-f-toggle").onclick = () => {
+    intelFeedFiltersOpen = !intelFeedFiltersOpen;
+    $("ix-f-toggle").setAttribute("aria-expanded", intelFeedFiltersOpen); $("ix-f-feed").classList.toggle("open", intelFeedFiltersOpen);
+  };
   $("ix-f-sys").onchange = (ev) => { f.system = ev.target.value; intelFeed(box); };
   $("ix-f-act").onchange = (ev) => { f.activity = ev.target.value; intelFeed(box); };
   $("ix-f-exp").onchange = (ev) => { f.expired = ev.target.checked; intelFeed(box); };
@@ -29053,8 +29217,10 @@ async function intelFeed(box) {
   if (f.activity) q.set("activity", f.activity);
   if (f.expired) q.set("expired", "1");
   if (f.watching) q.set("watching", "1");
+  if (f.tag) q.set("tag", f.tag);
   try {
     const d = await intelApi(`/api/intel/entries?${q}`);
+    intelPinsPanel(d.pins, () => intelFeed(box));
     const wt = d.watching || { count: 0, updated: 0, targets: 0 };
     const upd = new Set(d.watch_updated || []);
     if (!wt.targets && f.watching) f.watching = false;
@@ -29081,7 +29247,7 @@ async function intelFeed(box) {
         (b.length ? `<div class="ix-group-h"><span>NO CHANGES</span><span>${b.length}</span></div>` + b.map(e => intelFeedRow(e, null, false)).join("") : "");
       intelResolveRefs(el, null);
     } else if (!d.entries.length) {
-      el.innerHTML = f.kind || f.system || f.activity ? intelStatus(f.expired ? "Nothing matches that filter."
+      el.innerHTML = f.kind || f.system || f.activity || f.tag ? intelStatus(f.expired ? "Nothing matches that filter."
         : "Nothing matches that filter. Expired reports are hidden; tick Show expired to include them.")
         : `<div class="intel-know-empty" style="padding:14px 8px"><p class="lead">Nothing in the feed yet.</p>` +
           `<p class="muted">Reports land here the moment they're published: a gate camp, a hostile org's new trick, ` +
@@ -29089,7 +29255,7 @@ async function intelFeed(box) {
           `<p style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">` +
           `<a class="ix-primary" href="#/intel/new/report">${intelIco("report")}Write a report</a>` +
           `<a class="ix-btn" href="#/intel/new/procedure">${intelIco("procedure")}New procedure</a>` +
-          `<a class="ix-btn" href="#/intel/guide">${intelIco("guide")}How to write one</a></p></div>`;
+          `<a class="ix-btn" href="#/intel/guide">${intelIco("guide")}Writing guide</a></p></div>`;
     } else {
       const fresh = seen ? d.entries.filter(e => (e.revised_at || e.published_at) > seen).length : 0;
       let html = fresh ? `<div class="ix-since">${fresh} NEW SINCE YOU LOOKED · ${esc(intelWhen(seen).toUpperCase())}</div>` : "";
@@ -29151,10 +29317,10 @@ async function intelLibrary(box) {
   const f = intelLibFilter;
   const chip = (k, label, ico) => `<button type="button" class="ix-chip" data-k="${k}" aria-pressed="${f.kind === k}">` +
     `${ico ? intelIco(ico) : ""}${label}</button>`;
-  box.innerHTML = `<div class="panel" id="ix-drafts" hidden></div><div class="panel" id="ix-cols-p" hidden></div>` +
+  box.innerHTML = `<div class="panel ix-pins" id="ix-pins" hidden></div><div class="panel" id="ix-drafts" hidden></div><div class="panel" id="ix-cols-p" hidden></div>` +
     `<div class="panel"><div class="ix-panel-h"><h2>LIBRARY</h2>` +
-    `<span class="muted">The org's procedures and tactics, by activity · ` +
-    `<a href="/api/intel/export" download title="Every published entry you can open, as Markdown with its images (a .zip)">Export (.zip)</a></span></div>` +
+    `<span class="muted">The org's procedures and tactics, by activity</span>` +
+    `<a class="ix-btn ix-export" href="/api/intel/export" download title="Every published entry you can open, as Markdown with its images">${intelIco("collection")}Export .zip</a></div>` +
     `<div class="ix-filters" role="group" aria-label="Filter the library">` +
     chip("", "All") + chip("procedure", "Procedures", "procedure") + chip("tactic", "Tactics", "tactic") +
     `<span class="sp"></span><select class="ti" id="ix-act" aria-label="Activity">` +
@@ -29171,6 +29337,7 @@ async function intelLibrary(box) {
     const [lib, drafts] = await Promise.all([intelApi(`/api/intel/entries?${q}`),
       intelApi("/api/intel/entries?section=drafts").catch(() => ({ entries: [] }))]);
     intelImageHosts = lib.image_hosts || intelImageHosts;
+    intelPinsPanel(lib.pins, () => intelLibrary(box));
     const el = $("ix-lib"); if (!el) return;
     const dEl = $("ix-drafts");
     if (drafts.entries.length) {
@@ -29186,7 +29353,7 @@ async function intelLibrary(box) {
           `<p style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">` +
           `<a class="ix-primary" href="#/intel/new/procedure">${intelIco("plus")}New procedure</a>` +
           `<a class="ix-btn" href="#/intel/new/tactic">${intelIco("tactic")}New tactic</a>` +
-          `<a class="ix-btn" href="#/intel/guide">${intelIco("guide")}How to write one</a></p></div>`;
+          `<a class="ix-btn" href="#/intel/guide">${intelIco("guide")}Writing guide</a></p></div>`;
       return;
     }
     const groups = new Map();
@@ -29223,8 +29390,12 @@ const INTEL_GUIDE_MD = [
 async function intelGuide(box) {
   const sec = intelRoute.sec;
   // Each section is its own panel, focusable so a jump moves keyboard focus too.
+  // Each kind's section ends where you'd act on it: a start link.
+  const CTA = { procedure: [["procedure", "Start a procedure"], ["tactic", "Start a tactic"]], report: [["report", "Start a report"]],
+    dossier: [["dossier", "Start a place dossier"], ["dossier?org=1", "Start an org dossier"]], question: [["rfi", "Ask a question"]] };
   const g = (id, title, body) => `<section class="panel ix-gd-sec" id="gd-${id}" tabindex="-1" aria-labelledby="gd-${id}-h">` +
-    `<div class="ix-prose"><h2 id="gd-${id}-h">${esc(title)}</h2>${body}</div></section>`;
+    `<div class="ix-prose"><h2 id="gd-${id}-h">${esc(title)}</h2>${body}` +
+    (CTA[id] ? `<p class="ix-gd-cta">${CTA[id].map(([k, l]) => `<a href="#/intel/new/${k}">${esc(l)} →</a>`).join("")}</p>` : "") + `</div></section>`;
   const step = (items) => `<ol class="ix-gd-steps">${items.map(s => `<li><span>${s}</span></li>`).join("")}</ol>`;
   // Each kind jumps to the section that explains it (the rows ARE links).
   const kinds = `<ul class="ix-gd-kinds">` +
@@ -29237,19 +29408,21 @@ async function intelGuide(box) {
         `<span class="use">${esc(use)}</span><span class="ex">e.g. ${esc(ex)}</span><span class="go" aria-hidden="true">→</span></a></li>`).join("") +
     `</ul><p>Debriefs are written from the op itself: open the finished op and pick <b>Write debrief →</b>.</p>`;
   const procedure = step([
-    `Pick <b>New</b> at the top of Intelligence (on the Library it starts a procedure). In the editor, the kind buttons along the top switch it to <b>Tactic</b>.`,
+    `Pick <b>New</b> at the top of Intelligence, then <b>Procedure</b>, or <b>Tactic</b> for how to win a fight. A tactic is written the same way; only its headings differ.`,
     `Give it a <b>title</b> people would search for, and a one-line <b>summary</b>: it shows in lists and search.`,
     `Set the <b>activity</b> (it decides where it sits in the Library), the <b>system</b> if it only applies to one, and a few <b>tags</b> (<code>escort, hull-c</code>).`,
     `Fill in the body. A new procedure starts with headings to fill: Purpose, When to use it, Steps, Loadout, Notes. A tactic's are Situation, Most likely, Most dangerous, Counter, Loadout. Delete the ones you don't need.`,
     `Use <b>PREVIEW</b> to see it exactly as readers will.`,
-    `Pick <b>Publish</b>. Tick <b>Announce in Discord</b> if the org should hear about it. If your org reviews procedures first, the button says <b>Submit for review</b> and a reviewer publishes it.`]) +
+    `Pick <b>Publish</b>. Tick <b>Announce in Discord</b> if the org should hear about it (only reports start ticked). If your org reviews procedures first, the button says <b>Submit for review</b> and a reviewer publishes it.`]) +
     `<p>Your draft saves itself while you type, on the server, so you can start it on your phone and finish it at your desk. Only you can see a draft.</p>` +
     `<p>A procedure is stamped with the game patch it was written for. When a new patch lands, it shows <b>written 4.3 · now 4.4</b> until someone saves a major revision or picks <b>Still valid on 4.4</b>.</p>` +
+    `<p><b>Doctrine</b>: a reviewer can mark a procedure or tactic as the org's official way. It lists first in its activity and carries the mark. ` +
+    `<b>Marking</b> is who can open it: <b>Org</b> is every member; <b>Restricted</b> (cleared members only) shows in the editor if your Discord role is cleared for it.</p>` +
     `<div class="ix-gd-tip">${intelIco("task")}<span><b>Write for a second screen.</b> People read procedures on a phone next to the game. Short steps, one action each, the important number first ("Hold 8 km", not "Hold back a good distance").</span></div>`;
   const report = step([
-    `On the Feed, pick <b>New</b>: it starts a report. From the danger board, <b>Write up →</b> on a warning starts one already filled in.`,
-    `Fill in the <b>SALUTE</b> block. <b>Where</b> and <b>when</b> are required; the rest helps whoever reads it next.`,
-    `Grade it if you can (see below), and check how long it stays <b>valid</b>: a new report is set to 6 hours. A gate camp is old news in a couple of hours.`,
+    `Pick <b>New</b>, then <b>Report</b> (on the Feed it's first in the list). From the danger board, <b>Write up →</b> on a warning starts one already filled in.`,
+    `Fill in the <b>SALUTE</b> block, in its order: <b>S</b>ize, <b>A</b>ctivity, <b>L</b>ocation, <b>U</b>nit, <b>T</b>ime, <b>E</b>quipment. <b>Location</b> and <b>time</b> are required; the rest helps whoever reads it next.`,
+    `Grade it if you can (under <b>More detail</b>, see below), and check how long it stays <b>valid</b>: a new report is set to 6 hours. A gate camp is old news in a couple of hours.`,
     `Write what happened in the body, in the order it happened, and what others should do about it.`,
     `Pick <b>Publish report</b>. Reports never wait for review. If the button says <b>+ post to …</b>, it also goes to that Discord channel; untick <b>Announce in Discord</b> to keep it in the app.`]) +
     `<dl class="ix-gd-salute">` +
@@ -29264,14 +29437,14 @@ async function intelGuide(box) {
     `Others can <b>Corroborate</b> or <b>Dispute</b> it from the report.</p>` +
     `<div class="ix-gd-tip warn">${intelIco("alert")}<span><b>Describe ships, orgs and behaviour, not individual players.</b> “3 Polaris flying Red Wake tags” is intel; a page about one named player isn't, and members can flag it.</span></div>`;
   const dossier = step([
-    `In the navigator, set the place as your destination and pick <b>◆ Start dossier</b>. Or pick <b>New</b> on the Dossiers tab and choose <b>A PLACE</b> or <b>AN ORG</b>.`,
+    `In the navigator, set the place as your destination and pick <b>◆ Start dossier</b>. Or pick <b>New</b>, then <b>Dossier</b>, and choose <b>A PLACE</b> or <b>AN ORG</b>.`,
     `For an org, set its <b>stance</b> (hostile, neutral, allied, unknown) and any <b>aliases</b> people know it by: search finds the dossier by every one of them.`,
     `Write what crews should know before they go. The headings to fill are there already.`,
     `Pick <b>Publish</b>.`]) +
     `<p>There's one dossier per place and per org: if one exists, the editor says so and links it. Once it's published any member can edit it, and every change is kept in <b>History</b>.</p>` +
     `<p>You don't have to list reports by hand: the dossier gathers every report, procedure, live warning and event that mentions it. An org's <b>Seen at</b> counts the reports that name it as the unit.</p>`;
   const question = step([
-    `On the Questions tab, pick <b>New</b>. On a place's dossier, <b>Ask about it</b> starts one about that place.`,
+    `Pick <b>New</b>, then <b>Question</b>. On a place's dossier, <b>Ask about it</b> starts one about that place.`,
     `Ask it as a title (“Where do the Pyro bunkers spawn?”), then add what you already know and what would help.`,
     `Pick <b>Post question</b>. Anyone can answer it, and anyone can reply to an answer.`,
     `When an answer does it, pick <b>Accept this answer</b>. The question shows as answered.`]) +
@@ -29314,6 +29487,7 @@ async function intelGuide(box) {
     `<h1 class="ix-title">Writing guide</h1>` +
     `<p class="ix-lead">Which kind to write, step by step for each, the formatting the editor takes, and how to get a screenshot in.</p>` +
     `<div class="ix-actions"><a class="ix-primary" href="#/intel/new/procedure">${intelIco("procedure")}New procedure</a>` +
+    `<a class="ix-btn" href="#/intel/new/tactic">${intelIco("tactic")}New tactic</a>` +
     `<a class="ix-btn" href="#/intel/new/report">${intelIco("report")}New report</a></div></header>` +
     // Phone: the page's sections as a chip row at the top (the rail drops below).
     `<nav class="ix-gd-chips" aria-label="Guide sections"><ul>${navLinks}</ul></nav>` +
@@ -29372,6 +29546,12 @@ async function intelGuide(box) {
     const parts = d.html.split(/<hr\s*\/?>/);
     box.querySelectorAll(".ix-gd-out").forEach(el => {
       el.innerHTML = parts[+el.dataset.ex] || "";
+      // A demo heading looks like one but isn't one: it mustn't land in the
+      // page's heading outline (screen-reader heading nav) between sections.
+      el.querySelectorAll("h1, h2, h3, h4").forEach(h => {
+        const d2 = document.createElement("div");
+        d2.className = `ix-gd-demo-h ${h.tagName.toLowerCase()}`; d2.textContent = h.textContent; h.replaceWith(d2);
+      });
       intelHydrate(el, null);
     });
   } catch {
@@ -29562,7 +29742,8 @@ async function intelDossiers(box) {
         `<p style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">` +
         `<a class="ix-primary" href="#/intel/new/dossier">${intelIco("pin")}Start a place dossier</a>` +
         `<a class="ix-btn" href="#/intel/new/dossier?org=1">${intelIco("dossier")}Start an org dossier</a></p>` +
-        `<p class="muted" style="margin-top:10px">Or pick a place as your destination in the navigator and use ◆ Start dossier there.</p></div>`;
+        `<p class="muted" style="margin-top:10px">Or pick a place as your destination in the navigator and use ◆ Start dossier there. ` +
+        `A dossier you started but haven't published is under <a href="#/intel/library">Library › Your drafts</a>.</p></div>`;
       return;
     }
     if (!list.length) { el.innerHTML = intelStatus("Nothing matches that filter."); return; }
@@ -29731,7 +29912,7 @@ function intelDossierView(box, e) {
     try { await intelApi(`/api/intel/entries/${e.id}/confirm`, { method: "POST" }); intelEntryView(box); } catch (err) { fail(err); }
   };
   if ($("ix-archive")) $("ix-archive").onclick = async () => {
-    const ok = await confirmDialog(`“${e.title}” leaves Dossiers and search. Its history is kept and an admin can still see it.`,
+    const ok = await confirmDialog(`“${e.title}” leaves Dossiers and search. Its history is kept, and an admin can restore it from its page.`,
       { title: "Archive this dossier?", confirmLabel: "Archive", danger: true });
     if (!ok) return;
     try { await intelApi(`/api/intel/entries/${e.id}`, { method: "DELETE" }); location.hash = "#/intel/dossiers"; }
@@ -29845,7 +30026,23 @@ function intelFlagForm(host, target, mine, onDone) {
 // Dispute, Add update, Answer…) and History/Watch in view; the rest share one
 // More menu, so Flag and Archive never sit at Corroborate's weight. Nodes are
 // MOVED, so the handlers bound by id keep working; safe to call again.
-const INTEL_MORE_IDS = ["ix-copy", "ix-collect", "ix-flag", "ix-archive", "ix-hide"];
+const INTEL_MORE_IDS = ["ix-copy", "ix-collect", "ix-flag", "ix-pin", "ix-archive", "ix-hide"];
+const INTEL_NEW_KINDS = [
+  ["report", "Report", "Something you saw out there: who, where, when"],
+  ["procedure", "Procedure", "How the org does a job, step by step"],
+  ["tactic", "Tactic", "How to win a fight or handle a situation"],
+  ["dossier", "Dossier", "What we know about a place or another org"],
+  ["rfi", "Question", "Ask the org; the best answer gets accepted"],
+];
+function intelNewMenu(first) {
+  const menu = $("intel-new-menu"), wrap = $("intel-new"); if (!menu) return;
+  if (menu.dataset.first === first) return;
+  menu.dataset.first = first;
+  const ks = [...INTEL_NEW_KINDS].sort((a, b) => (b[0] === first) - (a[0] === first));
+  menu.innerHTML = ks.map(([k, name, desc]) => `<a role="menuitem" class="ix-new-it" href="#/intel/new/${k}">` +
+    `<b>${name}</b><small>${desc}</small></a>`).join("");
+  if (!wrap.dataset.bound) { wrap.dataset.bound = "1"; intelMenuBind(wrap, $("intel-new-btn"), menu); }
+}
 function intelGroupMore(acts) {
   if (!acts) return;
   const items = INTEL_MORE_IDS.map(id => acts.querySelector(`#${id}`)).filter(Boolean);
@@ -29860,6 +30057,12 @@ function intelGroupMore(acts) {
   const menu = wrap.querySelector(".ix-more-menu"), btn = wrap.querySelector("#ix-more");
   items.forEach(el => { el.setAttribute("role", "menuitem"); menu.appendChild(el); });
   acts.querySelectorAll(".sp").forEach((s, i, all) => { if (i < all.length - 1) s.remove(); });
+  intelMenuBind(wrap, btn, menu);
+}
+// One menu-button behaviour (More on an entry, New in the masthead): opens
+// toward the side with room, arrow keys move, Esc returns focus, a pick or an
+// outside click closes.
+function intelMenuBind(wrap, btn, menu) {
   const close = (focus) => {
     if (menu.hidden) return;
     menu.hidden = true; btn.setAttribute("aria-expanded", "false");
@@ -29897,6 +30100,30 @@ function intelBindMember(box, e, rerender) {
       `${esc(intelWhen(e.hidden.at))}. It's out of every list and search, and only admins can open it.</span>` +
       `<button type="button" class="ix-btn" id="ix-unhide">Unhide</button></div>`);
   }
+  if (e.status === "archived" && art && !art.querySelector(".archived-entry")) {
+    art.insertAdjacentHTML("afterbegin", `<div class="ix-banner archived-entry">${intelIco("history")}<span><b>Archived.</b> ` +
+      `It's out of every list and search${admin ? "; only admins can open it" : ""}.</span>` +
+      (admin ? `<button type="button" class="ix-btn" id="ix-restore-arch">Restore</button>` : "") + `</div>`);
+    if ($("ix-restore-arch")) $("ix-restore-arch").onclick = async () => {
+      try { await intelApi(`/api/intel/entries/${e.id}/restore`, { method: "POST" }); intelToast("Restored: it's back in every list."); rerender(); }
+      catch (err) { fail(err); }
+    };
+  }
+  // Pin for everyone: the entry tops the Feed and the Library (admins).
+  if (admin && acts && e.status === "published" && !e.hidden && !acts.querySelector("#ix-pin"))
+    acts.insertAdjacentHTML("beforeend", `<button type="button" class="ix-btn" id="ix-pin" title="${e.pinned ? "Take it off the top of the Feed and the Library" : "Show it at the top of the Feed and the Library, for everyone"}">` +
+      `${intelIco("pin-top")}${e.pinned ? "Unpin" : "Pin for everyone"}</button>`);
+  if ($("ix-pin")) $("ix-pin").onclick = async () => {
+    let note = "";
+    if (!e.pinned) {
+      note = await promptDialog("It shows at the top of the Feed and the Library for everyone who can open it. Up to 8 pinned entries.",
+        { title: "Pin for everyone?", confirmLabel: "Pin", placeholder: "Optional note, e.g. Read before your first op" });
+      if (note === null) return;
+    }
+    try { await intelApi("/api/intel/pins", { method: "PUT", body: { target_kind: "entry", target_id: String(e.id), on: !e.pinned, note: note.trim().slice(0, 140) } });
+      intelToast(e.pinned ? "Unpinned." : "Pinned to the top of the Feed and the Library."); rerender(); }
+    catch (err) { fail(err); }
+  };
   if (admin && acts && e.status === "published" && !e.hidden && !acts.querySelector("#ix-hide"))
     acts.insertAdjacentHTML("beforeend", `<button type="button" class="ix-btn" id="ix-hide" title="Keep it, but only admins can see it">${intelIco("hidden")}Hide</button>`);
   const hideIt = async (hidden) => {
@@ -30141,7 +30368,7 @@ async function intelRfiView(box, e) {
     `<div class="ix-kindline">${intelIco("rfi")}Question${intelMarkTags(e)}` +
     (answered ? `<span class="ix-tag ok">${intelIco("check", "ix-ico sm")}Answered</span>` : `<span class="ix-tag draft">Open</span>`) +
     (e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "") + `</div>` +
-    `<h1 class="ix-title">${esc(e.title)}</h1>` + (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") +
+    `<h1 class="ix-title wide">${esc(e.title)}</h1>` + (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") +
     `<div class="ix-by"><span>asked by <b>${esc(e.author_name || "?")}</b></span><span>${esc(intelWhen(e.published_at))}</span>` +
     (h.location_ref ? `<span class="intel-ref" data-ref-kind="${esc(h.location_ref.split(":")[0])}" data-ref-id="${esc(h.location_ref.split(":")[1])}"></span>` : "") +
     `</div>${actions}</div>` +
@@ -30161,7 +30388,7 @@ async function intelRfiView(box, e) {
   $("ix-answer-go").onclick = (ev) => { ev.preventDefault(); const t = $("ix-cmt-body"); if (t) { t.scrollIntoView({ block: "center" }); t.focus(); } };
   $("ix-copy").onclick = () => intelCopy(location.origin + location.pathname + intelHref(e), "Link copied");
   if ($("ix-archive")) $("ix-archive").onclick = async () => {
-    const ok = await confirmDialog(`“${e.title}” leaves Questions and search. Its answers are kept and an admin can still see it.`,
+    const ok = await confirmDialog(`“${e.title}” leaves Questions and search. Its answers are kept, and an admin can restore it from its page.`,
       { title: "Archive this question?", confirmLabel: "Archive", danger: true });
     if (!ok) return;
     try { await intelApi(`/api/intel/entries/${e.id}`, { method: "DELETE" }); location.hash = "#/intel/rfi"; }
@@ -30465,7 +30692,7 @@ async function intelEntryView(box) {
   const crumb = isReport ? `<a href="#/intel/feed">Feed</a><span>/</span><span>Report</span>`
     : e.kind === "dossier" ? `<a href="#/intel/dossiers">Dossiers</a><span>/</span><span>${(e.dossier || {}).subject_kind === "org" ? "Orgs" : "Places"}</span>`
     : e.kind === "debrief" ? `<a href="#/intel/feed">Feed</a><span>/</span><span>Debrief</span>`
-    : `<a href="#/intel/library">Library</a><span>/</span><span>${esc(e.activity || "General")}</span>`;
+    : `<a href="#/intel/library">Library</a><span>/</span><span class="ix-crumb-act">${esc(e.activity || "General")}</span>`;
   const linked = (e.linked_from || []).length ? `<div class="panel"><div class="ix-panel-h"><h2>LINKED FROM</h2><span class="muted">${e.linked_from.length}</span></div>` +
     `<ul class="ix-rl">${e.linked_from.map(b => `<li>${intelIco(b.kind)}<span><a href="${intelHref(b)}">${esc(b.title)}</a>` +
     `<small>${esc((INTEL_KIND[b.kind] || b.kind).toLowerCase())}</small></span></li>`).join("")}</ul></div>` : "";
@@ -30479,6 +30706,7 @@ async function intelEntryView(box) {
     (e.system ? `<span class="ix-tag">${esc(e.system)}</span>` : "") + intelMarkTags(e) +
     (isReport ? intelGradeChip(r.grade) + (r.expired ? `<span class="ix-tag">Expired</span>` : "") : "") + `</div>` +
     `<h1 class="ix-title">${esc(e.title)}</h1>` +
+    (isReport && r.grade ? `<p class="ix-grade-line">${esc(r.grade)}: ${esc(intelGradeText(r.grade))}</p>` : "") +
     (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") +
     `<div class="ix-by">${by}</div>${actions}</div>${salute}${e.kind === "debrief" ? intelOpRecordHtml(e.header) : ""}${intelReadBar(e)}` +
     `<div class="ix-prose" id="ix-prose">${e.body_html || `<p class="muted">This entry has no body yet.</p>`}</div>${updates}${e.thread ? intelThreadHtml(e) : ""}</article>` +
@@ -30487,11 +30715,12 @@ async function intelEntryView(box) {
     `<dt>KIND</dt><dd>${esc(INTEL_KIND[e.kind])}</dd>` +
     (isReport && !e.activity ? "" : `<dt>ACTIVITY</dt><dd>${esc(e.activity || "General")}</dd>`) +
     (e.system ? `<dt>SYSTEM</dt><dd>${esc(e.system)}</dd>` : "") +
-    (isReport ? "" : `<dt>PATCH</dt><dd>${p.written ? `${esc(p.written)}${p.confirmed ? " (re-confirmed)" : ""}` : "Not known"}</dd>`) +
+    (isReport ? "" : `<dt>PATCH</dt><dd>${p.written ? `${esc(p.written)}${p.confirmed ? " (re-confirmed)" : ""}` : "Not recorded"}` +
+      `<small>${p.written ? "The game version it was written for. It turns amber when the org's game moves on." : "Written before the app knew the game version. Re-confirm it to stamp the current patch."}</small></dd>`) +
     (inReview ? `<dt>SUBMITTED</dt><dd>${esc(new Date(e.submitted_at).toLocaleDateString())} by ${esc(e.author_name || "?")}</dd>`
       : `<dt>PUBLISHED</dt><dd>${esc(e.published_at ? new Date(e.published_at).toLocaleDateString() : "")} by ${esc(e.author_name || "?")}</dd>`) +
-    `<dt>MARKING</dt><dd>${e.visibility === "restricted" ? "Restricted: cleared members only" : "Org: every member"}</dd>` +
-    (e.doctrine ? `<dt>DOCTRINE</dt><dd>Marked by ${esc(e.doctrine_by || "a reviewer")}</dd>` : "") +
+    `<dt>MARKING</dt><dd>${e.visibility === "restricted" ? "Restricted" : "Org"}<small>${e.visibility === "restricted" ? "Only members with a cleared Discord role can open it." : "Every member of the org can read it."}</small></dd>` +
+    (e.doctrine ? `<dt>DOCTRINE</dt><dd>Marked by ${esc(e.doctrine_by || "a reviewer")}<small>The org's official way to do this. It lists first.</small></dd>` : "") +
     (e.tags.length ? `<dt>TAGS</dt><dd>${e.tags.map(t => intelTagChip(e, t)).join("")}</dd>` : "") +
     `</dl></div></aside></div>`;
   const prose = $("ix-prose");
@@ -30529,7 +30758,7 @@ async function intelEntryView(box) {
     catch (err) { fail(err); }
   };
   if ($("ix-archive")) $("ix-archive").onclick = async () => {
-    const ok = await confirmDialog(`“${e.title}” leaves ${isReport ? "the Feed" : "the Library, the Feed"} and search. Its history is kept and an admin can still see it.`,
+    const ok = await confirmDialog(`“${e.title}” leaves ${isReport ? "the Feed" : "the Library, the Feed"} and search. Its history is kept, and an admin can restore it from its page.`,
       { title: "Archive this entry?", confirmLabel: "Archive", danger: true });
     if (!ok) return;
     try { await intelApi(`/api/intel/entries/${e.id}`, { method: "DELETE" }); location.hash = isReport ? "#/intel/feed" : "#/intel/library"; }
@@ -30926,7 +31155,7 @@ function intelEdMountRfi(v) {
   const ed = intelEd, h = (v && v.header) || {};
   ed.rfiLoc = h.location_ref ? { key: h.location_ref, label: h.location_label || h.location_ref } : null;
   const wrap = $("ix-rfi");
-  wrap.innerHTML = `<div class="ix-rep-h"><span>WHERE</span><small>Optional. A question about a place shows on its dossier while it's open.</small><a class="ix-rep-help" href="#/intel/guide/question" target="_blank" rel="noopener">How to fill this in</a></div>` +
+  wrap.innerHTML = `<div class="ix-rep-h"><span>WHERE</span><small>Optional. A question about a place shows on its dossier while it's open.</small><a class="ix-rep-help" href="#/intel/guide/question" target="_blank" rel="noopener">Question guide</a></div>` +
     `<div class="ix-lbl"><span>LOCATION · a place or survey zone</span><div id="ix-q-locchip"></div>` +
     `<div class="ix-pick" id="ix-q-pick"><input class="ti" id="ix-q-locq" autocomplete="off" placeholder="Find a place or survey zone…" aria-label="Find a place">` +
     `<ul id="ix-q-locres" hidden></ul></div></div>`;
@@ -31030,23 +31259,31 @@ function intelEdMountReport(v) {
   const cred = `<option value="">—</option>` + Object.entries(INTEL_CRED).map(([k, t]) =>
     `<option value="${k}"${String(v.grade_cred) === k ? " selected" : ""}>${k} · ${esc(t)}</option>`).join("");
   const wrap = $("ix-rep");
-  wrap.innerHTML = `<div class="ix-rep-h"><span>SALUTE</span><small>Where and when are required. The rest helps whoever reads it next.</small><a class="ix-rep-help" href="#/intel/guide/report" target="_blank" rel="noopener">How to fill this in</a></div>` +
+  // SALUTE in its own order, each field keyed by its letter (the mnemonic the
+  // guide teaches and the report page shows). Grading and unit details are
+  // optional extras, folded away until wanted.
+  const k = (l) => `<b class="ix-sk" aria-hidden="true">${l}</b>`;
+  const req = `<i class="ix-req">required</i>`;
+  const more = !!(v.grade_rel || v.grade_cred || h.unit);
+  wrap.innerHTML = `<div class="ix-rep-h"><span>SALUTE</span><small>Where (L) and when (T) are required. The rest helps whoever reads it next.</small><a class="ix-rep-help" href="#/intel/guide/report" target="_blank" rel="noopener">Report guide</a></div>` +
     `<div class="ix-rep-grid">` +
-    `<div class="ix-lbl ix-rep-wide"><span>LOCATION · a place or survey zone</span><div id="ix-r-locchip"></div>` +
-    `<div class="ix-pick" id="ix-r-pick"><input class="ti" id="ix-r-locq" autocomplete="off" placeholder="Find a place or survey zone…" aria-label="Find a place">` +
+    inp("ix-r-size", `${k("S")}SIZE`, h.size, "e.g. 5 ships, 2 crewed heavies", 120) +
+    inp("ix-r-act", `${k("A")}WHAT THEY'RE DOING`, h.activity, "e.g. Interdicting anything over 96 SCU", 200) +
+    `<div class="ix-lbl ix-rep-wide"><span>${k("L")}LOCATION · a place or survey zone ${req}</span><div id="ix-r-locchip"></div>` +
+    `<div class="ix-pick" id="ix-r-pick"><input class="ti" id="ix-r-locq" autocomplete="off" placeholder="Find a place or survey zone…" aria-label="Location: find a place" aria-required="true">` +
     `<ul id="ix-r-locres" hidden></ul></div></div>` +
     inp("ix-r-loc", "WHERE EXACTLY", h.location, "e.g. 8 km off the Pyro-side exit", 200) +
-    `<label class="ix-lbl"><span>TIME SEEN</span><span class="ix-r-time"><input class="ti" type="datetime-local" id="ix-r-time" value="${intelLocalInput(h.time)}">` +
-    `<button type="button" id="ix-r-now">Now</button></span></label>` +
-    inp("ix-r-size", "SIZE", h.size, "e.g. 5 ships, 2 crewed heavies", 120) +
-    inp("ix-r-act", "WHAT THEY'RE DOING", h.activity, "e.g. Interdicting anything over 96 SCU", 200) +
-    `<div class="ix-lbl"><span>UNIT · their org dossier</span><div id="ix-r-unitchip"></div>` +
-    `<div class="ix-pick" id="ix-r-upick"><input class="ti" id="ix-r-unitq" autocomplete="off" placeholder="Find an org dossier…" aria-label="Link an org dossier">` +
+    `<div class="ix-lbl"><span>${k("U")}UNIT · their org dossier</span><div id="ix-r-unitchip"></div>` +
+    `<div class="ix-pick" id="ix-r-upick"><input class="ti" id="ix-r-unitq" autocomplete="off" placeholder="Find an org dossier…" aria-label="Unit: link an org dossier">` +
     `<ul id="ix-r-unitres" hidden></ul></div></div>` +
-    inp("ix-r-unit", "UNIT DETAILS", h.unit, "Ship tags, how you knew it was them", 200) +
-    inp("ix-r-eq", "EQUIPMENT", h.equipment, "e.g. 3× Polaris, 2× Hornet Mk II", 300) +
-    `<label class="ix-lbl"><span>SOURCE</span><select class="ti" id="ix-r-rel">${rel}</select></label>` +
-    `<label class="ix-lbl"><span>INFORMATION</span><select class="ti" id="ix-r-cred">${cred}</select></label>` +
+    `<label class="ix-lbl"><span>${k("T")}TIME SEEN ${req}</span><span class="ix-r-time"><input class="ti" type="datetime-local" id="ix-r-time" aria-required="true" value="${intelLocalInput(h.time)}">` +
+    `<button type="button" id="ix-r-now">Now</button></span></label>` +
+    inp("ix-r-eq", `${k("E")}EQUIPMENT`, h.equipment, "e.g. 3× Polaris, 2× Hornet Mk II", 300) +
+    `<details class="ix-rep-wide ix-rep-more"${more ? " open" : ""}><summary>More detail <i>optional</i> · grading, unit details</summary><div class="ix-rep-grid">` +
+    `<label class="ix-lbl"><span>SOURCE · how far you trust where it came from</span><select class="ti" id="ix-r-rel">${rel}</select></label>` +
+    `<label class="ix-lbl"><span>INFORMATION · how likely it's true</span><select class="ti" id="ix-r-cred">${cred}</select></label>` +
+    inp("ix-r-unit", "UNIT DETAILS", h.unit, "Ship tags, how you knew it was them", 200).replace('class="ix-lbl"', 'class="ix-lbl ix-rep-wide"') +
+    `</div></details>` +
     `<label class="ix-lbl"><span>VALID FOR</span><select class="ti" id="ix-r-valid">` +
     (ed.validUntil ? `<option value="cur" selected>Until ${esc(new Date(ed.validUntil).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" }))}</option>` : "") +
     [["", "No expiry"], ["2", "2 hours"], ["6", "6 hours"], ["24", "24 hours"], ["72", "3 days"]].map(([val, l]) =>
@@ -31100,7 +31337,7 @@ function intelEdMountDossier(v) {
     ref: d.subject_ref ? { key: d.subject_ref, label: d.subject_label || d.subject_ref } : null };
   const stOpts = Object.entries(INTEL_STANCE).map(([k, t]) => `<option value="${k}"${(d.stance || "unknown") === k ? " selected" : ""}>${t}</option>`).join("");
   const wrap = $("ix-dos");
-  wrap.innerHTML = `<div class="ix-rep-h"><span>ABOUT</span><small id="ix-d-hint"></small><a class="ix-rep-help" href="#/intel/guide/dossier" target="_blank" rel="noopener">How to fill this in</a></div>` +
+  wrap.innerHTML = `<div class="ix-rep-h"><span>ABOUT</span><small id="ix-d-hint"></small><a class="ix-rep-help" href="#/intel/guide/dossier" target="_blank" rel="noopener">Dossier guide</a></div>` +
     (locked ? "" : `<div class="seg" id="ix-d-kind" role="group" aria-label="What it's about" style="margin-bottom:10px">` +
       `<button type="button" data-dk="place">A PLACE</button><button type="button" data-dk="org">AN ORG</button></div>`) +
     `<div class="ix-dos-grid">` +
@@ -31317,8 +31554,10 @@ async function intelEditor(box) {
     rev: e ? e.rev : 0, entry: e, major: false, timer: null, saving: false, dirty: false,
     templated: isNew && (!pre || pre.body === intelTemplateFor(kind, pre.dossier && pre.dossier.subject_kind)),
     visibility: e ? e.visibility : "org", locRef: null, unitRef: null, validUntil: null, warningId: null, dos: null,
-    // 📣: on by default for a first publish, off (Push) for an edit.
-    ann: { on: !(e && e.status === "published"), channel: null, ping: null, teaser: "" },
+    // 📣: on by default only for a REPORT's first publish (a sighting is news;
+    // a procedure or a question usually isn't). Off (Push) for an edit. Until
+    // the author touches the box, switching kind re-applies that default.
+    ann: { on: !(e && e.status === "published") && (e ? e.kind : kind) === "report", touched: false, channel: null, ping: null, teaser: "" },
     // The marking control shows to cleared members, and on an entry that's
     // already RESTRICTED (whoever can open it is cleared anyway).
     canMark: intelAccess().cleared || (e && e.visibility === "restricted") };
@@ -31352,10 +31591,11 @@ async function intelEditor(box) {
     `<div class="ix-ed-head">` +
     (isNew ? `<div class="seg" id="ix-ed-kind" role="group" aria-label="Kind">` +
       ["procedure", "tactic", "report", "dossier", "rfi"].map(k => `<button type="button" data-k="${k}" class="${k === kind ? "on" : ""}" aria-pressed="${k === kind}">${k === "rfi" ? "QUESTION" : INTEL_KIND[k].toUpperCase()}</button>`).join("") + `</div>` : "") +
-    `<input class="ti ix-ed-title" id="ix-ed-title" maxlength="140" autocomplete="off" aria-label="Title" ` +
-    `placeholder="${INTEL_TITLE_PH[intelEd.kind]}" value="${esc(v.title)}">` +
+    `<label class="ix-lbl"><span>TITLE <i class="ix-req">required</i></span>` +
+    `<input class="ti ix-ed-title" id="ix-ed-title" maxlength="140" autocomplete="off" aria-required="true" ` +
+    `placeholder="${INTEL_TITLE_PH[intelEd.kind]}" value="${esc(v.title)}"></label>` +
     `<label class="ix-lbl"><span>SUMMARY <i id="ix-sum-n"></i></span>` +
-    `<input class="ti" id="ix-ed-sum" maxlength="300" autocomplete="off" placeholder="${intelEd.kind === "report" ? "One line for the feed: what's going on, where." : "One line: what this is for. Shows in lists and search."}" value="${esc(v.summary)}"></label>` +
+    `<input class="ti" id="ix-ed-sum" maxlength="300" autocomplete="off" placeholder="${intelSumPh(intelEd.kind)}" value="${esc(v.summary)}"></label>` +
     `<div class="ix-ed-meta">` +
     `<label class="ix-lbl"><span>ACTIVITY</span><select class="ti" id="ix-ed-act">${opt(tags, v.activity, "General")}</select></label>` +
     `<label class="ix-lbl"><span>SYSTEM</span><select class="ti" id="ix-ed-sys">${opt(INTEL_SYSTEM_OPTS, v.system, "Any system")}</select></label>` +
@@ -31379,7 +31619,7 @@ async function intelEditor(box) {
     `<div class="ix-pop" id="ix-pop-img" hidden role="dialog" aria-label="Insert an image link">` +
     `<label class="ix-lbl"><span>IMAGE LINK</span><input class="ti" id="ix-img-url" type="url" autocomplete="off" placeholder="https://i.imgur.com/…"></label>` +
     `<div class="ix-hostcheck" id="ix-img-check"></div>` +
-    `<small class="muted"><a href="#/intel/guide/images" target="_blank" rel="noopener">How to get an image link</a></small>` +
+    `<small class="muted"><a href="#/intel/guide/images" target="_blank" rel="noopener">Image guide</a></small>` +
     `<label class="ix-lbl"><span>CAPTION</span><input class="ti" id="ix-img-cap" maxlength="120" autocomplete="off" placeholder="What it shows"></label>` +
     `<div class="row"><button type="button" id="ix-img-x">Cancel</button><button type="button" class="ix-primary" id="ix-img-go" disabled>Insert</button></div></div>` +
     `<div class="ix-pop" id="ix-pop-ref" hidden role="dialog" aria-label="Insert a reference">` +
@@ -31392,7 +31632,7 @@ async function intelEditor(box) {
     `<div class="ix-ed-foot"><span id="ix-count"></span><span>Paste from Docs or Notion keeps the formatting. Shift-paste for plain text. ` +
     `<a href="#/intel/guide/markdown" target="_blank" rel="noopener">Formatting guide</a>` +
     // Procedures and tactics have no header block, so their "how to" lives here.
-    `<span id="ix-howto"${["procedure", "tactic"].includes(intelEd.kind) ? "" : " hidden"}> · <a href="#/intel/guide/procedure" target="_blank" rel="noopener">How to write a procedure or tactic</a></span></span>` +
+    `<span id="ix-howto"${["procedure", "tactic"].includes(intelEd.kind) ? "" : " hidden"}> · <a href="#/intel/guide/procedure" target="_blank" rel="noopener">Procedure guide</a></span></span>` +
     `<span class="saved" id="ix-saved" role="status"></span></div>` +
     `</div><aside class="ix-ed-rail"><div class="panel" id="ix-save-p"></div><div class="panel" id="ix-people-p" hidden></div></aside></div>`;
   const ta = $("ix-area");
@@ -31440,9 +31680,11 @@ async function intelEditor(box) {
     if (b.dataset.k === intelEd.kind) return;
     const swap = intelEd.templated && ta.value === intelTemplateFor(intelEd.kind, intelEd.dos && intelEd.dos.kind);
     intelEd.kind = b.dataset.k; intelEd.key = `n${intelEd.kind}`;
+    if (!intelEd.ann.touched) intelEd.ann.on = intelEd.kind === "report";
     $("ix-ed-kind").querySelectorAll("button").forEach(x => { const on = x === b; x.classList.toggle("on", on); x.setAttribute("aria-pressed", on); });
     if (swap) ta.value = intelTemplateFor(intelEd.kind, intelEd.dos && intelEd.dos.kind);
     $("ix-ed-title").placeholder = INTEL_TITLE_PH[intelEd.kind];
+    $("ix-ed-sum").placeholder = intelSumPh(intelEd.kind);
     $("ix-rep").hidden = intelEd.kind !== "report";
     $("ix-dos").hidden = intelEd.kind !== "dossier";
     $("ix-rfi").hidden = intelEd.kind !== "rfi";
@@ -31643,6 +31885,7 @@ async function intelEdAutosave(leaving) {
 // The author decides: 📣 on first publish (on by default when a channel is
 // set), a major revision always posts, a minor one only with Push. Options
 // come from /api/intel/announce-options (configured channels + pingable roles).
+const intelSumPh = (k) => k === "report" ? "One line for the feed: what's going on, where." : "One line: what this is for. Shows in lists and search.";
 let intelAnnounceOpts = null;
 function intelEdAnnounceHtml(mode) {
   const o = intelAnnounceOpts, ed = intelEd, a = ed.ann;
@@ -31689,7 +31932,7 @@ function intelEdBindAnnounce() {
   const a = intelEd && intelEd.ann; if (!a) return;
   const where = () => { const w = $("ix-pub-where"), s = intelEdPostsTo(); if (w) { w.hidden = !s; w.textContent = s || ""; } };
   const cnt = () => { if ($("ix-ann-n") && $("ix-ann-t")) $("ix-ann-n").textContent = `${$("ix-ann-t").value.length} / ${intelAnnounceOpts.teaser_max}`; };
-  if ($("ix-ann-on")) $("ix-ann-on").onchange = (ev) => { a.on = ev.target.checked; if ($("ix-ann-body")) $("ix-ann-body").hidden = !a.on; where(); };
+  if ($("ix-ann-on")) $("ix-ann-on").onchange = (ev) => { a.on = ev.target.checked; a.touched = true; if ($("ix-ann-body")) $("ix-ann-body").hidden = !a.on; where(); };
   if ($("ix-ann-ch")) $("ix-ann-ch").onchange = (ev) => { a.channel = ev.target.value; where(); };
   if ($("ix-ann-ping")) $("ix-ann-ping").onchange = (ev) => { a.ping = ev.target.value || null; };
   if ($("ix-ann-t")) $("ix-ann-t").oninput = (ev) => { a.teaser = ev.target.value; cnt(); };
@@ -31799,16 +32042,35 @@ function intelEdRenderSave(keepNote) {
   $("ix-save").onclick = () => intelEdSave({ major: ed.major, note: $("ix-note").value, base_rev: ed.rev });
 }
 function intelEdErr(msg) { const el = $("ix-save-err"); if (el) { el.textContent = msg; el.hidden = false; } }
+// An error that belongs to one field shows UNDER that field too, marks it
+// invalid for screen readers and clears as soon as it's edited.
+function intelFieldErr(id, msg) {
+  const el = $(id); if (!el) return;
+  const host = el.closest(".ix-lbl, .ix-fld") || el.parentElement;
+  let m = $(`${id}-err`);
+  if (!m) { host.insertAdjacentHTML("beforeend", `<small class="ix-fld-err" id="${id}-err"></small>`); m = $(`${id}-err`); }
+  m.textContent = msg;
+  el.setAttribute("aria-invalid", "true"); el.setAttribute("aria-describedby", `${id}-err`);
+  const clear = () => { m.remove(); el.removeAttribute("aria-invalid"); el.removeAttribute("aria-describedby");
+    el.removeEventListener("input", clear); el.removeEventListener("change", clear); };
+  el.addEventListener("input", clear); el.addEventListener("change", clear);
+  el.focus();
+}
 async function intelEdSave(extra) {
   const ed = intelEd; if (!ed) return;
   const vals = intelEdValues();
-  if (!vals.title.trim()) { intelEdErr("Give it a title first."); $("ix-ed-title").focus(); return; }
-  if (ed.kind === "report" && (!(vals.header.location_ref || vals.header.location.trim()) || !vals.header.time)) {
-    intelEdErr("Add where it was (pick a place, or describe it) and when you saw it.");
-    (vals.header.time ? $("ix-r-locq") : $("ix-r-time")).focus(); return;
+  if (!vals.title.trim()) { intelEdErr("Give it a title first."); intelFieldErr("ix-ed-title", "Give it a title first."); return; }
+  if (ed.kind === "report") {
+    const noLoc = !(vals.header.location_ref || vals.header.location.trim()), noTime = !vals.header.time;
+    if (noLoc || noTime) {
+      intelEdErr(`Add ${noLoc && noTime ? "where it was and when you saw it" : noLoc ? "where it was" : "when you saw it"}: they're marked required.`);
+      if (noTime) intelFieldErr("ix-r-time", "When did you see it? Now fills in the current time.");
+      if (noLoc) intelFieldErr("ix-r-locq", "Pick a place, or describe it under WHERE EXACTLY.");
+      return;
+    }
   }
   if (ed.kind === "dossier" && vals.dossier && vals.dossier.subject_kind === "place" && !vals.dossier.subject_ref) {
-    intelEdErr("Pick the place this dossier is about."); $("ix-d-q").focus(); return;
+    intelEdErr("Pick the place this dossier is about."); intelFieldErr("ix-d-q", "Pick the place this dossier is about."); return;
   }
   clearTimeout(ed.timer); ed.timer = null;
   const btn = $("ix-publish") || $("ix-save"); if (btn) btn.disabled = true;
