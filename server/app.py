@@ -17976,6 +17976,9 @@ def _intel_entry_view(e: dict, user: dict) -> dict:
         # Hosts a reader may load linked images from with one click (slice 8):
         # empty while the admin's in-app preview toggle (and so CSP) is off.
         "image_load": image_preview_hosts(),
+        # The hosts an admin could turn on: with image_load empty, the page
+        # explains why these images show as links instead of saying nothing.
+        "image_hosts": list(IMAGE_PREVIEW_HOSTS),
     })
     uid = str(user["id"])
     pend = db.intel_pending(e["id"]) if e["status"] == "published" else None
@@ -19674,7 +19677,9 @@ def intel_entries(section: str = "library", kind: str = "", activity: str = "",
             c = counts[e["id"]]
             e["counts"] = {k: c.get(k, 0) for k in ("corroborate", "dispute", "addendum", "comment", "answer")}
     return {"entries": out, "game_patch": current, "search": db.INTEL_SEARCH,
-            "image_hosts": list(IMAGE_PREVIEW_HOSTS), **extra}   # image_hosts: the editor's host check
+            "image_hosts": list(IMAGE_PREVIEW_HOSTS),   # image_hosts: the editor's host check
+            # Off = readers get a link, not the image: the editor says so.
+            "image_previews": external_image_preview(), **extra}
 
 
 # Markdown syntax that reads as noise in a one-line snippet (headings, table

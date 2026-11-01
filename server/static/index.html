@@ -761,6 +761,7 @@
     border-bottom: 1px solid var(--border); background: var(--panel2); }
   .ix-imgbar > span { flex: 1 1 200px; }
   .ix-imgbar > .ix-ico { color: var(--accent); }
+  .ix-imgbar.off > .ix-ico { color: var(--warn); }
   .ix-imgbar-auto { display: inline-flex; gap: 6px; align-items: center; color: var(--dim); }
   .ix-imgbar .ix-btn { padding: 5px 10px; }
   .ix-rail { display: grid; gap: 14px; position: sticky; top: 14px; }
@@ -822,6 +823,7 @@
   .ix-hostcheck .ix-ico { width: 14px; height: 14px; margin-top: 2px; }
   .ix-hostcheck.ok { color: var(--good); }
   .ix-hostcheck.bad { color: var(--bad); }
+  .ix-hostcheck.warn { color: var(--warn); }
   textarea.ti.ix-area { width: 100%; min-height: 480px; border: 0; border-radius: 0; background: var(--panel);
     padding: 16px 18px; font-size: 13px; line-height: 1.65; display: block; tab-size: 2; outline: none; }
   textarea.ti.ix-area:focus { outline: none; box-shadow: inset 0 0 0 1px var(--accent); }
@@ -5629,8 +5631,8 @@
         <div class="panel admin-grp" id="img-preview-panel">
           <h2>LINKED IMAGE PREVIEWS</h2>
           <div class="muted" style="font-size:12px; margin-bottom:8px; max-width:80ch;">
-            Discord always shows a linked image. This also shows it inside the app, but only from
-            <span id="img-preview-hosts"></span>.
+            Discord always shows a linked image. This also shows it inside the app, including the images in
+            Intelligence entries (off, they show as links), but only from <span id="img-preview-hosts"></span>.
           </div>
           <label style="display:flex; gap:8px; align-items:center; font-size:13px;">
             <input type="checkbox" id="img-preview-toggle"> Preview linked images from these hosts
@@ -28987,6 +28989,7 @@ const INTEL_STANCE = { hostile: "Hostile", neutral: "Neutral", allied: "Allied",
 const intelStanceChip = (st) => st ? `<span class="ix-org-stance ${esc(st)}">${intelIco(st)}${esc(INTEL_STANCE[st] || st)}</span>` : "";
 let intelPlaystyles = null;      // /api/playstyles, fetched once
 let intelImageHosts = [];        // IMAGE_PREVIEW_HOSTS (from /api/intel/entries)
+let intelImagePreviews = true;   // the org's in-app image preview setting (off = readers see links)
 let intelEd = null;              // the open editor's state (null = none open)
 let intelLibFilter = { kind: "", activity: "" };
 
@@ -29245,7 +29248,7 @@ async function intelFeed(box) {
         `title="Everything you watch: entries, tags and collections">${intelIco("watch")}Watching${wt.updated ? ` · ${wt.updated} updated` : ""}</button>`;
       $("ix-f-watch").onclick = () => { f.watching = !f.watching; intelFeed(box); };
     }
-    intelImageHosts = d.image_hosts || intelImageHosts;
+    intelImageHosts = d.image_hosts || intelImageHosts; if ("image_previews" in d) intelImagePreviews = !!d.image_previews;
     const el = $("ix-feed"); if (!el) return;
     // The mark from BEFORE this visit stays put while filters re-render.
     if (intelFeedSeen === undefined) {
@@ -29351,7 +29354,7 @@ async function intelLibrary(box) {
   try {
     const [lib, drafts] = await Promise.all([intelApi(`/api/intel/entries?${q}`),
       intelApi("/api/intel/entries?section=drafts").catch(() => ({ entries: [] }))]);
-    intelImageHosts = lib.image_hosts || intelImageHosts;
+    intelImageHosts = lib.image_hosts || intelImageHosts; if ("image_previews" in lib) intelImagePreviews = !!lib.image_previews;
     intelPinsPanel(lib.pins, () => intelLibrary(box));
     const el = $("ix-lib"); if (!el) return;
     const dEl = $("ix-drafts");
@@ -29492,7 +29495,8 @@ async function intelGuide(box) {
     `<p>What it inserts is ordinary Markdown, so you can also type it yourself:</p><pre class="ix-gd-pre">![Pad layout at Ruin Station](https://i.imgur.com/abc123.png)</pre>` +
     `<div class="ix-gd-tip warn">${intelIco("alert")}<span><b>Links that won't work.</b> Discord image links expire after a day. Google Docs and Drive images can't be shown (Docs links expire, Drive refuses). ` +
       `Download the image and upload it to imgur instead.</span></div>` +
-    `<p class="muted">If the image button says no host is allowed, image previews are switched off for your org. An admin turns them on in <b>Settings → Announcements</b>. ` +
+    `<p class="muted">If images show as links with a note that image previews are off, they're switched off for your org: the image button warns you about it too. ` +
+    `An admin turns them on in <b>Settings → Announcements → Linked image previews</b>. ` +
     `Admins can also move a whole handbook in, screenshots included, with <b>Settings → Data → Import Markdown (.zip)</b>.</p>`;
   const links = `<p>The <b>reference</b> button ${intelIco("ref", "ix-ico sm")} links a place, survey zone, danger-board warning, event, op or another entry. ` +
     `Search for it and pick it: it goes in as a live chip that always shows the current name, and a place chip sets the reader's destination in one click. ` +
@@ -29780,7 +29784,7 @@ async function intelDossiers(box) {
   $("ix-dos-q").oninput = (ev) => { f.q = ev.target.value; draw(); };
   try {
     const d = await intelApi("/api/intel/entries?section=dossiers");
-    intelImageHosts = d.image_hosts || intelImageHosts;
+    intelImageHosts = d.image_hosts || intelImageHosts; if ("image_previews" in d) intelImagePreviews = !!d.image_previews;
     rows = d.entries;
     draw();
   } catch (err) { const el = $("ix-dos"); if (el) el.innerHTML = intelStatus(err.message, true); }
@@ -30517,11 +30521,14 @@ function intelHydrateImages(root, e) {
     s.replaceWith(f);
   });
   const hosts = (e && e.image_load) || [];
+  const known = (e && e.image_hosts) || [];
   const pending = [];
+  let off = 0;   // links an admin could turn into images (previews off)
   root.querySelectorAll("span.intel-img").forEach(s => {
     const src = s.dataset.src || "", alt = s.dataset.alt || "";
     let host = ""; try { const u = new URL(src); host = u.protocol === "https:" ? u.host : ""; } catch {}
     if (!host || !hosts.includes(host)) {
+      if (host && !hosts.length && known.includes(host)) off++;
       const a = document.createElement("a");
       a.className = "ix-imglink"; a.href = src; a.target = "_blank"; a.rel = "noopener noreferrer nofollow";
       a.referrerPolicy = "no-referrer";
@@ -30538,6 +30545,15 @@ function intelHydrateImages(root, e) {
     s.replaceWith(f);
     pending.push({ f, host });
   });
+  if (off) {
+    const bar = document.createElement("div");
+    bar.className = "ix-imgbar off";
+    bar.innerHTML = `${intelIco("image")}<span>${off === 1 ? "This entry's image shows" : `This entry's ${off} images show`} as a link: ` +
+      `image previews are off for this org. ` + (currentMe && currentMe.is_admin
+        ? `<a href="#/settings/announcements">Turn them on in Settings → Announcements</a>.</span>`
+        : `An admin can turn them on in Settings → Announcements.</span>`);
+    root.before(bar);
+  }
   if (!pending.length) return;
   const load = () => {
     pending.forEach(({ f }) => {
@@ -30546,7 +30562,7 @@ function intelHydrateImages(root, e) {
       img.onload = () => { f.classList.remove("pending"); const ph = f.querySelector(".ix-fig-ph"); if (ph) ph.remove(); };
       f.prepend(img);
     });
-    const bar = root.parentElement && root.parentElement.querySelector(":scope > .ix-imgbar");
+    const bar = root.parentElement && root.parentElement.querySelector(":scope > .ix-imgbar:not(.off)");
     if (bar) bar.remove();
   };
   if (intelImgAuto()) { load(); return; }
@@ -31499,7 +31515,7 @@ async function intelEditor(box) {
   // A deep link into the editor hasn't seen a list response yet: the image
   // host check needs the allowed hosts it carries.
   if (!intelImageHosts.length) {
-    try { intelImageHosts = (await intelApi("/api/intel/entries?section=drafts")).image_hosts || []; } catch {}
+    try { const d = await intelApi("/api/intel/entries?section=drafts"); intelImageHosts = d.image_hosts || []; intelImagePreviews = d.image_previews !== false; } catch {}
   }
   if (!isNew) {
     try { e = await intelApi(`/api/intel/entries/${id}`); }
@@ -31841,9 +31857,12 @@ function intelCheckHost() {
   else if (/(^|\.)(google|googleusercontent)\.com$/.test(host)) { cls = "bad"; msg = `${host}: Google Drive and Docs image links can't be shown (Drive returns 403; Docs links expire). Upload it to imgur, or add it as a plain link.`; }
   else if (/discord(app)?\.(com|net)$/.test(host)) { cls = "bad"; msg = `${host}: Discord image links expire after a day. Upload it to imgur and paste that link.`; }
   else if (host && !intelImageHosts.includes(host)) { cls = "bad"; msg = `${host} isn't an allowed image host, so it would show as a plain link. Allowed: ${allowed}.`; }
-  else if (host) { cls = "ok"; msg = `${host} is allowed. Readers see it as a link to the image.`; ok = true; }
+  else if (host && !intelImagePreviews) { cls = "warn"; ok = true;
+    msg = `${host} is allowed, but image previews are off for your org, so readers will see a link instead of the image. ` +
+      (currentMe && currentMe.is_admin ? "Turn them on in Settings → Announcements → Linked image previews." : "Ask an admin to turn them on in Settings → Announcements."); }
+  else if (host) { cls = "ok"; msg = `${host} is allowed. Readers load it with one click.`; ok = true; }
   c.className = "ix-hostcheck " + cls;
-  c.innerHTML = intelIco(ok ? "check" : cls === "bad" ? "alert" : "image") + `<span>${esc(msg)}</span>`;
+  c.innerHTML = intelIco(cls === "ok" ? "check" : cls === "bad" || cls === "warn" ? "alert" : "image") + `<span>${esc(msg)}</span>`;
   $("ix-img-go").disabled = !ok;
 }
 function intelEdCounts() {

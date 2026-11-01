@@ -15854,6 +15854,19 @@ class IntelLibraryTests(unittest.TestCase):
         d = self.client.get("/api/intel/entries?section=library").json()
         self.assertEqual(d["image_hosts"], list(app.IMAGE_PREVIEW_HOSTS))
 
+    def test_lists_and_entries_say_when_image_previews_are_off(self):
+        # Off (the default), the editor warns and the entry page explains why
+        # its images are links: image_load is empty, image_hosts still listed.
+        db.set_setting("notify_external_preview", "0")
+        eid = self.publish("Whale sighting", "![Whale](https://i.imgur.com/abc.jpeg)")["id"]
+        self.assertIs(self.client.get("/api/intel/entries?section=library").json()["image_previews"], False)
+        e = self.client.get(f"/api/intel/entries/{eid}").json()
+        self.assertEqual(e["image_load"], [])
+        self.assertEqual(e["image_hosts"], list(app.IMAGE_PREVIEW_HOSTS))
+        db.set_setting("notify_external_preview", "1")
+        self.assertIs(self.client.get("/api/intel/entries?section=library").json()["image_previews"], True)
+        self.assertEqual(self.client.get(f"/api/intel/entries/{eid}").json()["image_load"], list(app.IMAGE_PREVIEW_HOSTS))
+
     def test_search_like_fallback(self):
         self.publish("Quantanium run", "Watch the refinery timer.")
         saved = db.INTEL_SEARCH
