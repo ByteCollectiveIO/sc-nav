@@ -15867,6 +15867,17 @@ class IntelLibraryTests(unittest.TestCase):
         self.assertIs(self.client.get("/api/intel/entries?section=library").json()["image_previews"], True)
         self.assertEqual(self.client.get(f"/api/intel/entries/{eid}").json()["image_load"], list(app.IMAGE_PREVIEW_HOSTS))
 
+    def test_the_shell_names_the_image_hosts_its_csp_admits(self):
+        # The page cuts an entry's live image_load to the hosts its own CSP
+        # allowed at load, and offers a reload for the rest.
+        db.set_setting("notify_external_preview", "0")
+        r = self.client.get("/")
+        self.assertIn('<meta name="sc-img-hosts" content="">', r.text)
+        db.set_setting("notify_external_preview", "1")
+        r = self.client.get("/")
+        self.assertIn(f'<meta name="sc-img-hosts" content="{" ".join(app.IMAGE_PREVIEW_HOSTS)}">', r.text)
+        self.assertIn("https://i.imgur.com", r.headers["content-security-policy"])
+
     def test_search_like_fallback(self):
         self.publish("Quantanium run", "Watch the refinery timer.")
         saved = db.INTEL_SEARCH

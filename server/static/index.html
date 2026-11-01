@@ -30509,6 +30509,12 @@ function intelFigure(alt, cls) {
   if (alt) { const c = document.createElement("figcaption"); c.textContent = alt; f.appendChild(c); }
   return f;
 }
+// The image hosts THIS page load's CSP admits. Turning previews on later
+// doesn't widen it until a reload, so an entry's live image_load is cut to it.
+const PAGE_IMG_HOSTS = (() => {
+  const m = document.querySelector('meta[name="sc-img-hosts"]');
+  return m && m.content ? m.content.split(" ") : [];
+})();
 function intelHydrateImages(root, e) {
   root.querySelectorAll("span.intel-file").forEach(s => {
     const src = s.dataset.src || "";
@@ -30520,15 +30526,18 @@ function intelHydrateImages(root, e) {
     f.prepend(img);
     s.replaceWith(f);
   });
-  const hosts = (e && e.image_load) || [];
+  const live = (e && e.image_load) || [];
+  const hosts = live.filter(h => PAGE_IMG_HOSTS.includes(h));
   const known = (e && e.image_hosts) || [];
   const pending = [];
-  let off = 0;   // links an admin could turn into images (previews off)
+  let off = 0;     // links an admin could turn into images (previews off)
+  let stale = 0;   // previews turned on after this page loaded: a reload fixes it
   root.querySelectorAll("span.intel-img").forEach(s => {
     const src = s.dataset.src || "", alt = s.dataset.alt || "";
     let host = ""; try { const u = new URL(src); host = u.protocol === "https:" ? u.host : ""; } catch {}
     if (!host || !hosts.includes(host)) {
-      if (host && !hosts.length && known.includes(host)) off++;
+      if (host && live.includes(host)) stale++;
+      else if (host && !live.length && known.includes(host)) off++;
       const a = document.createElement("a");
       a.className = "ix-imglink"; a.href = src; a.target = "_blank"; a.rel = "noopener noreferrer nofollow";
       a.referrerPolicy = "no-referrer";
@@ -30545,6 +30554,15 @@ function intelHydrateImages(root, e) {
     s.replaceWith(f);
     pending.push({ f, host });
   });
+  if (stale) {
+    const bar = document.createElement("div");
+    bar.className = "ix-imgbar off";
+    bar.innerHTML = `${intelIco("image")}<span>Image previews were turned on after this page loaded, so ` +
+      `${stale === 1 ? "this image shows" : `these ${stale} images show`} as a link. Reload the page to load ${stale === 1 ? "it" : "them"}.</span>` +
+      `<button type="button" class="ix-btn">Reload page</button>`;
+    bar.querySelector("button").onclick = () => location.reload();
+    root.before(bar);
+  }
   if (off) {
     const bar = document.createElement("div");
     bar.className = "ix-imgbar off";

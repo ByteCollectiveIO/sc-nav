@@ -20884,6 +20884,10 @@ def _index_response(request: Request) -> HTMLResponse:
         p["head"]
         + f'<link rel="stylesheet" href="/assets/app.{p["css_hash"]}.css">'
         + p["body"]
+        # The image hosts this page's CSP admits (same read as `_csp`): the
+        # setting can change after load, and only a reload changes the policy,
+        # so the page compares this with an entry's live `image_load`.
+        + f'<meta name="sc-img-hosts" content="{" ".join(image_preview_hosts())}">'
         + f'<script nonce="{nonce}" src="/assets/app.{p["js_hash"]}.js"></script>'
         + p["tail"]
     )
