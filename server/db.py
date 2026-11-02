@@ -6017,13 +6017,16 @@ def intel_list(*, kinds=None, status="published", author_id=None, activity=None,
         where.append("e.author_id=?")
         args.append(str(author_id))
     # activity / system hold a comma-joined list ("Stanton,Pyro"): match a
-    # whole item, never a substring. No system = any system, so it matches.
-    if activity:
-        where.append("(',' || e.activity || ',') LIKE ?")
-        args.append(f"%,{activity},%")
-    if system:
-        where.append("(e.system IS NULL OR (',' || e.system || ',') LIKE ?)")
-        args.append(f"%,{system},%")
+    # whole item, never a substring. Several filter values = ANY of them.
+    # No system on the entry = any system, so it always matches.
+    acts = [activity] if isinstance(activity, str) else list(activity or [])
+    syss = [system] if isinstance(system, str) else list(system or [])
+    if acts:
+        where.append("(" + " OR ".join(["(',' || e.activity || ',') LIKE ?"] * len(acts)) + ")")
+        args += [f"%,{a},%" for a in acts]
+    if syss:
+        where.append("(e.system IS NULL OR " + " OR ".join(["(',' || e.system || ',') LIKE ?"] * len(syss)) + ")")
+        args += [f"%,{x},%" for x in syss]
     if tag:
         where.append("EXISTS (SELECT 1 FROM intel_tags t WHERE t.entry_id=e.id AND t.tag=?)")
         args.append(tag)

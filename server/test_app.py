@@ -16074,6 +16074,11 @@ class IntelAccessReviewTests(unittest.TestCase):
         self.assertEqual(lib("activity=hauling"), ["Two-system haul"])
         # A whole item matches, never a substring of another.
         self.assertEqual(lib("activity=PvE"), [])
+        # Several filter values match ANY of them (Feed and Library multi-select).
+        self.assertEqual(lib("activity=mining,trading"), ["Legacy client", "Two-system haul"])
+        self.assertEqual(lib("system=Nyx,Pyro"), ["Anywhere", "Legacy client", "Nyx only", "Two-system haul"])
+        self.assertEqual(lib("system=Nyx&activity=mining,hauling"), [])
+        self.assertEqual(lib("system=Pyro&activity=mining,hauling"), ["Legacy client", "Two-system haul"])
         r = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": "x", "systems": ["Stanton", "Hurston"]})
         self.assertEqual(r.status_code, 422)
 
