@@ -13,7 +13,7 @@ tags: app-guide, tutorial, navigator
 | **What** | Live navigation to org-logged places, ore nodes, plants and creatures, plus the forms to log your own. |
 | **Where** | Launcher group Out in the 'Verse, route `#/nav`. You need the watcher running on your gaming PC first. |
 | **When** | During a play session, open on a laptop or phone next to your keyboard. |
-| **Why** | The game has no marker for "the node someone found last week". This app does. |
+| **Why** | The game has no marker for "the node someone found last week". Here you can fly straight to it. |
 
 ## {orange}The basics{/orange}
 
@@ -87,7 +87,7 @@ Every sighting ever logged inside the circle joins it, and new ones keep joining
 
 ## {orange}Tips{/orange}
 
-- If NEARBY looks empty after a server change, check the shard filter in **Layers & settings**. Nodes from other shards are hidden on purpose.
+- If NEARBY looks empty after a server change, check the shard filter in **Layers & settings**. It hides nodes logged on other shards.
 - Untick fresh only to see old sightings, which may have respawned elsewhere.
 - Use the pin on a node row to keep it on your own list. Use mark mined when a node is used up, so the org stops flying to it.
 

@@ -17,7 +17,7 @@ tags: app-guide, tutorial, resource-manager
 
 ## {orange}The basics{/orange}
 
-Resource Manager has three tabs that share one item catalog.
+Resource Manager has three tabs.
 
 - **Goals** are targets for the org or for you alone: materials to gather, blueprints to get unlocked across members, or evidence to log in a named survey area.
 - **Inventory** lists your holdings. Each row is one lot: an item, a place and a quality.

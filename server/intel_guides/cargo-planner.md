@@ -18,7 +18,7 @@ activity: hauling
 
 ## {orange}The basics{/orange}
 
-The page is one form, top to bottom. **SHIP** is your ship and its usable SCU (standard cargo units, the game's cargo measure). **START FROM** is where you begin. **PACKAGES** holds one row per contract line: commodity, SCU, from and to. **Pirate danger** decides how the plan treats warnings on the Danger Board.
+Fill in the form from the top. **SHIP** is your ship and its usable SCU (standard cargo units, the game's cargo measure). **START FROM** is where you begin. **PACKAGES** holds one row per contract line: commodity, SCU, from and to. **Pirate danger** decides how the plan treats warnings on the Danger Board.
 
 Two ideas matter most. Every package is picked up before it is dropped off, and your hold never goes over its usable SCU. And the app never completes a stop for you: you move the cargo in game, then tick each package off.
 
@@ -71,7 +71,7 @@ Do this to deliver or sell items you've logged in Resource Manager.
 
 - Two contracts running both ways between the same two places are fine. The same stop can appear twice in the plan, once to drop and once to pick up.
 - **Avoid** never drops a contract stop. A stop reported as camped stays in the plan with a warning, so fly in ready.
-- **RECENT HAULS** keeps your frequent lanes as one-click rows, and **clone** on a past run refills the whole form.
+- Click a lane under **RECENT HAULS** to plan it again, or **clone** a past run to refill the whole form.
 
 ## {orange}Related guides{/orange}
 

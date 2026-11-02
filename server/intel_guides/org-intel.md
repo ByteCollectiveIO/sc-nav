@@ -2,7 +2,7 @@
 key: org-intel
 order: 11
 title: "Org Intel: getting started"
-summary: The org's shared knowledge (reports, procedures, dossiers, questions) and its activity stats, in one place.
+summary: Read and write the org's reports, procedures, dossiers and questions, and see its activity stats.
 tags: app-guide, tutorial, org-intel
 ---
 ## {orange}At a glance{/orange}

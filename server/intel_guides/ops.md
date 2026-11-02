@@ -2,7 +2,7 @@
 key: ops
 order: 6
 title: Ops: getting started
-summary: Join a running mission, log the money you're holding, settle up your cut and roll for loot, with a record nobody can quietly change.
+summary: Join a running mission, log the money you're holding, settle up your cut and roll for loot, and see who was there.
 tags: app-guide, tutorial, ops
 ---
 ## {orange}At a glance{/orange}
@@ -17,13 +17,13 @@ tags: app-guide, tutorial, ops
 
 ## {orange}The basics{/orange}
 
-An op moves through four phases, shown as a track at the top of its page: Setup, Live, Settle and Closed. Each phase shows only the tools for that job.
+An op moves through four phases, shown as a track at the top of its page: Setup, Live, Settle and Closed. In Setup the leader builds the roster and checks the rules. Live is the mission: attendance, money and loot. Settle is where everyone pays and gets paid. Closed is the finished record.
 
 An op starts one of two ways. A leader clicks Run mission on an Event Planner event, and the signups land on the roster. Or someone starts a quick op from the Ops home for an unplanned run.
 
 The Ops home lists what's running now, what's settling up, any payments waiting on you, and past records.
 
-Every change goes in the op's log with who made it and when. A mistake is voided, not deleted, so it stays on the record struck through.
+Every change goes in the op's log with who made it and when. To fix a mistake, void the entry. It stays in the log, struck through.
 
 How money and loot are shared is set by the op's payout rules. Your org decides those rules. Contracts are listed apart from the split: the game pays each contract in equal cuts to everyone who has it shared.
 
