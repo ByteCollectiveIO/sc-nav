@@ -37,7 +37,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, 
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -17519,6 +17519,22 @@ INTEL_COMMENT_MAX = 4000
 # Org dossiers carry a stance. Each has a glyph as well as a colour in the UI.
 INTEL_STANCES = ("hostile", "neutral", "allied", "unknown")
 INTEL_SYSTEMS = ("Stanton", "Nyx", "Pyro")
+
+
+def _intel_multi(v, allowed) -> list[str]:
+    """An entry's systems / activities as a list in `allowed` order. Stored in
+    the old single-value TEXT columns comma-joined ("Stanton,Pyro"), so every
+    pre-multi row (one value) is already a valid one-item list. Unknown values
+    drop; accepts None, a joined string or a list."""
+    if v in (None, ""):
+        return []
+    items = v.split(",") if isinstance(v, str) else [str(x) for x in v]
+    want = {x.strip().strip("[]\"' ") for x in items}
+    return [a for a in allowed if a in want]
+
+
+def _intel_join(v, allowed) -> str | None:
+    return ",".join(_intel_multi(v, allowed)) or None
 # A report is a record of what someone saw at a time: its author can fix typos
 # for 15 minutes after publishing, then it only takes updates (addenda).
 INTEL_REPORT_EDIT_S = 15 * 60
@@ -17638,6 +17654,11 @@ class IntelEntryFields(BaseModel):
     title: str = Field("", max_length=140)
     summary: str = Field("", max_length=300)
     body: str = Field("", max_length=intel_md.MAX_BODY_CHARS)
+    # Multi-choice (an SOP can cover Stanton AND Pyro). `activity`/`system`
+    # (one value) are still accepted; the lists win when both are sent. After
+    # validation `activity`/`system` hold the stored comma-joined form.
+    activities: list[str] | None = Field(None, max_length=40)
+    systems: list[str] | None = Field(None, max_length=10)
     activity: str | None = None
     system: str | None = None
     tags: list[str] = Field(default_factory=list, max_length=_INTEL_MAX_TAGS * 2)
@@ -17677,23 +17698,18 @@ class IntelEntryFields(BaseModel):
             raise ValueError("visibility is org or restricted")
         return v
 
-    @field_validator("activity")
-    @classmethod
-    def _activity(cls, v):
-        if v in (None, ""):
-            return None
-        if v not in PLAYSTYLE_TAGS:
-            raise ValueError("unknown activity")
-        return v
-
-    @field_validator("system")
-    @classmethod
-    def _system(cls, v):
-        if v in (None, ""):
-            return None
-        if v not in INTEL_SYSTEMS:
-            raise ValueError("unknown system")
-        return v
+    @model_validator(mode="after")
+    def _axes(self):
+        for many, one, allowed, what in (("activities", "activity", PLAYSTYLE_TAGS, "activity"),
+                                         ("systems", "system", INTEL_SYSTEMS, "system")):
+            raw = getattr(self, many)
+            if raw is None:
+                raw = [x for x in (getattr(self, one) or "").split(",") if x]
+            bad = [x for x in raw if x not in allowed]
+            if bad:
+                raise ValueError(f"unknown {what}: {bad[0]}")
+            setattr(self, one, _intel_join(raw, allowed))
+        return self
 
 
 class IntelCreateIn(IntelEntryFields):
@@ -17940,7 +17956,8 @@ def _intel_summary(e: dict, current: str | None) -> dict:
     return {
         "id": e["id"], "kind": e["kind"], "title": e["title"], "slug": e["slug"],
         "summary": e.get("summary") or "", "status": e["status"],
-        "activity": e.get("activity"), "system": e.get("system"), "tags": e.get("tags", []),
+        "activities": _intel_multi(e.get("activity"), PLAYSTYLE_TAGS),
+        "systems": _intel_multi(e.get("system"), INTEL_SYSTEMS), "tags": e.get("tags", []),
         "owner": {"id": e.get("owner_id"),
                   "name": _resolve_member_name(e["owner_id"], None) if e.get("owner_id") else None},
         "author_name": e.get("author_name"),
@@ -18835,8 +18852,8 @@ def _intel_import_entry(name: str, text: str, scan: dict, cache: dict, import_id
         report["skipped"].append([name, "longer than an entry may be (100,000 characters)"])
         return
     r = intel_md.render(body, IMAGE_PREVIEW_HOSTS, own_files=True)
-    activity = meta.get("activity") if meta.get("activity") in PLAYSTYLE_TAGS else None
-    system = meta.get("system") if meta.get("system") in INTEL_SYSTEMS else None
+    activity = _intel_join(meta.get("activities") or meta.get("activity"), PLAYSTYLE_TAGS)
+    system = _intel_join(meta.get("systems") or meta.get("system"), INTEL_SYSTEMS)
     tags = _intel_tags([str(t) for t in (meta.get("tags") or []) if isinstance(t, (str, int))][:20])
     vis = "restricted" if meta.get("visibility") == "restricted" else "org"
     uid, now = str(admin["id"]), _now_iso()
@@ -18928,7 +18945,7 @@ def _intel_guide_sources() -> list[dict]:
             continue
         out.append({"key": key, "title": title, "summary": str(meta.get("summary") or "")[:300],
                     "tags": _intel_tags([str(t) for t in (meta.get("tags") or [])]),
-                    "activity": meta.get("activity") if meta.get("activity") in PLAYSTYLE_TAGS else None,
+                    "activity": _intel_join(meta.get("activities") or meta.get("activity"), PLAYSTYLE_TAGS),
                     "order": int(meta.get("order") or 99), "body": body.strip() + "\n",
                     "hash": hashlib.sha256(text.encode("utf-8")).hexdigest()})
     return sorted(out, key=lambda g: (g["order"], g["key"]))
@@ -19102,8 +19119,10 @@ def _intel_build_export(restricted_ok: bool) -> str:
             body = intel_files.rewrite_images(e.get("body_md") or "", mapping)
             header = _intel_header(e) if e["kind"] not in ("procedure", "tactic") else None
             fm = intel_files.dump_front_matter({
-                "title": e["title"], "kind": e["kind"], "summary": e.get("summary"), "activity": e.get("activity"),
-                "system": e.get("system"), "tags": e.get("tags"), "visibility": e.get("visibility"),
+                "title": e["title"], "kind": e["kind"], "summary": e.get("summary"),
+                # A list (an entry can cover several); import also takes one value or "a, b".
+                "activity": _intel_multi(e.get("activity"), PLAYSTYLE_TAGS) or None,
+                "system": _intel_multi(e.get("system"), INTEL_SYSTEMS) or None, "tags": e.get("tags"), "visibility": e.get("visibility"),
                 "patch": e.get("patch"), "grade": (f"{e['grade_rel']}{e.get('grade_cred') or ''}" if e.get("grade_rel") else None),
                 "valid_until": e.get("valid_until"), "header": header or None, "id": e["id"],
                 "published": e.get("published_at"), "revised": e.get("revised_at"), "rev": e.get("rev"),
@@ -19276,7 +19295,7 @@ async def _intel_post(entry_id: int, what: str, ann: dict | None = None,
         if what == "publish":
             embed = _announcement("intel_published", {
                 "icon": _INTEL_ICON.get(e["kind"], "📘"), "kind_label": kind_word, "title": e["title"],
-                "teaser": _intel_teaser(e, ann.get("teaser", "")), "system": e.get("system") or "",
+                "teaser": _intel_teaser(e, ann.get("teaser", "")), "system": ", ".join(_intel_multi(e.get("system"), INTEL_SYSTEMS)),
                 "author": e.get("author_name") or _resolve_member_name(e["author_id"], None) or ""},
                 url=url, color=_EMBED_WARN if e["kind"] == "report" else _EMBED_INFO,
                 fields=_intel_post_fields(e) or None)
@@ -20095,6 +20114,15 @@ def intel_people(entry_id: int, body: IntelPeopleIn, user: dict = Depends(requir
     if fields:
         db.intel_set_fields(entry_id, fields)
     return _intel_entry_view(db.intel_get_entry(entry_id), user)
+
+
+@app.get("/api/intel/tags")
+def intel_tag_suggest(q: str = "", user: dict = Depends(require_session)):
+    """Tags already in use, for the editor's suggestions: matches on `q` first
+    (prefix before substring), then most-used. Only tags on entries the caller
+    can see."""
+    q = _intel_tags([q])[0] if _intel_tags([q]) else ""
+    return {"tags": db.intel_tag_counts(q, restricted_ok=intel_cleared(user), limit=12)}
 
 
 @app.get("/api/intel/members")

@@ -5745,6 +5745,22 @@ def intel_import_get(import_id: int) -> dict | None:
 
 
 @_intel_read
+def intel_tag_counts(q: str = "", restricted_ok: bool = False, limit: int = 12) -> list[dict]:
+    """Tags in use on live entries the viewer can see, most-used first: the
+    editor's tag suggestions. A tag only on a RESTRICTED entry stays hidden
+    from a member without clearance (the name alone can leak the subject)."""
+    q = (q or "").strip().lower()
+    like = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    rows = _conn.execute(
+        "SELECT t.tag, COUNT(*) AS n FROM intel_tags t JOIN intel_entries e ON e.id=t.entry_id "
+        "WHERE e.status='published'" + _intel_vis_sql(restricted_ok) +
+        (" AND t.tag LIKE ? ESCAPE '\\'" if q else "") +
+        " GROUP BY t.tag ORDER BY (t.tag LIKE ? ESCAPE '\\') DESC, n DESC, t.tag LIMIT ?",
+        ((f"%{like}%",) if q else ()) + (f"{like}%", max(1, min(int(limit), 50)))).fetchall()
+    return [{"tag": r["tag"], "count": r["n"]} for r in rows]
+
+
+@_intel_read
 def intel_imports_recent(limit: int = 5) -> list[dict]:
     return [dict(r) for r in _conn.execute(
         "SELECT * FROM intel_imports WHERE status != 'uploading' ORDER BY id DESC LIMIT ?", (limit,))]
@@ -6000,12 +6016,14 @@ def intel_list(*, kinds=None, status="published", author_id=None, activity=None,
     if author_id is not None:
         where.append("e.author_id=?")
         args.append(str(author_id))
+    # activity / system hold a comma-joined list ("Stanton,Pyro"): match a
+    # whole item, never a substring. No system = any system, so it matches.
     if activity:
-        where.append("e.activity=?")
-        args.append(activity)
+        where.append("(',' || e.activity || ',') LIKE ?")
+        args.append(f"%,{activity},%")
     if system:
-        where.append("(e.system=? OR e.system IS NULL)")
-        args.append(system)
+        where.append("(e.system IS NULL OR (',' || e.system || ',') LIKE ?)")
+        args.append(f"%,{system},%")
     if tag:
         where.append("EXISTS (SELECT 1 FROM intel_tags t WHERE t.entry_id=e.id AND t.tag=?)")
         args.append(tag)
