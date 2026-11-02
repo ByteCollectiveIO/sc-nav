@@ -18281,7 +18281,6 @@ def _intel_entry_collections(e: dict, user: dict) -> dict:
 # setting: a handful of items, written rarely, read with every list.
 INTEL_PINS_KEY = "intel_pins"
 INTEL_PIN_MAX = 8            # per kind (entries, tags)
-INTEL_PIN_TAG_SHOW = 5       # newest entries listed under a pinned tag
 
 
 def _intel_pins_raw() -> dict:
@@ -18306,9 +18305,8 @@ def _intel_pins_view(user: dict) -> dict:
     now = _now_iso()
     for p in raw["tags"]:
         rows = db.intel_list(tag=p["tag"], order="recent", restricted_ok=ok, live_at=now, limit=200)
-        tags.append({"tag": p["tag"], "note": p.get("note") or "", "n": len(rows),
-                     "entries": [{"id": e["id"], "kind": e["kind"], "title": e["title"], "slug": e["slug"]}
-                                 for e in rows[:INTEL_PIN_TAG_SHOW]]})
+        # A count, not a list: the card filters the tab to the tag instead.
+        tags.append({"tag": p["tag"], "note": p.get("note") or "", "n": len(rows)})
     return {"entries": entries, "tags": tags}
 
 

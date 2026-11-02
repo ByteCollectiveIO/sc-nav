@@ -17453,7 +17453,7 @@ class IntelPinTests(unittest.TestCase):
         self.as_(self.OTHER)
         p = self.pins()
         self.assertEqual(p["entries"], [])
-        self.assertEqual((p["tags"][0]["n"], p["tags"][0]["entries"]), (0, []))
+        self.assertEqual(p["tags"][0]["n"], 0)
         self.assertNotIn("Black ops", str(p))
         self.as_(self.CLEARED)
         self.assertEqual([e["title"] for e in self.pins()["entries"]], ["Black ops"])
