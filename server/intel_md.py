@@ -29,6 +29,10 @@ The dialect (the doc's "Formatting" table):
   * `[[kind:id]]` suite references → a placeholder the SPA hydrates into a live
     chip per viewer (names, state and visibility stay current).
   * `<t:unix:fmt>` Discord timestamps → <time>, shown in the reader's zone.
+  * `{red}text{/red}` text color, from a FIXED palette (COLORS) that maps to
+    theme tokens in the SPA, so colored text stays readable in both themes.
+    Never a free CSS color: no style attribute leaves this module. An
+    unpaired or crossed marker stays as the literal text.
 
 Pure module: no app/db imports, so it unit-tests without booting the app.
 """
@@ -64,6 +68,11 @@ _TS_MIN, _TS_MAX = -62_135_596_800, 253_402_300_799
 _URL_RE = re.compile(r"https?://[^\s<>\[\]()\"']*[^\s<>\[\]()\"'.,;:!?*_~]")
 
 _TASK_RE = re.compile(r"^\[([ xX])\][ \t]+")
+
+# Text colors: name → nothing else. The SPA's `.intel-c-<name>` maps each to a
+# theme token (red = --bad, orange = --warn, …).
+COLORS = ("red", "orange", "yellow", "green", "blue", "purple")
+_COLOR_RE = re.compile(r"\{(/?)(" + "|".join(COLORS) + r")\}")
 
 
 def _host(url: str) -> str:
@@ -212,7 +221,47 @@ def _inline_ts(state, silent: bool) -> bool:
     return True
 
 
+def _inline_color(state, silent: bool) -> bool:
+    if state.src[state.pos] != "{":
+        return False
+    m = _COLOR_RE.match(state.src, state.pos)
+    if not m:
+        return False
+    if not silent:
+        tok = state.push("intel_color", "", 0)
+        tok.meta = {"close": bool(m.group(1)), "color": m.group(2)}
+        tok.content = m.group(0)
+    state.pos = m.end()
+    return True
+
+
+def _rule_colors(state) -> None:
+    """Pair color markers within each inline run (a stack, so they nest and
+    can't cross). Anything left unpaired turns back into its literal text."""
+    for t in state.tokens:
+        if t.type != "inline" or not t.children:
+            continue
+        stack, paired = [], set()
+        for i, c in enumerate(t.children):
+            if c.type != "intel_color":
+                continue
+            if not c.meta["close"]:
+                stack.append(i)
+            elif stack and t.children[stack[-1]].meta["color"] == c.meta["color"]:
+                paired.update((stack.pop(), i))
+            else:
+                stack.clear()       # crossed or stray close: drop everything open
+        for i, c in enumerate(t.children):
+            if c.type == "intel_color" and i not in paired:
+                c.type = "text"
+
+
 # ---- renderers for the tokens above, plus links and images ----
+
+def _render_color(self, tokens, idx, options, env) -> str:
+    m = tokens[idx].meta
+    return "</span>" if m["close"] else f'<span class="intel-c intel-c-{m["color"]}">'
+
 
 def _render_ref(self, tokens, idx, options, env) -> str:
     k, i = tokens[idx].meta["kind"], tokens[idx].meta["id"]
@@ -278,13 +327,16 @@ def _build() -> MarkdownIt:
     md.validateLink = lambda u: _http_url(u) or bool(_OWN_FILE_RE.match(u.strip()))
     md.inline.ruler.before("link", "intel_ref", _inline_ref)
     md.inline.ruler.before("autolink", "intel_ts", _inline_ts)
+    md.inline.ruler.before("emphasis", "intel_color", _inline_color)
     md.core.ruler.push("intel_headings", _rule_headings)
     md.core.ruler.push("intel_underline", _rule_underline)
     md.core.ruler.push("intel_tasks", _rule_tasks)
     md.core.ruler.push("intel_bare_urls", _rule_bare_urls)
+    md.core.ruler.push("intel_colors", _rule_colors)
     md.add_render_rule("intel_ref", _render_ref)
     md.add_render_rule("intel_ts", _render_ts)
     md.add_render_rule("intel_task", _render_task)
+    md.add_render_rule("intel_color", _render_color)
     md.add_render_rule("link_close", _render_link_close)
     md.add_render_rule("image", _render_image)
     return md
@@ -305,7 +357,8 @@ _ATTRS = {
              "role", "aria-label"},
     "time": {"datetime", "data-fmt"},
 }
-_CLASSES = {"span": {"intel-ref", "intel-img", "intel-file", "intel-task", "ext-host"},
+_CLASSES = {"span": {"intel-ref", "intel-img", "intel-file", "intel-task", "ext-host", "intel-c",
+                     *(f"intel-c-{c}" for c in COLORS)},
             "li": {"task-item"}}
 
 

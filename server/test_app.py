@@ -15508,6 +15508,19 @@ class IntelMarkdownTests(unittest.TestCase):
         # An allowed host over plain http isn't a placeholder either.
         self.assertNotIn("data-src", self.html("![s](http://i.imgur.com/a.png)"))
 
+    def test_text_color_is_a_fixed_palette(self):
+        self.assertIn('<span class="intel-c intel-c-red">Do not <strong>jump</strong></span>',
+                      self.html("{red}Do not **jump**{/red}"))
+        # Nested colors pair by name; unpaired, crossed or unknown markers stay as text.
+        self.assertIn('<span class="intel-c intel-c-blue">a <span class="intel-c intel-c-red">b</span> c</span>',
+                      self.html("{blue}a {red}b{/red} c{/blue}"))
+        for src in ("{red}open", "{red}x{/blue}", "{pink}x{/pink}", "`{red}x{/red}`", "\\{red}x{/red}"):
+            out = self.html(src)
+            self.assertNotIn("intel-c", out, src)
+        # A color can't span paragraphs, and no style attribute ever leaves the renderer.
+        self.assertNotIn("intel-c", self.html("{red}one\n\ntwo{/red}"))
+        self.assertNotIn("style=", self.html("{red}x{/red}"))
+
     def test_underline_is_discord_semantics(self):
         out = self.html("__under__ and **bold**")
         self.assertIn("<u>under</u>", out)
@@ -16041,6 +16054,44 @@ class IntelAccessReviewTests(unittest.TestCase):
             self.as_(who)
             self.assertEqual(self.get(e["id"]).status_code, 200)
             self.assertEqual(len(self.client.get("/api/intel/search?q=refinery").json()["results"]), 1)
+
+    def test_systems_and_activities_are_multi_choice(self):
+        e = self.publish("Two-system haul", systems=["Pyro", "Stanton"], activities=["trading", "hauling"])
+        # Stored and returned in canonical order, not click order.
+        self.assertEqual(e["systems"], ["Stanton", "Pyro"])
+        self.assertEqual(e["activities"], ["hauling", "trading"])
+        row = db._conn.execute("SELECT system, activity FROM intel_entries WHERE id=?", (e["id"],)).fetchone()
+        self.assertEqual((row["system"], row["activity"]), ("Stanton,Pyro", "hauling,trading"))
+        self.publish("Nyx only", systems=["Nyx"])
+        self.publish("Anywhere")                          # no system = any system
+        self.publish("Legacy client", system="Pyro", activity="mining")
+        lib = lambda q: sorted(x["title"] for x in self.client.get(f"/api/intel/entries?section=library&{q}").json()["entries"])
+        self.assertEqual(lib("system=Pyro"), ["Anywhere", "Legacy client", "Two-system haul"])
+        self.assertEqual(lib("system=Nyx"), ["Anywhere", "Nyx only"])
+        self.assertEqual(lib("activity=trading"), ["Two-system haul"])
+        self.assertEqual(lib("activity=hauling"), ["Two-system haul"])
+        # A whole item matches, never a substring of another.
+        self.assertEqual(lib("activity=PvE"), [])
+        r = self.client.post("/api/intel/entries", json={"kind": "procedure", "title": "x", "systems": ["Stanton", "Hurston"]})
+        self.assertEqual(r.status_code, 422)
+
+    def test_tag_suggestions_count_visible_entries_only(self):
+        self.publish("Escort one", tags=["escort", "hull-c"])
+        self.publish("Escort two", tags=["escort"])
+        self.draft("Draft only", tags=["draft-tag"])
+        self.as_(self.CLEARED)
+        self.publish("Secret", tags=["escort", "black-ops"], visibility="restricted")
+        self.as_(self.OTHER)
+        tags = self.client.get("/api/intel/tags").json()["tags"]
+        self.assertEqual(tags, [{"tag": "escort", "count": 2}, {"tag": "hull-c", "count": 1}])
+        # Prefix matches come before substring ones; the query is normalised like a tag.
+        self.publish("Rescue", tags=["rescue"])
+        self.assertEqual([t["tag"] for t in self.client.get("/api/intel/tags?q=%23ESC").json()["tags"]],
+                         ["escort", "rescue"])
+        self.as_(self.CLEARED)
+        tags = {t["tag"]: t["count"] for t in self.client.get("/api/intel/tags").json()["tags"]}
+        self.assertEqual(tags["escort"], 3)
+        self.assertIn("black-ops", tags)
 
     def test_lifting_restricted_is_the_owners_call(self):
         self.as_(self.CLEARED)
