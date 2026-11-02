@@ -10,11 +10,11 @@ activity: trading
 
 | | |
 |---|---|
-| **Who** | Anyone trading commodities with their own money. |
-| **What** | A planner that chains buy and sell terminals into the best loop for your hold. |
-| **Where** | Launcher group Out in the 'Verse, at `#/trade`. Live guidance needs the watcher running. |
-| **When** | Before you buy your first load, and again whenever a run goes wrong. |
-| **Why** | Prices change all the time, and working out a loop by hand takes longer than flying it. |
+| **{blue}Who{/blue}** | Anyone trading commodities with their own money. |
+| **{blue}What{/blue}** | A planner that chains buy and sell terminals into the best loop for your hold. |
+| **{blue}Where{/blue}** | Launcher group Out in the 'Verse, at `#/trade`. Live guidance needs the watcher running. |
+| **{blue}When{/blue}** | Before you buy your first load, and again whenever a run goes wrong. |
+| **{blue}Why{/blue}** | Prices change all the time, and working out a loop by hand takes longer than flying it. |
 
 ## {orange}The basics{/orange}
 

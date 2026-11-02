@@ -942,7 +942,7 @@ CREATE TABLE IF NOT EXISTS intel_flags (
 -- Hide / unhide (slice 8b): every moderation action on an entry, kept.
 CREATE TABLE IF NOT EXISTS intel_mod_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    entry_id INTEGER NOT NULL, action TEXT NOT NULL,   -- hide | unhide
+    entry_id INTEGER NOT NULL, action TEXT NOT NULL,   -- hide | unhide | lock | unlock (a lock-role member, not only admins)
     admin_id TEXT NOT NULL, admin_name TEXT, note TEXT, created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS intel_mod_log_entry ON intel_mod_log(entry_id);
@@ -1195,6 +1195,10 @@ def init(db_path) -> None:
         _ensure_column("intel_flags", "resolution", "TEXT")
         _ensure_column("intel_flags", "member_name", "TEXT")
         _ensure_column("events", "reading_collection", "INTEGER")
+        # Lock (admins + the lock roles): a locked entry is read-only for everyone
+        # else. Logged in intel_mod_log as lock / unlock.
+        _ensure_column("intel_entries", "locked_at", "TEXT")
+        _ensure_column("intel_entries", "locked_by", "TEXT")
         _init_intel_search()
 
 
@@ -6334,6 +6338,16 @@ def intel_set_hidden(entry_id: int, hidden: bool, admin_id: str, admin_name: str
         _conn.execute("INSERT INTO intel_mod_log (entry_id, action, admin_id, admin_name, note, created_at) "
                       "VALUES (?,?,?,?,?,?)", (entry_id, "hide" if hidden else "unhide", admin_id,
                                                admin_name, note, at))
+
+
+def intel_set_locked(entry_id: int, locked: bool, member_id: str, member_name: str | None,
+                     note: str | None, at: str) -> None:
+    with _lock, _conn:
+        _conn.execute("UPDATE intel_entries SET locked_at=?, locked_by=? WHERE id=?",
+                      (at if locked else None, member_id if locked else None, entry_id))
+        _conn.execute("INSERT INTO intel_mod_log (entry_id, action, admin_id, admin_name, note, created_at) "
+                      "VALUES (?,?,?,?,?,?)", (entry_id, "lock" if locked else "unlock", member_id,
+                                               member_name, note, at))
 
 
 @_intel_read

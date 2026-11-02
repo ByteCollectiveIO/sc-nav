@@ -10,11 +10,11 @@ activity: mining
 
 | | |
 |---|---|
-| **Who** | Miners and surveyors, and anyone choosing where the org should mine next. |
-| **What** | A shared map of named mining areas, a live screen for marking belt rocks, and a planner for dropping out of quantum into a belt. |
-| **Where** | Launcher group Out in the 'Verse, route `#/halo`. FIELD and the drop result need the watcher running. |
-| **When** | Before a mining run to pick a spot, and during it to log what you find. |
-| **Why** | Every member's finds add up to one map, so nobody has to rely on rumours. |
+| **{blue}Who{/blue}** | Miners and surveyors, and anyone choosing where the org should mine next. |
+| **{blue}What{/blue}** | A shared map of named mining areas, a live screen for marking belt rocks, and a planner for dropping out of quantum into a belt. |
+| **{blue}Where{/blue}** | Launcher group Out in the 'Verse, route `#/halo`. FIELD and the drop result need the watcher running. |
+| **{blue}When{/blue}** | Before a mining run to pick a spot, and during it to log what you find. |
+| **{blue}Why{/blue}** | Every member's finds add up to one map, so nobody has to rely on rumours. |
 
 ## {orange}The basics{/orange}
 

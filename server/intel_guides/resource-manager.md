@@ -9,11 +9,11 @@ tags: app-guide, tutorial, resource-manager
 
 | | |
 |---|---|
-| **Who** | Any member who gathers, stores, crafts or contributes materials. |
-| **What** | A shared ledger of org goals, member holdings and blueprint libraries. |
-| **Where** | Launcher group Run the Org, routes `#/goals`, `#/inventory` and `#/blueprints`. No watcher needed. |
-| **When** | After a mining or hauling session, or when your org posts a goal. |
-| **Why** | The game has no shared org storage, so this is how the org knows who has what. |
+| **{blue}Who{/blue}** | Any member who gathers, stores, crafts or contributes materials. |
+| **{blue}What{/blue}** | A shared ledger of org goals, member holdings and blueprint libraries. |
+| **{blue}Where{/blue}** | Launcher group Run the Org, routes `#/goals`, `#/inventory` and `#/blueprints`. No watcher needed. |
+| **{blue}When{/blue}** | After a mining or hauling session, or when your org posts a goal. |
+| **{blue}Why{/blue}** | The game has no shared org storage, so this is how the org knows who has what. |
 
 ## {orange}The basics{/orange}
 

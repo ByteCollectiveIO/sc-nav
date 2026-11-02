@@ -9,11 +9,11 @@ tags: app-guide, tutorial, org-intel
 
 | | |
 |---|---|
-| **Who** | Every member. Reading is the main use; anyone can write. |
-| **What** | The org's reports, how-to procedures, place and org dossiers, questions, and activity stats. |
-| **Where** | Launcher group Run the Org, route `#/intel`. No watcher needed. |
-| **When** | Before you head out, after something happens worth telling the org, and when you're stuck. |
-| **Why** | What one member learns stays findable for everyone, instead of scrolling away in chat. |
+| **{blue}Who{/blue}** | Every member. Reading is the main use; anyone can write. |
+| **{blue}What{/blue}** | The org's reports, how-to procedures, place and org dossiers, questions, and activity stats. |
+| **{blue}Where{/blue}** | Launcher group Run the Org, route `#/intel`. No watcher needed. |
+| **{blue}When{/blue}** | Before you head out, after something happens worth telling the org, and when you're stuck. |
+| **{blue}Why{/blue}** | What one member learns stays findable for everyone, instead of scrolling away in chat. |
 
 ## {orange}The basics{/orange}
 

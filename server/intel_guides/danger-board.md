@@ -9,11 +9,11 @@ tags: app-guide, tutorial, danger-board
 
 | | |
 |---|---|
-| **Who** | Every member. Anyone can post or confirm a warning. |
-| **What** | A live board of short-lived pirate warnings, shared with the whole org. |
-| **Where** | Launcher group Rally the Org, at `#/pirates`. No watcher needed. |
-| **When** | The moment you get snared, camped or see pirates waiting. |
-| **Why** | Pirates use the same lanes and stations again and again, so one warning saves the next member. |
+| **{blue}Who{/blue}** | Every member. Anyone can post or confirm a warning. |
+| **{blue}What{/blue}** | A live board of short-lived pirate warnings, shared with the whole org. |
+| **{blue}Where{/blue}** | Launcher group Rally the Org, at `#/pirates`. No watcher needed. |
+| **{blue}When{/blue}** | The moment you get snared, camped or see pirates waiting. |
+| **{blue}Why{/blue}** | Pirates use the same lanes and stations again and again, so one warning saves the next member. |
 
 ## {orange}The basics{/orange}
 
