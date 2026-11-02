@@ -21,7 +21,7 @@ The board has two columns. Groups needing players are hosts with open slots. Pla
 
 Posts are meant to be short-lived. A post shows green while it's fresh, turns stale after a while, and then drops off the board on its own. For anything planned further out, use the Event Planner.
 
-Playstyle tags tie it together. The same tags (PvE, PvP, hauling, bunkers, bounty and more) appear on your profile, on Who's Online and on posts. If someone posts the opposite direction to you with a shared tag, their card is marked as a match and moves toward the top.
+Playstyle tags (PvE, PvP, hauling, bunkers, bounty and more) show on your profile, on Who's Online and on posts. If someone posts the opposite direction to you with a shared tag, their card is marked as a match and moves toward the top.
 
 ## {orange}Set your status on Who's Online{/orange}
 

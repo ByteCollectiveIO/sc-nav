@@ -21,7 +21,7 @@ Everything is priced in aUEC, the in-game currency. Never real money.
 
 The board has tabs for each listing type: **All**, **Sales**, **Auctions**, **Barter**, **Requests** (craft commissions) and **Buying** (buy orders). **My activity** shows the listings you've bid, offered or quoted on, plus deals waiting on your confirm. **My listings** shows your own posts. A search box, sort menu and filters sit above the list.
 
-The app never moves goods or aUEC. Once a buyer, winning bidder or crafter is locked in, you meet in-game and trade. Then both of you confirm here. This dual confirm is the only way a deal completes, and each completed deal adds to both members' deal count.
+The app never moves goods or aUEC. Once a buyer, winning bidder or crafter is locked in, you meet in-game and trade. Then both of you confirm here. A deal only completes when you both confirm, and each completed deal adds to both members' deal count.
 
 ## {orange}Buy something{/orange}
 

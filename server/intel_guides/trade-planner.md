@@ -18,7 +18,7 @@ activity: trading
 
 ## {orange}The basics{/orange}
 
-Everything lives in one panel, **PLAN A TRADE RUN**. The **SHIP** part holds facts about your ship: usable SCU (standard cargo units), where it can stop, and how it loads. The **ROUTE** part is how you want to trade. Hover a row label to see what it does. **Route rules** folds away the settings you rarely change, such as **Max spend**, **Cargo legality** and **Danger**.
+You plan a run in the **PLAN A TRADE RUN** panel. The **SHIP** part holds facts about your ship: usable SCU (standard cargo units), where it can stop, and how it loads. The **ROUTE** part is how you want to trade. Hover a row label to see what it does. Open **Route rules** to set **Max spend**, **Cargo legality** and **Danger**.
 
 Prices come from UEX, a community price site, mixed with newer prices your members actually paid. Each leg is one commodity bought at one terminal and sold at another. Kiosks sell whole containers, so a leg shows a box count as well as SCU.
 
