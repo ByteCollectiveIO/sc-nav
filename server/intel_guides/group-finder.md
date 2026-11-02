@@ -5,7 +5,7 @@ title: Group Finder: getting started
 summary: Find people to play with right now. Post that you need players or want to join, match by playstyle, and see who's online.
 tags: app-guide, tutorial, group-finder
 ---
-## At a glance
+## {orange}At a glance{/orange}
 
 | | |
 |---|---|
@@ -15,7 +15,7 @@ tags: app-guide, tutorial, group-finder
 | **When** | When you want to group up now, not hours or days from now. |
 | **Why** | A Discord message scrolls away fast. Here you can see who is free and what they want to do. |
 
-## The basics
+## {orange}The basics{/orange}
 
 The board has two columns. Groups needing players are hosts with open slots. Players looking to join are people who are solo and want in on something.
 
@@ -23,7 +23,7 @@ Posts are meant to be short-lived. A post shows green while it's fresh, turns st
 
 Playstyle tags tie it together. The same tags (PvE, PvP, hauling, bunkers, bounty and more) appear on your profile, on Who's Online and on posts. If someone posts the opposite direction to you with a shared tag, their card is marked as a match and moves toward the top.
 
-## Set your status on Who's Online
+## {orange}Set your status on Who's Online{/orange}
 
 Do this when you log in, so others can see you're free.
 
@@ -34,7 +34,7 @@ Do this when you log in, so others can see you're free.
 
 Tick **Appear offline** to hide from the list for everyone else. You still see the full list. To set the playstyle tags that show next to your name, pick up to 6 in Settings under Profile.
 
-## Post that you need players
+## {orange}Post that you need players{/orange}
 
 Do this when you're hosting a run and are short of people.
 
@@ -48,7 +48,7 @@ Do this when you're hosting a run and are short of people.
 
 People click **Join** on your card to take a slot. Their names show on the card.
 
-## Post that you want to join
+## {orange}Post that you want to join{/orange}
 
 Do this when you're solo and happy to tag along.
 
@@ -60,7 +60,7 @@ Do this when you're solo and happy to tag along.
 
 Hosts click **I'm interested** on your card to let you know they'd take you along.
 
-## Find a group on the board
+## {orange}Find a group on the board{/orange}
 
 Do this when you want to see what's already going on.
 
@@ -70,7 +70,7 @@ Do this when you want to see what's already going on.
 4. Click **Join** on a host's card, or **I'm interested** on a solo player's card.
 5. Click **Leave** if your plans change.
 
-## Turn a post into an event
+## {orange}Turn a post into an event{/orange}
 
 Do this when your group needs a set time and a role list.
 
@@ -81,14 +81,14 @@ Do this when your group needs a set time and a role list.
 
 Your post stays on the board until you close it.
 
-## Tips
+## {orange}Tips{/orange}
 
 - You can have one active post per direction. Posting again replaces your old post.
 - A post needs at least a tag, a note, a rally point or a slot count.
 - Closed a post by mistake? Click **Undo** on the message that pops up.
 - Appear offline is separate from sharing your position on the Resource Navigator.
 
-## Related guides
+## {orange}Related guides{/orange}
 
 - [[guide:event-planner]]: promote a post into a scheduled event
 - [[guide:navigator]]: Who's Online shows a location only for members sharing position there

@@ -5,7 +5,7 @@ title: Event Planner: getting started
 summary: Find org events, sign up for the roles you'll fill, and put events in your own calendar. Organizers plan rosters here too.
 tags: app-guide, tutorial, event-planner
 ---
-## At a glance
+## {orange}At a glance{/orange}
 
 | | |
 |---|---|
@@ -15,7 +15,7 @@ tags: app-guide, tutorial, event-planner
 | **When** | Any time before an event, and on the night when the organizer hands it to Ops. |
 | **Why** | Everyone sees the time, the place, the roles still open and who is coming. |
 
-## The basics
+## {orange}The basics{/orange}
 
 The board lists events under a month calendar. Filter by category, or turn on **My events** to see only the ones you're in. Each card shows how full the event is.
 
@@ -24,7 +24,7 @@ An event page shows the time (on your own clock), the rally point (where the org
 - The roles an event lists, like 2 medics and 5 escorts, are targets. Extra people show as surplus and are never turned away.
 - If an event is full, signing up as Going puts you on a waitlist. When a spot opens you move up on your own and get a Discord ping.
 
-## Sign up for an event
+## {orange}Sign up for an event{/orange}
 
 Do this when you want to take part in something on the board.
 
@@ -35,7 +35,7 @@ Do this when you want to take part in something on the board.
 5. Click **Join event**. On a full event the button reads **Join waitlist**.
 6. To change your roles or status later, click **Update signup**. To drop out, click **Withdraw**.
 
-## Add an event to your calendar
+## {orange}Add an event to your calendar{/orange}
 
 Do this so you don't miss an event you signed up for.
 
@@ -52,7 +52,7 @@ For a calendar that keeps itself up to date:
 
 The subscription only appears if an org admin has turned it on. Treat the link like a password.
 
-## Read the required reading
+## {orange}Read the required reading{/orange}
 
 Do this when an event lists Required reading, such as a procedure the crew should know.
 
@@ -63,7 +63,7 @@ Do this when an event lists Required reading, such as a procedure the crew shoul
 
 If the entry gets a major revision, it asks you to read it again.
 
-## Create an event
+## {orange}Create an event{/orange}
 
 Do this when you're organizing. Your org may limit event creation to admins.
 
@@ -75,7 +75,7 @@ Do this when you're organizing. Your org may limit event creation to admins.
 6. Fill in any optional cards, such as **Mission details** and **Payout rules**, and a description.
 7. Click **Create event**. If your org has an events Discord channel, the event is posted there.
 
-## Build the fleet roster
+## {orange}Build the fleet roster{/orange}
 
 Do this as the organizer once people sign up.
 
@@ -84,13 +84,13 @@ Do this as the organizer once people sign up.
 3. Click **Manifest** to get the plan as Discord-ready text, then copy it or click **Post to Discord**.
 4. When it's time to fly, click **Run mission** to open the event in Ops with the signups already on the roster.
 
-## Tips
+## {orange}Tips{/orange}
 
 - Join a full event as Going rather than Maybe. Maybe never goes on the waitlist.
 - Running the same event every week? Click **Save as template** on one you've run, or **Clone** it.
 - Moving an event's time or place pings everyone signed up.
 
-## Related guides
+## {orange}Related guides{/orange}
 
 - [[guide:ops]]: Run mission hands the event to Ops on the night
 - [[guide:group-finder]]: a Group Finder post can be promoted into an event

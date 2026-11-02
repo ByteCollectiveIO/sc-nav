@@ -30022,7 +30022,7 @@ function intelDossierView(box, e) {
 // Where an entry was announced (#50 slice 6), and its forum thread.
 function intelDiscordPanel(e) {
   const d = e.discord; if (!d || !d.posts.length) return "";
-  const verb = { publish: "Announced", revise: "Revision posted", push: "Update pushed" };
+  const verb = { publish: "Announced", revise: "Revision posted", push: "Update pushed", republish: "Reposted in full" };
   return `<div class="panel"><h2>DISCORD</h2><ul class="ix-dc">` +
     d.posts.map(x => `<li><span>${verb[x.what] || "Posted"} in <b>${esc(x.channel)}</b></span>` +
       `<small>${x.rev ? `rev ${x.rev} · ` : ""}${esc(intelWhen(x.at))}</small></li>`).join("") + `</ul>` +
@@ -31692,7 +31692,7 @@ async function intelEditor(box) {
     // 📣: on by default only for a REPORT's first publish (a sighting is news;
     // a procedure or a question usually isn't). Off (Push) for an edit. Until
     // the author touches the box, switching kind re-applies that default.
-    ann: { on: !(e && e.status === "published") && (e ? e.kind : kind) === "report", touched: false, channel: null, ping: null, teaser: "" },
+    ann: { on: !(e && e.status === "published") && (e ? e.kind : kind) === "report", touched: false, channel: null, ping: null, teaser: "", full: false },
     // The marking control shows to cleared members, and on an entry that's
     // already RESTRICTED (whoever can open it is cleared anyway).
     canMark: intelAccess().cleared || (e && e.visibility === "restricted") };
@@ -32227,16 +32227,26 @@ function intelEdAnnounceHtml(mode) {
     o.pings.map(r => `<option value="${esc(r.id)}"${r.id === a.ping ? " selected" : ""}>@${esc(r.label)}</option>`).join("") + `</select>` +
     (o.pings.length ? "" : `<small>An admin maps Discord roles in Settings › Discord to make them pingable.</small>`) + `</label>`;
   const teaser = `<label class="ix-fld"><span>TEASER · optional <i id="ix-ann-n"></i></span><input class="ti" id="ix-ann-t" maxlength="${o.teaser_max}" ` +
-    `autocomplete="off" placeholder="${mode === "major" ? "Shows under what changed" : "Defaults to the summary"}" value="${esc(a.teaser)}"></label>`;
+    `autocomplete="off" placeholder="${intelAnnTeaserPh(mode, a.full)}" value="${esc(a.teaser)}"></label>`;
+  // A revision posts a short notice by default, or the whole announcement again.
+  const fullSel = mode === "publish" ? "" : `<div class="ix-fld"><span id="ix-ann-full-l">WHAT TO POST</span>` +
+    `<div class="seg ix-ann-full" role="group" aria-labelledby="ix-ann-full-l">` +
+    `<button type="button" data-full="0" class="${a.full ? "" : "on"}" aria-pressed="${!a.full}">${mode === "major" ? "Revision notice" : "Update notice"}</button>` +
+    `<button type="button" data-full="1" class="${a.full ? "on" : ""}" aria-pressed="${!!a.full}">Full post</button></div>` +
+    `<small id="ix-ann-full-h">${intelAnnFullHint(mode, a.full)}</small></div>`;
   if (mode === "major") {
     const where = ed.entry && ed.entry.discord ? (ed.entry.discord.thread_url ? "into its Discord thread" : `to ${esc(ed.entry.discord.posts[0].channel)}`) : `to ${esc((o.channels.find(c => c.key === def) || {}).label || "Discord")}`;
-    return `<div class="ix-ann"><p class="ix-ann-note">A major revision always posts “Revised: …” ${where}${later}.</p>` +
-      `<div class="ix-ann-body">${pingSel}${teaser}</div></div>`;
+    return `<div class="ix-ann"><p class="ix-ann-note">A major revision always posts ${where}${later}.</p>` +
+      `<div class="ix-ann-body">${fullSel}${pingSel}${teaser}</div></div>`;
   }
-  const label = mode === "publish" ? `Announce in Discord${later}` : "Push a notification to Discord";
+  const label = mode === "publish" ? `Announce in Discord${later}` : "Post to Discord";
   return `<div class="ix-ann"><label class="ix-ann-on"><input type="checkbox" id="ix-ann-on"${a.on ? " checked" : ""}>${label}</label>` +
-    `<div class="ix-ann-body" id="ix-ann-body"${a.on ? "" : " hidden"}>${chanSel}${pingSel}${teaser}</div></div>`;
+    `<div class="ix-ann-body" id="ix-ann-body"${a.on ? "" : " hidden"}>${fullSel}${chanSel}${pingSel}${teaser}</div></div>`;
 }
+const intelAnnFullHint = (mode, full) => full
+  ? "The whole announcement again, the same as a first publish: title, teaser, systems, author and lead image."
+  : mode === "major" ? "A short “Revised: …” line with what changed." : "A short “Revised: …” line with what changed, marked as an update.";
+const intelAnnTeaserPh = (mode, full) => full ? "Defaults to the summary" : mode === "major" ? "Shows under what changed" : "Defaults to the summary";
 // Where a first publish posts right now (shown on the button itself, so the
 // click that commits says where it goes), or null when it posts nothing now.
 function intelEdPostsTo() {
@@ -32255,6 +32265,13 @@ function intelEdBindAnnounce() {
   if ($("ix-ann-ch")) $("ix-ann-ch").onchange = (ev) => { a.channel = ev.target.value; where(); };
   if ($("ix-ann-ping")) $("ix-ann-ping").onchange = (ev) => { a.ping = ev.target.value || null; };
   if ($("ix-ann-t")) $("ix-ann-t").oninput = (ev) => { a.teaser = ev.target.value; cnt(); };
+  document.querySelectorAll(".ix-ann-full [data-full]").forEach(b => b.onclick = () => {
+    a.full = b.dataset.full === "1";
+    document.querySelectorAll(".ix-ann-full [data-full]").forEach(x => { const on = (x.dataset.full === "1") === a.full; x.classList.toggle("on", on); x.setAttribute("aria-pressed", on); });
+    const mode = intelEd.major ? "major" : "minor";
+    if ($("ix-ann-full-h")) $("ix-ann-full-h").textContent = intelAnnFullHint(mode, a.full);
+    if ($("ix-ann-t")) $("ix-ann-t").placeholder = intelAnnTeaserPh(mode, a.full);
+  });
   cnt();
 }
 const INTEL_CHANNEL_LABEL = { intel: "Intelligence", intel_report: "Intel · reports", intel_sop: "Intel · procedures + tactics",

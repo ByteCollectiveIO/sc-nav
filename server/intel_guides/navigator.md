@@ -5,7 +5,7 @@ title: "Resource Navigator: getting started"
 summary: Live bearing and distance from your in-game position to any place, ore node or creature your org has logged, and the forms to log new ones.
 tags: app-guide, tutorial, navigator
 ---
-## At a glance
+## {orange}At a glance{/orange}
 
 | | |
 |---|---|
@@ -15,7 +15,7 @@ tags: app-guide, tutorial, navigator
 | **When** | During a play session, open on a laptop or phone next to your keyboard. |
 | **Why** | The game has no marker for "the node someone found last week". This app does. |
 
-## The basics
+## {orange}The basics{/orange}
 
 The watcher is a small program on your gaming PC. When you type `/showlocation` in the in-game chat, the game copies your coordinates and the watcher sends them to the app. Every fix updates the readouts at the top: CURRENT CONTAINER (the planet, moon or station you're near), BEARING, DISTANCE, ALTITUDE, SPEED and LAT / LON.
 
@@ -30,7 +30,7 @@ The rest of the screen:
 
 Nothing updates until you run `/showlocation` again, so re-run it as you travel (the up arrow in chat repeats it).
 
-## Set up the watcher
+## {orange}Set up the watcher{/orange}
 
 Do this once, on the PC where you play.
 
@@ -43,7 +43,7 @@ Do this once, on the PC where you play.
 
 The download holds a personal access token. If you change PCs, revoke the old one in Settings > Watcher (`#/settings/watcher`).
 
-## Fly to something the org has logged
+## {orange}Fly to something the org has logged{/orange}
 
 Use this to reach a node or place someone already recorded.
 
@@ -53,7 +53,7 @@ Use this to reach a node or place someone already recorded.
 4. Fly using the BEARING and DISTANCE readouts.
 5. Run `/showlocation` again every so often to update them.
 
-## Log an ore node
+## {orange}Log an ore node{/orange}
 
 Use this when you scan a rock worth sharing.
 
@@ -66,7 +66,7 @@ Use this when you scan a rock worth sharing.
 
 Fauna and plants work the same way in ADD FAUNA & HARVESTABLES. For a place rather than a resource, use ADD CUSTOM POI.
 
-## Find where an ore spawns
+## {orange}Find where an ore spawns{/orange}
 
 Use this when you know the ore but not where to find it.
 
@@ -75,7 +75,7 @@ Use this when you know the ore but not where to find it.
 3. Read the table. GO TO is the spot, JUMP TO (QT) is the quantum marker to aim for.
 4. Click a row to set it as your destination.
 
-## Name a mining area
+## {orange}Name a mining area{/orange}
 
 Use this when you work the same patch of ground often.
 
@@ -85,13 +85,13 @@ Use this when you work the same patch of ground often.
 
 Every sighting ever logged inside the circle joins it, and new ones keep joining. The area shows in Prospector's ATLAS.
 
-## Tips
+## {orange}Tips{/orange}
 
 - If NEARBY looks empty after a server change, check the shard filter in **Layers & settings**. Nodes from other shards are hidden on purpose.
 - Untick fresh only to see old sightings, which may have respawned elsewhere.
 - Use the pin on a node row to keep it on your own list. Use mark mined when a node is used up, so the org stops flying to it.
 
-## Related guides
+## {orange}Related guides{/orange}
 
 - [[guide:prospector]]: named areas and belt surveys show up there
 - [[guide:cargo-planner]]: plans from the live position this app receives

@@ -15517,6 +15517,8 @@ class IntelMarkdownTests(unittest.TestCase):
         for src in ("{red}open", "{red}x{/blue}", "{pink}x{/pink}", "`{red}x{/red}`", "\\{red}x{/red}"):
             out = self.html(src)
             self.assertNotIn("intel-c", out, src)
+        # A colored heading keeps the plain heading's anchor.
+        self.assertIn('<h2 id="sec-at-a-glance">', self.html("## {orange}At a glance{/orange}"))
         # A color can't span paragraphs, and no style attribute ever leaves the renderer.
         self.assertNotIn("intel-c", self.html("{red}one\n\ntwo{/red}"))
         self.assertNotIn("style=", self.html("{red}x{/red}"))
@@ -17815,6 +17817,28 @@ class IntelDiscordTests(unittest.TestCase):
         self.assertEqual(len(self.sent), 2)
         self.assertIn("Escorts now break at QT exit", self.sent[1]["embed"]["description"])
         self.assertEqual(self.sent[1]["cat"], "intel")                                # its last channel
+
+    def test_a_revision_can_repost_the_full_announcement(self):
+        e = self.entry(title="Hull-C escort", summary="Two escorts", announce={"on": True})
+        first = self.sent[0]["embed"]
+        self.sent.clear()
+        # Minor edit + Push, full post: the first-publish embed again, not "Revised".
+        v = self.save(e["id"], "Hull-C escort", summary="Two escorts", body="v2", base_rev=e["rev"],
+                      announce={"on": True, "full": True})
+        self.assertEqual(len(self.sent), 1)
+        self.assertEqual(self.sent[0]["embed"]["title"], first["title"])
+        self.assertIn("Two escorts", self.sent[0]["embed"]["description"])
+        self.assertNotIn("Revised", self.sent[0]["embed"]["title"])
+        # A major revision with full post: same, instead of "Revised: …".
+        v = self.save(e["id"], "Hull-C escort", summary="Two escorts", body="v3", base_rev=v["rev"],
+                      major=True, note="New formation", announce={"full": True})
+        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(self.sent[1]["embed"]["title"], first["title"])
+        posts = self.client.get(f"/api/intel/entries/{e['id']}").json()["discord"]["posts"]
+        self.assertEqual([p["what"] for p in posts][:2], ["republish", "republish"])
+        # Without `full`, a major revision is still the short notice.
+        self.save(e["id"], "Hull-C escort", body="v4", base_rev=v["rev"], major=True, note="Tweak")
+        self.assertIn("Revised", self.sent[2]["embed"]["title"])
 
     def test_forum_thread_is_reused_for_revisions(self):
         self.forum = True

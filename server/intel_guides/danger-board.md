@@ -5,7 +5,7 @@ title: Danger Board: getting started
 summary: Warn your org about pirate camps and snares, confirm the ones still active, and let the route planners steer around them.
 tags: app-guide, tutorial, danger-board
 ---
-## At a glance
+## {orange}At a glance{/orange}
 
 | | |
 |---|---|
@@ -15,7 +15,7 @@ tags: app-guide, tutorial, danger-board
 | **When** | The moment you get snared, camped or see pirates waiting. |
 | **Why** | Pirates use the same lanes and stations again and again, so one warning saves the next member. |
 
-## The basics
+## {orange}The basics{/orange}
 
 The top of the page is **REPORT A DANGER ZONE**, where you post a warning. Below it, **ACTIVE DANGERS** lists every live warning, deadliest and freshest first, with filters for threat and severity and a **Hide stale** toggle.
 
@@ -25,7 +25,7 @@ Warnings expire on their own. Near the end a warning turns stale, and it drops o
 
 The board also feeds the Cargo Planner and the Trade Route Planner. A warning tied to a real place on the map can make those planners route around it. One typed as free text still shows on the board, but the planners can't use it.
 
-## Report a pirate
+## {orange}Report a pirate{/orange}
 
 Do this as soon as you're safe enough to type.
 
@@ -38,7 +38,7 @@ Do this as soon as you're safe enough to type.
 7. If the announce checkbox shows, tick it to post the warning to your org's Discord too.
 8. Click **Post warning**.
 
-## Confirm a warning is still active
+## {orange}Confirm a warning is still active{/orange}
 
 Do this when you fly past a reported spot and the danger is still there.
 
@@ -47,7 +47,7 @@ Do this when you fly past a reported spot and the danger is still there.
 3. The warning's clock resets and its confirm count goes up, so others know more than one person saw it.
 4. If you posted it and the danger is gone, click **All clear** to remove it for everyone. Admins can do this too.
 
-## Let the planners avoid danger
+## {orange}Let the planners avoid danger{/orange}
 
 Do this before a cargo or trade run. It is on by default.
 
@@ -59,7 +59,7 @@ Do this before a cargo or trade run. It is on by default.
 
 The two planners treat a camped destination differently. The Trade Route Planner drops that trade. The Cargo Planner keeps the stop, because a contract stop can't change, and warns you it's camped.
 
-## Write up a report in Intelligence
+## {orange}Write up a report in Intelligence{/orange}
 
 Do this when what happened is worth keeping after the warning expires.
 
@@ -71,14 +71,14 @@ Do this when what happened is worth keeping after the warning expires.
 
 Once a warning has a write-up, its card shows a link to it.
 
-## Tips
+## {orange}Tips{/orange}
 
 - Use severity honestly. **Deadly** makes the planners give a wider berth, so overusing it makes routes longer.
 - A lane warning helps routing only when both ends are real places.
 - Mid-escape, a typed location is fine. It still warns people.
 - **Organize hunt** on a warning starts a prefilled event to go after the pirates, if your org lets you create events.
 
-## Related guides
+## {orange}Related guides{/orange}
 
 - [[guide:cargo-planner]]: routes around warnings and flags camped stops
 - [[guide:trade-planner]]: drops camped trades and detours around lanes
