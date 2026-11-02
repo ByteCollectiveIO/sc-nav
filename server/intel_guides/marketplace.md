@@ -9,11 +9,11 @@ tags: app-guide, tutorial, marketplace
 
 | | |
 |---|---|
-| **Who** | Any member with something to sell, something to find, or a craft to order. |
-| **What** | An org-only trading board for sales, auctions, barters, buy orders and craft requests. |
-| **Where** | Launcher group Run the Org, route `#/market`. No watcher needed. |
-| **When** | Whenever you'd otherwise post "WTS" or "WTB" in chat. |
-| **Why** | Listings stay findable, and both sides confirm when a deal is done. |
+| **{blue}Who{/blue}** | Any member with something to sell, something to find, or a craft to order. |
+| **{blue}What{/blue}** | An org-only trading board for sales, auctions, barters, buy orders and craft requests. |
+| **{blue}Where{/blue}** | Launcher group Run the Org, route `#/market`. No watcher needed. |
+| **{blue}When{/blue}** | Whenever you'd otherwise post "WTS" or "WTB" in chat. |
+| **{blue}Why{/blue}** | Listings stay findable, and both sides confirm when a deal is done. |
 
 ## {orange}The basics{/orange}
 

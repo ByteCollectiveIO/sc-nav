@@ -10,11 +10,11 @@ activity: hauling
 
 | | |
 |---|---|
-| **Who** | Anyone flying hauling contracts, solo or for an org goal. |
-| **What** | A route solver that orders your pickups and drop-offs to fit your hold. |
-| **Where** | Launcher group Out in the 'Verse, at `#/route`. Run mode needs the watcher running for live guidance. |
-| **When** | After you accept contracts in game and before you leave the station. |
-| **Why** | The game never tells you the best order, or whether all the cargo fits at once. |
+| **{blue}Who{/blue}** | Anyone flying hauling contracts, solo or for an org goal. |
+| **{blue}What{/blue}** | A route solver that orders your pickups and drop-offs to fit your hold. |
+| **{blue}Where{/blue}** | Launcher group Out in the 'Verse, at `#/route`. Run mode needs the watcher running for live guidance. |
+| **{blue}When{/blue}** | After you accept contracts in game and before you leave the station. |
+| **{blue}Why{/blue}** | The game never tells you the best order, or whether all the cargo fits at once. |
 
 ## {orange}The basics{/orange}
 

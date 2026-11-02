@@ -652,6 +652,7 @@
   .ix-banner > span { flex: 1 1 260px; }
   .ix-banner > .ix-ico { color: var(--warn); }
   .ix-banner.returned > .ix-ico { color: var(--bad); }
+  .ix-banner.locked-entry > .ix-ico { color: var(--accent); }
   .ix-banner .ix-btn, .ix-banner .ix-primary { padding: 5px 10px; }
   /* Required reading (#50 slice 7): a quiet "read and sign" bar, no badges. */
   .ix-readbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 10px 22px; font-size: 12px;
@@ -5493,10 +5494,10 @@
         <div class="panel admin-grp" id="intel-access-panel">
           <h2>INTELLIGENCE ACCESS &amp; REVIEW</h2>
           <div class="muted" style="font-size:12px; margin-bottom:10px; max-width:80ch;">
-            Who can read <b>RESTRICTED</b> entries, and who reviews before something is published.
-            Both use Discord roles: turn on Developer Mode in Discord (User Settings › Advanced), then
+            Who can read <b>RESTRICTED</b> entries, who reviews before something is published, and who can lock an entry against editing.
+            All three use Discord roles: turn on Developer Mode in Discord (User Settings › Advanced), then
             right-click the role under Server Settings › Roles › <b>Copy Role ID</b>. Admins always
-            count as cleared and as reviewers. Roles are read when a member signs in, so a change in
+            count as cleared, as reviewers and as lockers. Roles are read when a member signs in, so a change in
             Discord applies at their next sign-in.
           </div>
           <div class="ix-roles" data-key="intel_clearance_roles">
@@ -5510,6 +5511,13 @@
             <div class="ix-roles-h"><b>Reviewer roles</b> <span class="muted">— approve submissions and mark Doctrine. None set: admins only.</span></div>
             <div class="ra-add"><input class="ti ix-rl-label" maxlength="60" placeholder="Role name, e.g. Instructors" aria-label="Reviewer role name">
               <input class="ti ix-rl-id" maxlength="32" placeholder="Role ID" inputmode="numeric" aria-label="Reviewer role ID">
+              <button type="button" class="ix-rl-add">Add</button></div>
+            <div class="ra-chips ix-rl-list"></div>
+          </div>
+          <div class="ix-roles" data-key="intel_lock_roles">
+            <div class="ix-roles-h"><b>Lock roles</b> <span class="muted">— lock or unlock an entry from its More menu. While it's locked, only admins and these roles can edit it. None set: admins only.</span></div>
+            <div class="ra-add"><input class="ti ix-rl-label" maxlength="60" placeholder="Role name, e.g. Librarians" aria-label="Lock role name">
+              <input class="ti ix-rl-id" maxlength="32" placeholder="Role ID" inputmode="numeric" aria-label="Lock role ID">
               <button type="button" class="ix-rl-add">Add</button></div>
             <div class="ra-chips ix-rl-list"></div>
           </div>
@@ -6172,6 +6180,8 @@
       <symbol id="ix-i-collection" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="1.5"/><path d="M6.5 5h11M9 2.5h6"/></symbol>
       <symbol id="ix-i-guide" viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11v16H5.5A1.5 1.5 0 0 1 4 18.5z"/><path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H13v16h5.5a1.5 1.5 0 0 0 1.5-1.5z"/><path d="M6.5 8h2.5M6.5 11h2.5M15 8h2.5M15 11h2.5"/></symbol>
       <symbol id="ix-i-pin-top" viewBox="0 0 24 24"><path d="M9 3.5h6l-1 6 3.5 3.5h-11L10 9.5z"/><path d="M12 13v7.5"/></symbol>
+      <symbol id="ix-i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 8 0V11"/></symbol>
+      <symbol id="ix-i-unlock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7.5a4 4 0 0 1 7.6-1.7"/></symbol>
       <symbol id="ix-i-hidden" viewBox="0 0 24 24"><path d="M4 4l16 16"/><path d="M9.6 5.8A9.5 9.5 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-3 3.6M6.2 7.7A16 16 0 0 0 2.5 12S6 18.5 12 18.5c1.3 0 2.5-.3 3.6-.8"/></symbol>
     </defs></svg>
     <a class="ix-skip" href="#intel-know" id="intel-skip">Skip to content</a>
@@ -29088,7 +29098,7 @@ let intelLibFilter = { kind: "", activities: [], tag: "" };
 // every route re-checks.
 function intelAccess() {
   const a = (currentMe && currentMe.intel_access) || {};
-  return { cleared: !!a.cleared, reviewer: !!a.reviewer, review_kinds: a.review_kinds || [] };
+  return { cleared: !!a.cleared, reviewer: !!a.reviewer, locker: !!a.locker, review_kinds: a.review_kinds || [] };
 }
 // An entry's systems / activities (lists: an SOP can cover Stanton AND Pyro).
 const intelAxisChips = (list) => (list || []).map(x => `<span class="ix-tag">${esc(x)}</span>`).join("");
@@ -30130,7 +30140,7 @@ function intelMemberRail(e) {
         `from <b>${esc(f.by)}</b></span>${f.note ? `<q>${esc(f.note)}</q>` : ""}<small>${esc(intelWhen(f.at))}</small></li>`).join("")}</ul>` +
         `<p style="margin:10px 0 0"><a class="ix-btn" href="#/intel/review">Open the flag queue</a></p>` : "") +
       ((e.mod_log || []).length ? `<h2 style="margin-top:14px">LOG</h2><ul class="ix-modlog">${e.mod_log.map(m =>
-        `<li><span><b>${m.action === "hide" ? "Hidden" : "Unhidden"}</b> by ${esc(m.by)}</span>${m.note ? `<q>${esc(m.note)}</q>` : ""}` +
+        `<li><span><b>${({ hide: "Hidden", unhide: "Unhidden", lock: "Locked", unlock: "Unlocked" })[m.action] || esc(m.action)}</b> by ${esc(m.by)}</span>${m.note ? `<q>${esc(m.note)}</q>` : ""}` +
         `<small>${esc(new Date(m.at).toLocaleString())}</small></li>`).join("")}</ul>` : "") + `</div>`);
   }
   return out.join("");
@@ -30176,7 +30186,7 @@ function intelFlagForm(host, target, mine, onDone) {
 // Dispute, Add update, Answer…) and History/Watch in view; the rest share one
 // More menu, so Flag and Archive never sit at Corroborate's weight. Nodes are
 // MOVED, so the handlers bound by id keep working; safe to call again.
-const INTEL_MORE_IDS = ["ix-copy", "ix-collect", "ix-flag", "ix-pin", "ix-archive", "ix-hide"];
+const INTEL_MORE_IDS = ["ix-copy", "ix-collect", "ix-flag", "ix-pin", "ix-lock", "ix-archive", "ix-hide"];
 const INTEL_NEW_KINDS = [
   ["report", "Report", "Something you saw out there: who, where, when"],
   ["procedure", "Procedure", "How the org does a job, step by step"],
@@ -30287,6 +30297,28 @@ function intelBindMember(box, e, rerender) {
   };
   if ($("ix-hide")) $("ix-hide").onclick = () => hideIt(true);
   if ($("ix-unhide")) $("ix-unhide").onclick = () => hideIt(false);
+  // Locked: read-only for everyone but admins and the lock roles. Everyone is
+  // told why the Edit button is gone; the lockers get Unlock in the banner too.
+  if (e.locked && art && !art.querySelector(".locked-entry")) {
+    art.insertAdjacentHTML("afterbegin", `<div class="ix-banner locked-entry">${intelIco("lock")}<span><b>Locked</b> by ${esc(e.locked.by || "an admin")} ` +
+      `${esc(intelWhen(e.locked.at))}. ${e.can_lock ? "You can still edit it. Other members can't until it's unlocked." : "Only admins and the org's lock roles can edit it. You can still comment and flag it."}</span>` +
+      (e.can_lock ? `<button type="button" class="ix-btn" id="ix-unlock-b">${intelIco("unlock")}Unlock</button>` : "") + `</div>`);
+  }
+  if (e.can_lock && acts && !e.hidden && !acts.querySelector("#ix-lock"))
+    acts.insertAdjacentHTML("beforeend", `<button type="button" class="ix-btn" id="ix-lock" title="${e.locked ? "Let its owner and maintainers edit it again" : "Only admins and the lock roles can edit it while it's locked"}">` +
+      `${intelIco(e.locked ? "unlock" : "lock")}${e.locked ? "Unlock editing" : "Lock editing"}</button>`);
+  const lockIt = async (locked) => {
+    const note = await promptDialog(locked ? "Only admins and the lock roles can edit it, revert it or confirm it's still valid. Everyone can still read, comment and flag it. Both are logged."
+      : "Its owner and maintainers can edit it again, as before.",
+      { title: locked ? "Lock this entry?" : "Unlock this entry?", confirmLabel: locked ? "Lock" : "Unlock",
+        placeholder: "Optional note for the log" });
+    if (note === null) return;
+    try { await intelApi(`/api/intel/entries/${e.id}/lock`, { method: "POST", body: { locked, note } });
+      intelToast(locked ? "Locked. Only admins and the lock roles can edit it." : "Unlocked."); rerender(); }
+    catch (err) { fail(err); }
+  };
+  if ($("ix-lock")) $("ix-lock").onclick = () => lockIt(!e.locked);
+  if ($("ix-unlock-b")) $("ix-unlock-b").onclick = () => lockIt(false);
   intelGroupMore(acts);
   if (!e.watching || !acts) return;
   if (!$("ix-member-pops")) acts.insertAdjacentHTML("afterend", `<div id="ix-member-pops"><div class="ix-inpop" id="ix-collect-pop" hidden></div>` +

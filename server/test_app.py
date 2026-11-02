@@ -16257,7 +16257,7 @@ class IntelAccessReviewTests(unittest.TestCase):
         self.assertEqual(s["intel_review_kinds"], ["procedure", "report"])
         self.as_(self.REVIEWER)
         self.assertEqual(app.intel_access(self.REVIEWER),
-                         {"cleared": False, "reviewer": True, "review_kinds": ["procedure", "report"]})
+                         {"cleared": False, "reviewer": True, "locker": False, "review_kinds": ["procedure", "report"]})
         self.assertEqual(app.intel_access(self.CLEARED)["cleared"], True)
 
     def test_login_snapshots_roles(self):
@@ -17735,6 +17735,58 @@ class IntelCollectWatchFlagTests(unittest.TestCase):
         self.as_(self.OTHER)
         self.assertEqual(self.client.get(f"/api/intel/entries/{sop['id']}").status_code, 200)
         self.assertEqual(len(self.client.get("/api/intel/entries?section=library").json()["entries"]), 1)
+
+    def test_a_locked_entry_is_edited_only_by_admins_and_the_lock_roles(self):
+        LOCK_ROLE = self.CLEAR_ROLE        # CLEARED holds it; set as the lock role here
+        db.set_setting("intel_lock_roles", json.dumps([{"id": LOCK_ROLE, "label": "Librarians"}]))
+        try:
+            sop = self.entry(title="Hathor escort", body="v1")
+            eid = sop["id"]
+            edit = lambda body: self.client.put(f"/api/intel/entries/{eid}", json={
+                "title": "Hathor escort", "body": body, "publish": True, "base_rev": self.client.get(
+                    f"/api/intel/entries/{eid}").json()["rev"]})
+            # The owner can't lock; a lock-role member and an admin can.
+            self.assertEqual(self.client.post(f"/api/intel/entries/{eid}/lock", json={"locked": True}).status_code, 403)
+            self.assertFalse(self.client.get(f"/api/intel/entries/{eid}").json()["can_lock"])
+            self.as_(self.CLEARED)
+            r = self.client.post(f"/api/intel/entries/{eid}/lock", json={"locked": True, "note": "Doctrine"})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["locked"]["by"], "Cleared")
+            self.assertTrue(r.json()["can_edit"])
+            self.assertEqual(self.client.post(f"/api/intel/entries/{eid}/lock", json={"locked": True}).status_code, 409)
+            self.assertEqual(edit("v2 by the librarian").status_code, 200)
+            # The owner sees why, and every edit path is shut for them.
+            self.as_(self.AUTHOR)
+            page = self.client.get(f"/api/intel/entries/{eid}").json()
+            self.assertEqual((page["can_edit"], page["locked"]["by"]), (False, "Cleared"))
+            r = edit("v3 by the owner")
+            self.assertEqual(r.status_code, 403)
+            self.assertIn("locked", r.json()["detail"])
+            self.assertEqual(self.client.post(f"/api/intel/entries/{eid}/revert", json={"rev": 1, "base_rev": page["rev"]}).status_code, 403)
+            self.assertFalse(self.client.get(f"/api/intel/entries/{eid}/revisions").json()["can_edit"])
+            # Reading and commenting carry on.
+            self.assertEqual(self.client.post(f"/api/intel/entries/{eid}/comments", json={"body": "Nice"}).status_code, 200)
+            # Admins edit and unlock; the log keeps both.
+            self.as_(self.ADMIN)
+            self.assertTrue(self.client.get(f"/api/intel/entries/{eid}").json()["can_lock"])
+            r = self.client.post(f"/api/intel/entries/{eid}/lock", json={"locked": False})
+            self.assertIsNone(r.json()["locked"])
+            self.assertEqual([m["action"] for m in r.json()["mod_log"]], ["unlock", "lock"])
+            self.as_(self.AUTHOR)
+            self.assertEqual(edit("v3 by the owner").status_code, 200)
+            # No lock roles set: admins only.
+            db.set_setting("intel_lock_roles", "[]")
+            self.as_(self.CLEARED)
+            self.assertEqual(self.client.post(f"/api/intel/entries/{eid}/lock", json={"locked": True}).status_code, 403)
+        finally:
+            db.set_setting("intel_lock_roles", "[]")
+
+    def test_lock_roles_are_an_admin_setting(self):
+        self.as_(self.ADMIN)
+        r = self.client.post("/api/settings", json={"intel_lock_roles": [{"id": "<@&222222222222222222>", "label": "@Librarians"}]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["intel_lock_roles"], [{"id": "222222222222222222", "label": "Librarians"}])
+        db.set_setting("intel_lock_roles", "[]")
 
     def test_flags_are_rate_limited(self):
         sop = self.entry()

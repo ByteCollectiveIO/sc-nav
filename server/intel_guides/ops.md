@@ -9,11 +9,11 @@ tags: app-guide, tutorial, ops
 
 | | |
 |---|---|
-| **Who** | Everyone on a mission. Leaders and their deputies run it. |
-| **What** | The live page for one mission, then its permanent record: attendance, money and loot. |
-| **Where** | The Rally the Org group on the launcher, at `#/ops`. Each op has its own page at `#/ops/<id>`. |
-| **When** | During a mission and right after it, while the money gets settled. |
-| **Why** | Everyone sees who was there, who gets what and who won each drop. |
+| **{blue}Who{/blue}** | Everyone on a mission. Leaders and their deputies run it. |
+| **{blue}What{/blue}** | The live page for one mission, then its permanent record: attendance, money and loot. |
+| **{blue}Where{/blue}** | The Rally the Org group on the launcher, at `#/ops`. Each op has its own page at `#/ops/<id>`. |
+| **{blue}When{/blue}** | During a mission and right after it, while the money gets settled. |
+| **{blue}Why{/blue}** | Everyone sees who was there, who gets what and who won each drop. |
 
 ## {orange}The basics{/orange}
 

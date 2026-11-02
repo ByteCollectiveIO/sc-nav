@@ -9,11 +9,11 @@ tags: app-guide, tutorial, event-planner
 
 | | |
 |---|---|
-| **Who** | Every member can sign up. Organizers and admins plan and run events. |
-| **What** | A shared board of scheduled org activity: raids, mining ops, hauls, meetups and more. |
-| **Where** | The Rally the Org group on the launcher, at `#/events`. Nothing to install. |
-| **When** | Any time before an event, and on the night when the organizer hands it to Ops. |
-| **Why** | Everyone sees the time, the place, the roles still open and who is coming. |
+| **{blue}Who{/blue}** | Every member can sign up. Organizers and admins plan and run events. |
+| **{blue}What{/blue}** | A shared board of scheduled org activity: raids, mining ops, hauls, meetups and more. |
+| **{blue}Where{/blue}** | The Rally the Org group on the launcher, at `#/events`. Nothing to install. |
+| **{blue}When{/blue}** | Any time before an event, and on the night when the organizer hands it to Ops. |
+| **{blue}Why{/blue}** | Everyone sees the time, the place, the roles still open and who is coming. |
 
 ## {orange}The basics{/orange}
 

@@ -9,11 +9,11 @@ tags: app-guide, tutorial, navigator
 
 | | |
 |---|---|
-| **Who** | Any member who flies, mines or explores and wants the org's finds on a second screen. |
-| **What** | Live navigation to org-logged places, ore nodes, plants and creatures, plus the forms to log your own. |
-| **Where** | Launcher group Out in the 'Verse, route `#/nav`. You need the watcher running on your gaming PC first. |
-| **When** | During a play session, open on a laptop or phone next to your keyboard. |
-| **Why** | The game has no marker for "the node someone found last week". Here you can fly straight to it. |
+| **{blue}Who{/blue}** | Any member who flies, mines or explores and wants the org's finds on a second screen. |
+| **{blue}What{/blue}** | Live navigation to org-logged places, ore nodes, plants and creatures, plus the forms to log your own. |
+| **{blue}Where{/blue}** | Launcher group Out in the 'Verse, route `#/nav`. You need the watcher running on your gaming PC first. |
+| **{blue}When{/blue}** | During a play session, open on a laptop or phone next to your keyboard. |
+| **{blue}Why{/blue}** | The game has no marker for "the node someone found last week". Here you can fly straight to it. |
 
 ## {orange}The basics{/orange}
 

@@ -10714,7 +10714,9 @@ class RoleAliasIn(BaseModel):
 # gate and mark Doctrine). Admins hold both implicitly. A member's roles are
 # the snapshot from their last sign-in (members.discord_roles), so a role
 # change applies at their next login — the same lag as the member gate.
-_INTEL_ROLE_KEYS = ("intel_clearance_roles", "intel_reviewer_roles")
+# A third list, LOCK, holds who may lock an entry against editing (and still
+# edit it while locked); admins hold it implicitly too.
+_INTEL_ROLE_KEYS = ("intel_clearance_roles", "intel_reviewer_roles", "intel_lock_roles")
 _INTEL_ROLES_MAX = 10
 INTEL_REVIEWABLE_KINDS = ("procedure", "tactic", "report", "dossier", "debrief")
 # Reports are exempt by default: a gate-camp report that waits for approval is
@@ -10787,6 +10789,15 @@ def intel_reviewer_id(discord_id: str) -> bool:
     return did in admin_ids() or _holds_intel_role(did, "intel_reviewer_roles")
 
 
+def intel_locker_id(discord_id: str) -> bool:
+    did = str(discord_id)
+    return did in admin_ids() or _holds_intel_role(did, "intel_lock_roles")
+
+
+def intel_locker(user: dict) -> bool:
+    return bool(user.get("is_admin")) or intel_locker_id(user["id"])
+
+
 def intel_cleared(user: dict) -> bool:
     return bool(user.get("is_admin")) or intel_cleared_id(user["id"])
 
@@ -10800,6 +10811,7 @@ def intel_settings() -> dict:
     Settings panel re-renders from either)."""
     return {"intel_clearance_roles": intel_role_list("intel_clearance_roles"),
             "intel_reviewer_roles": intel_role_list("intel_reviewer_roles"),
+            "intel_lock_roles": intel_role_list("intel_lock_roles"),
             "intel_review_required": intel_review_required(),
             "intel_review_kinds": intel_review_kinds()}
 
@@ -10807,7 +10819,7 @@ def intel_settings() -> dict:
 def intel_access(user: dict) -> dict:
     """What the SPA needs to label buttons: never the authority (every route
     re-checks), only the copy."""
-    return {"cleared": intel_cleared(user), "reviewer": intel_reviewer(user),
+    return {"cleared": intel_cleared(user), "reviewer": intel_reviewer(user), "locker": intel_locker(user),
             "review_kinds": intel_review_kinds() if intel_review_required() else []}
 
 
@@ -16253,6 +16265,7 @@ class SettingsIn(BaseModel):
     # review gate and the kinds it covers.
     intel_clearance_roles: list[RoleAliasIn] | None = Field(default=None, max_length=_INTEL_ROLES_MAX * 2)
     intel_reviewer_roles: list[RoleAliasIn] | None = Field(default=None, max_length=_INTEL_ROLES_MAX * 2)
+    intel_lock_roles: list[RoleAliasIn] | None = Field(default=None, max_length=_INTEL_ROLES_MAX * 2)
     intel_review_required: bool | None = None
     intel_review_kinds: list[str] | None = Field(default=None, max_length=10)
     # Preview linked announcement images from IMAGE_PREVIEW_HOSTS in the app.
@@ -17802,6 +17815,10 @@ def _intel_can_edit(e: dict, user: dict) -> bool:
         return e["author_id"] == uid
     if e["status"] != "published":     # in review: withdraw it first; archived: nobody
         return False
+    if e.get("locked_at"):
+        # Locked: only admins and the lock roles edit, revert or confirm it,
+        # whatever the kind, the owner or the maintainers say.
+        return intel_locker(user)
     if e["kind"] == "report":
         # No silent rewrites: the author's typo window, then updates only.
         return e["author_id"] == uid and _intel_report_editable(e)
@@ -17998,6 +18015,9 @@ def _intel_entry_view(e: dict, user: dict) -> dict:
         "pinned": any(p["id"] == e["id"] for p in _intel_pins_raw()["entries"]),
         "doctrine_by": _resolve_member_name(e["doctrine_by"], None) if e.get("doctrine_by") else None,
         "is_reviewer": intel_reviewer(user),
+        "locked": ({"at": e["locked_at"], "by": _resolve_member_name(e["locked_by"], None)
+                    if e.get("locked_by") else None} if e.get("locked_at") else None),
+        "can_lock": e["status"] == "published" and intel_locker(user),
         # Would this member's publish / major revision go to review?
         "review_gate": _intel_gated(e, user),
         "discord": _intel_discord_view(e) if e["status"] == "published" else None,
@@ -18576,6 +18596,29 @@ def intel_hide(entry_id: int, body: IntelHideIn, user: dict = Depends(require_ad
                         (body.note or "").strip() or None, now)
     if body.hidden:
         db.intel_flags_resolve("entry", str(entry_id), uid, "hidden", now)
+    return _intel_entry_view(db.intel_get_entry(entry_id), user)
+
+
+class IntelLockIn(BaseModel):
+    locked: bool
+    note: str | None = Field(default=None, max_length=500)
+
+
+@app.post("/api/intel/entries/{entry_id}/lock")
+def intel_lock(entry_id: int, body: IntelLockIn, user: dict = Depends(require_session)):
+    """Lock a published entry against editing (admins + the lock roles), or
+    unlock it. While locked only they edit, revert or confirm it; reading,
+    comments, updates and flags carry on. Logged both ways."""
+    e = _intel_require(entry_id, user)
+    if not intel_locker(user):
+        raise HTTPException(status_code=403, detail="Only admins and the lock roles can lock entries.")
+    if e["status"] != "published":
+        raise HTTPException(status_code=409, detail="Only a published entry can be locked.")
+    if bool(e.get("locked_at")) == body.locked:
+        raise HTTPException(status_code=409, detail="It's already " + ("locked." if body.locked else "unlocked."))
+    uid = str(user["id"])
+    db.intel_set_locked(entry_id, body.locked, uid, _resolve_member_name(uid, None),
+                        (body.note or "").strip() or None, _now_iso())
     return _intel_entry_view(db.intel_get_entry(entry_id), user)
 
 
@@ -19947,6 +19990,8 @@ def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_se
         raise HTTPException(status_code=409, detail=(
             "A report can only be corrected for 15 minutes after it's published. Add an update instead."))
     if not _intel_can_edit(e, user):
+        if e.get("locked_at") and e["status"] == "published":
+            raise HTTPException(status_code=403, detail="It's locked. An admin or a lock-role member can unlock it.")
         raise HTTPException(status_code=403, detail="Only the owner, maintainers or an admin can edit this.")
     if not body.title.strip():
         raise HTTPException(status_code=422, detail="The title can't be empty.")
