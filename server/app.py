@@ -17729,6 +17729,9 @@ class IntelAnnounceIn(BaseModel):
     channel: str | None = Field(None, max_length=32)
     ping: str | None = Field(None, max_length=32)       # one Discord role id from the alias map
     teaser: str = Field("", max_length=280)
+    # On a revision: post the whole announcement again (the first-publish
+    # embed) instead of the short "Revised: …" / update notice.
+    full: bool = False
 
 
 class IntelSaveIn(IntelEntryFields):
@@ -19219,7 +19222,8 @@ def _intel_clean_announce(a: "IntelAnnounceIn | None") -> dict:
     chans = {c["key"] for c in intel_channel_options()}
     pings = {r["id"] for r in intel_ping_options()}
     return {"on": bool(a.on), "channel": a.channel if a.channel in chans else None,
-            "ping": a.ping if a.ping in pings else None, "teaser": a.teaser.strip()[:INTEL_TEASER_MAX]}
+            "ping": a.ping if a.ping in pings else None, "teaser": a.teaser.strip()[:INTEL_TEASER_MAX],
+            "full": bool(a.full)}
 
 
 def _intel_teaser(e: dict, written: str = "") -> str:
@@ -19261,7 +19265,10 @@ def _intel_post_fields(e: dict) -> list[dict]:
 async def _intel_post(entry_id: int, what: str, ann: dict | None = None,
                       note: str = "", editor: str | None = None) -> None:
     """Announce an entry: `publish` (first publish / approval), `revise` (a
-    major revision, always), `push` (a minor edit the author chose to push).
+    major revision, always), `push` (a minor edit the author chose to push),
+    `republish` (a revision posted as the full first-publish announcement
+    again, the author's choice instead of revise/push; routed like them, so
+    into the entry's thread when it has one).
     Never twice for the same revision. Never raises (a notify task)."""
     e = db.intel_get_entry(entry_id)
     if not e or e["status"] != "published":
@@ -19274,7 +19281,7 @@ async def _intel_post(entry_id: int, what: str, ann: dict | None = None,
         cat = _intel_channel("intel_restricted")
         if not cat:
             return
-        embed = _announcement("intel_restricted", {"verb": "published" if what == "publish" else "revised"},
+        embed = _announcement("intel_restricted", {"verb": "published" if what in ("publish", "republish") else "revised"},
                               url=url, color=_EMBED_BAD)
         r = await notify.send(cat, "", embed=embed, info=True, thread_name="A restricted entry")
     else:
@@ -19292,7 +19299,8 @@ async def _intel_post(entry_id: int, what: str, ann: dict | None = None,
         if not cat or not notify.is_configured(cat):
             return
         kind_word = _INTEL_KIND_WORD.get(e["kind"], e["kind"].title())
-        if what == "publish":
+        full = what in ("publish", "republish")
+        if full:
             embed = _announcement("intel_published", {
                 "icon": _INTEL_ICON.get(e["kind"], "📘"), "kind_label": kind_word, "title": e["title"],
                 "teaser": _intel_teaser(e, ann.get("teaser", "")), "system": ", ".join(_intel_multi(e.get("system"), INTEL_SYSTEMS)),
@@ -19305,7 +19313,7 @@ async def _intel_post(entry_id: int, what: str, ann: dict | None = None,
                 "teaser": (ann.get("teaser") or "").strip(), "kind_label": kind_word, "rev": str(rev),
                 "patch": e.get("patch") or "", "editor": editor or ""}, url=url)
         kw = _announce(embed)
-        img = _intel_lead_image(e) if what == "publish" else None
+        img = _intel_lead_image(e) if full else None
         if img:
             kw["embed"] = {**kw["embed"], "image": {"url": img}}
         ping = ann.get("ping")
@@ -20034,9 +20042,11 @@ def intel_save(entry_id: int, body: IntelSaveIn, user: dict = Depends(require_se
         if ann["on"]:
             _notify_bg(_intel_post(entry_id, "publish", ann))
     elif major:
-        _notify_bg(_intel_post(entry_id, "revise", ann, note, _resolve_member_name(uid, None)))
+        _notify_bg(_intel_post(entry_id, "republish" if ann.get("full") else "revise", ann, note,
+                               _resolve_member_name(uid, None)))
     elif ann["on"]:
-        _notify_bg(_intel_post(entry_id, "push", ann, note, _resolve_member_name(uid, None)))
+        _notify_bg(_intel_post(entry_id, "republish" if ann.get("full") else "push", ann, note,
+                               _resolve_member_name(uid, None)))
     return _intel_entry_view(db.intel_get_entry(entry_id), user)
 
 
@@ -20317,7 +20327,8 @@ def intel_approve(entry_id: int, user: dict = Depends(require_session)):
         "editor_id": pend["editor_id"], "editor_name": pend.get("editor_name"),
         "note": pend.get("note"), "major": True, "created_at": now, **approver})
     db.intel_set_revision_status(pend["id"], "approved")
-    _notify_bg(_intel_post(entry_id, "revise", f.get("announce") or {}, pend.get("note") or "",
+    ann = f.get("announce") or {}
+    _notify_bg(_intel_post(entry_id, "republish" if ann.get("full") else "revise", ann, pend.get("note") or "",
                            pend.get("editor_name")))      # a major revision always posts
     return _intel_entry_view(db.intel_get_entry(entry_id), user)
 

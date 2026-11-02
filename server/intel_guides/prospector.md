@@ -6,7 +6,7 @@ summary: The org's shared mining map: which areas on moons and in the belts are 
 tags: app-guide, tutorial, prospector
 activity: mining
 ---
-## At a glance
+## {orange}At a glance{/orange}
 
 | | |
 |---|---|
@@ -16,7 +16,7 @@ activity: mining
 | **When** | Before a mining run to pick a spot, and during it to log what you find. |
 | **Why** | Every member's finds add up to one map, so nobody has to rely on rumours. |
 
-## The basics
+## {orange}The basics{/orange}
 
 Prospector has three tabs at the top, and a STANTON, NYX or PYRO switch that sets the system for all of them.
 
@@ -28,7 +28,7 @@ There are two kinds of area. A surface area is a circle on a planet or moon, nam
 
 Each area has a health score and a value. Health says how far you can trust its numbers. Value says what it's worth. A well-surveyed empty area is healthy and worth nothing.
 
-## Pick a place to mine
+## {orange}Pick a place to mine{/orange}
 
 Use this before a session, when you want the best spot the org knows.
 
@@ -41,7 +41,7 @@ Use this before a session, when you want the best spot the org knows.
 
 A pre-patch chip in HEALTH means all the evidence is from before the current game patch. Ore spawns may have moved since.
 
-## Mark rocks in a belt
+## {orange}Mark rocks in a belt{/orange}
 
 Use this when you're in a belt zone and want to log each rock you scan.
 
@@ -55,7 +55,7 @@ Use this when you're in a belt zone and want to log each rock you scan.
 
 Found nothing? Mark it with ROCKS AROUND set to none. Empty space shows where a field ends, and it counts toward the zone's health.
 
-## Drop into a belt
+## {orange}Drop into a belt{/orange}
 
 Use this when you want to reach rock space that has no quantum marker.
 
@@ -67,7 +67,7 @@ Use this when you want to reach rock space that has no quantum marker.
 6. Set the marker it names as your quantum destination, jump, and exit when "distance to destination" in your HUD reaches the drop number.
 7. Click **FLY IT** to pin the plan in FIELD, then run `/showlocation` after the drop to see where you landed.
 
-## Turn an area into an org goal
+## {orange}Turn an area into an org goal{/orange}
 
 Use this when an area needs more evidence and you want the org to help.
 
@@ -78,13 +78,13 @@ Use this when an area needs more evidence and you want the org to help.
 
 Only evidence logged after you post the goal counts toward it.
 
-## Tips
+## {orange}Tips{/orange}
 
 - Sort SURVEY ZONES by Needs surveying to find the areas the org knows least about.
 - Name a belt zone before a survey run. Without one, marks group by distance and two nearby fields can merge.
 - Deleting a zone never deletes the sightings or marks in it.
 
-## Related guides
+## {orange}Related guides{/orange}
 
 - [[guide:navigator]]: surface areas and node captures come from there
 - [[guide:resource-manager]]: survey goals live there

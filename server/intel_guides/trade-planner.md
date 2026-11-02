@@ -6,7 +6,7 @@ summary: Find the most profitable buy and sell loop your ship can carry on live 
 tags: app-guide, tutorial, trade-planner
 activity: trading
 ---
-## At a glance
+## {orange}At a glance{/orange}
 
 | | |
 |---|---|
@@ -16,7 +16,7 @@ activity: trading
 | **When** | Before you buy your first load, and again whenever a run goes wrong. |
 | **Why** | Prices change all the time, and working out a loop by hand takes longer than flying it. |
 
-## The basics
+## {orange}The basics{/orange}
 
 Everything lives in one panel, **PLAN A TRADE RUN**. The **SHIP** part holds facts about your ship: usable SCU (standard cargo units), where it can stop, and how it loads. The **ROUTE** part is how you want to trade. Hover a row label to see what it does. **Route rules** folds away the settings you rarely change, such as **Max spend**, **Cargo legality** and **Danger**.
 
@@ -24,7 +24,7 @@ Prices come from UEX, a community price site, mixed with newer prices your membe
 
 The watcher, a small program on your gaming PC, reads your position when you type `/showlocation` in chat. It also spots kiosk buys and sells in your game log.
 
-## Plan a trade run
+## {orange}Plan a trade run{/orange}
 
 Do this before you head to the first terminal.
 
@@ -37,7 +37,7 @@ Do this before you head to the first terminal.
 7. Open **Route rules** and set **Max spend** to the money you really have.
 8. Click **Plan trade run** and check total profit and capital needed.
 
-## Run it
+## {orange}Run it{/orange}
 
 Do this when the plan looks good.
 
@@ -49,7 +49,7 @@ Do this when the plan looks good.
 6. Knocked off course? Click **re-plan from here**. Cargo already aboard stays in the plan as a leg to sell first.
 7. When every leg is done, the run shows **TRADE RUN COMPLETE** and lands in **RECENT TRADES**.
 
-## Report stock and prices
+## {orange}Report stock and prices{/orange}
 
 Do this when a kiosk doesn't match the plan.
 
@@ -59,7 +59,7 @@ Do this when a kiosk doesn't match the plan.
 4. If a terminal won't buy your cargo at all, use the "won't buy here" button on the sell step. It files a report and re-plans you to another buyer.
 5. If the planned container size isn't offered, open **not on this kiosk?** on the buy step and pick the size you can buy.
 
-## Save a route
+## {orange}Save a route{/orange}
 
 Do this for a setup you fly often.
 
@@ -67,14 +67,14 @@ Do this for a setup you fly often.
 2. Click **★ Save route** and give it a name.
 3. Next time, click it under **SAVED ROUTES**. It plans again on current prices.
 
-## Tips
+## {orange}Tips{/orange}
 
 - Enter the kiosk's total, never a per-unit price. A buy kiosk prices per container and a sell kiosk per SCU, so a per-unit figure is easy to get wrong.
 - **Best return** without a **Max spend** can pick a big multiple on very little money. Set your budget first.
 - Leave **only prices newer than** on. Old prices can make a route look better than it is.
 - **Mixed loads** helps a big hold when one commodity can't fill it.
 
-## Related guides
+## {orange}Related guides{/orange}
 
 - [[guide:danger-board]]: plans avoid reported pirates by default
 - [[guide:cargo-planner]]: shares your ship profile and avoided locations

@@ -5,7 +5,7 @@ title: "Marketplace: getting started"
 summary: Buy, sell, auction, barter, post buy orders and commission crafters inside your org, priced in in-game aUEC only.
 tags: app-guide, tutorial, marketplace
 ---
-## At a glance
+## {orange}At a glance{/orange}
 
 | | |
 |---|---|
@@ -15,7 +15,7 @@ tags: app-guide, tutorial, marketplace
 | **When** | Whenever you'd otherwise post "WTS" or "WTB" in chat. |
 | **Why** | Listings stay findable, and both sides confirm when a deal is done. |
 
-## The basics
+## {orange}The basics{/orange}
 
 Everything is priced in aUEC, the in-game currency. Never real money.
 
@@ -23,7 +23,7 @@ The board has tabs for each listing type: **All**, **Sales**, **Auctions**, **Ba
 
 The app never moves goods or aUEC. Once a buyer, winning bidder or crafter is locked in, you meet in-game and trade. Then both of you confirm here. This dual confirm is the only way a deal completes, and each completed deal adds to both members' deal count.
 
-## Buy something
+## {orange}Buy something{/orange}
 
 Do this when you see a sale you want.
 
@@ -36,7 +36,7 @@ Do this when you see a sale you want.
 
 On an auction, enter an amount at or above the minimum and click **Place bid** instead. The highest bid at the end time wins.
 
-## List an item for sale or auction
+## {orange}List an item for sale or auction{/orange}
 
 Do this when you have something to sell.
 
@@ -50,7 +50,7 @@ Do this when you have something to sell.
 
 If you logged the stock in Resource Manager, click **Sell** on the holding to open this form with quantity, quality and location filled in.
 
-## Post a buy order
+## {orange}Post a buy order{/orange}
 
 Do this when you can't find a seller.
 
@@ -61,7 +61,7 @@ Do this when you can't find a seller.
 5. Sellers reply with an offer. Review them on the listing and click **Accept** on the one you want.
 6. Meet in-game, trade, and both click **Confirm handoff**.
 
-## Commission a crafter
+## {orange}Commission a crafter{/orange}
 
 Do this when you want an item made to a spec.
 
@@ -75,7 +75,7 @@ Do this when you want an item made to a spec.
 
 To pick a specific crafter, open the **Requests** tab, find their storefront and click **Request a craft**. Only that crafter can quote it.
 
-## Tips
+## {orange}Tips{/orange}
 
 - Both sides must click **Confirm handoff**. If your trade partner goes quiet after the handoff, remind them.
 - Price fields are for the whole quantity, not per unit.
@@ -83,6 +83,6 @@ To pick a specific crafter, open the **Requests** tab, find their storefront and
 - A listing left untouched for a while gets a stale badge. Click **Still available** on it to clear the badge.
 - The seller can click **Cancel listing** on an open or pending listing.
 
-## Related guides
+## {orange}Related guides{/orange}
 
 - [[guide:resource-manager]]: Sell on a holding and List on a blueprint open this form pre-filled

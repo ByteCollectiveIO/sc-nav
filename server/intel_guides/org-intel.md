@@ -5,7 +5,7 @@ title: "Org Intel: getting started"
 summary: The org's shared knowledge (reports, procedures, dossiers, questions) and its activity stats, in one place.
 tags: app-guide, tutorial, org-intel
 ---
-## At a glance
+## {orange}At a glance{/orange}
 
 | | |
 |---|---|
@@ -15,7 +15,7 @@ tags: app-guide, tutorial, org-intel
 | **When** | Before you head out, after something happens worth telling the org, and when you're stuck. |
 | **Why** | What one member learns stays findable for everyone, instead of scrolling away in chat. |
 
-## The basics
+## {orange}The basics{/orange}
 
 Org Intel has two halves. Switch between them with INTELLIGENCE and ACTIVITY at the top.
 
@@ -33,7 +33,7 @@ ACTIVITY is the org's stats, built from what members do in the other apps. Nothi
 
 A report is something you saw, right now. It stays valid for a set time (6 hours unless you change it), then drops off the Feed. A procedure is how the org does a job. It stays useful for months and shows the game patch it was written for.
 
-## Read the Feed
+## {orange}Read the Feed{/orange}
 
 Use this at the start of a session to see what's happened.
 
@@ -46,7 +46,7 @@ Use this at the start of a session to see what's happened.
 
 Tick Show expired to see reports that have run out.
 
-## Find a procedure in the Library
+## {orange}Find a procedure in the Library{/orange}
 
 Use this when you want to know how your org does a job, like an escort or a mining run.
 
@@ -58,7 +58,7 @@ Use this when you want to know how your org does a job, like an escort or a mini
 
 If an event lists required reading, open each entry and click **I've read it**.
 
-## Ask the org a question
+## {orange}Ask the org a question{/orange}
 
 Use this when you can't find the answer in the Library.
 
@@ -70,7 +70,7 @@ Use this when you can't find the answer in the Library.
 
 To ask about a place, open its dossier and click **Ask about it**.
 
-## File a report
+## {orange}File a report{/orange}
 
 Use this when you see something the org should know about, like a gate camp.
 
@@ -83,7 +83,7 @@ Use this when you see something the org should know about, like a gate camp.
 
 You can fix typos for 15 minutes. After that, click **Add update** on the report instead. From the Danger Board, **Write up →** on a warning starts a report already filled in.
 
-## See the activity stats
+## {orange}See the activity stats{/orange}
 
 Use this to see what the org has been doing and who's contributing.
 
@@ -92,13 +92,13 @@ Use this to see what the org has been doing and who's contributing.
 3. Move between Mapping, Hauling, Trading, Surveying, Market and Leaderboards with the tab strip, or the left and right arrow keys.
 4. Use the All-time and This week toggle where a section has one.
 
-## Tips
+## {orange}Tips{/orange}
 
 - Describe ships, orgs and behaviour, not individual players. Members can flag entries that name a player.
 - Your drafts save as you type and only you can see them. They're listed at the top of the Library.
 - Every app has a guide like this one. Click the app-guide tag on any of them to see the full set, or open the New member guides collection.
 
-## Related guides
+## {orange}Related guides{/orange}
 
 - [[guide:danger-board]]: a warning can be written up as a report
 - [[guide:navigator]]: your destination links to its dossier

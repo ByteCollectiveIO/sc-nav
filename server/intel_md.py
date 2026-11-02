@@ -108,7 +108,8 @@ def _rule_headings(state) -> None:
         level = int(t.tag[1])
         t.tag = "h2" if level <= 2 else "h3"
         if t.type == "heading_open" and i + 1 < len(toks):
-            base = "sec-" + section_slug(toks[i + 1].content)
+            # Color markers are formatting, not words: "## {red}Loadout{/red}" → sec-loadout.
+            base = "sec-" + section_slug(_COLOR_RE.sub("", toks[i + 1].content))
             n = seen.get(base, 0) + 1
             seen[base] = n
             t.attrSet("id", base if n == 1 else f"{base}-{n}")

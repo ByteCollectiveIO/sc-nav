@@ -5,7 +5,7 @@ title: "Resource Manager: getting started"
 summary: Track what you hold and where, pledge stock to org goals, check which blueprints you can craft, and plan a run to deliver or sell your holdings.
 tags: app-guide, tutorial, resource-manager
 ---
-## At a glance
+## {orange}At a glance{/orange}
 
 | | |
 |---|---|
@@ -15,7 +15,7 @@ tags: app-guide, tutorial, resource-manager
 | **When** | After a mining or hauling session, or when your org posts a goal. |
 | **Why** | The game has no shared org storage, so this is how the org knows who has what. |
 
-## The basics
+## {orange}The basics{/orange}
 
 Resource Manager has three tabs that share one item catalog.
 
@@ -27,7 +27,7 @@ Quality is the game's 0 to 1000 grade on a lot. Ten SCU (standard cargo units) o
 
 A contribution to a goal is a pledge, not a transfer. The stock stays with you, and you can withdraw it later.
 
-## Log what you hold
+## {orange}Log what you hold{/orange}
 
 Do this after a session so goals and the org rollup stay accurate.
 
@@ -38,7 +38,7 @@ Do this after a session so goals and the org rollup stay accurate.
 5. Click **Log holding**. Logging the same item, place and quality again adds to that lot.
 6. Use **Edit** on a row to set an exact amount, or **Split** to move part of a lot to another quality or place.
 
-## Contribute to an org goal
+## {orange}Contribute to an org goal{/orange}
 
 Do this when your org posts something it needs gathered.
 
@@ -49,7 +49,7 @@ Do this when your org posts something it needs gathered.
 5. If a line sets a minimum quality, a lot below it is logged but doesn't count.
 6. Find your pledges under **My contributions**. Click **Withdraw** to return an amount to your free stock.
 
-## Deliver your pledge to the drop-off
+## {orange}Deliver your pledge to the drop-off{/orange}
 
 Do this when a goal has a drop-off where the org collects the goods.
 
@@ -61,7 +61,7 @@ Do this when a goal has a drop-off where the org collects the goods.
 
 If you deliver without a run, click **Mark delivered** next to the contribution instead.
 
-## Plan a pickup or sell run
+## {orange}Plan a pickup or sell run{/orange}
 
 Do this to collect stock spread across several stations.
 
@@ -71,7 +71,7 @@ Do this to collect stock spread across several stations.
 4. In the Cargo Planner, click **Plan route**. In sell mode, choose best aUEC (in-game currency) per hour or most aUEC first.
 5. Fly the run. At the end, accept the offer to update your inventory.
 
-## Check what you can craft
+## {orange}Check what you can craft{/orange}
 
 1. Open the **Blueprints** tab. It starts on **My library**.
 2. Search for a recipe you own and click **Add**.
@@ -79,12 +79,12 @@ Do this to collect stock spread across several stations.
 4. Click **Gather** to start a goal for the materials, or **List** to post the crafted item on the Marketplace.
 5. Switch to **Org readiness** to see how many members hold each recipe.
 
-## Tips
+## {orange}Tips{/orange}
 
 - Pick locations from the suggestions. A name the app doesn't recognise leaves an empty from box in pickup runs.
 - Once part of a lot is pledged, its quality is locked. Use **Split** to re-rate it.
 
-## Related guides
+## {orange}Related guides{/orange}
 
 - [[guide:marketplace]]: Sell on a holding opens a pre-filled listing
 - [[guide:cargo-planner]]: pickup, delivery and sell runs are flown there

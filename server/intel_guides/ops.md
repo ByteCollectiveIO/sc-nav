@@ -5,7 +5,7 @@ title: Ops: getting started
 summary: Join a running mission, log the money you're holding, settle up your cut and roll for loot, with a record nobody can quietly change.
 tags: app-guide, tutorial, ops
 ---
-## At a glance
+## {orange}At a glance{/orange}
 
 | | |
 |---|---|
@@ -15,7 +15,7 @@ tags: app-guide, tutorial, ops
 | **When** | During a mission and right after it, while the money gets settled. |
 | **Why** | Everyone sees who was there, who gets what and who won each drop. |
 
-## The basics
+## {orange}The basics{/orange}
 
 An op moves through four phases, shown as a track at the top of its page: Setup, Live, Settle and Closed. Each phase shows only the tools for that job.
 
@@ -27,7 +27,7 @@ Every change goes in the op's log with who made it and when. A mistake is voided
 
 How money and loot are shared is set by the op's payout rules. Your org decides those rules. Contracts are listed apart from the split: the game pays each contract in equal cuts to everyone who has it shared.
 
-## Join a running op
+## {orange}Join a running op{/orange}
 
 Do this when you show up for a mission.
 
@@ -36,7 +36,7 @@ Do this when you show up for a mission.
 3. Wait for the leader to mark you. Only they can set your attendance.
 4. For each contract, click **I have it** once it's shared with you.
 
-## Log money and settle your cut
+## {orange}Log money and settle your cut{/orange}
 
 Do this when you sell loot, earn a bonus or pay a cost during the op. aUEC is the in-game currency.
 
@@ -49,7 +49,7 @@ Do this when you sell loot, earn a bonus or pay a cost during the op. aUEC is th
 
 Only the person receiving a payment can confirm it.
 
-## Roll for loot
+## {orange}Roll for loot{/orange}
 
 Do this when the leader adds a drop to the Loot panel.
 
@@ -60,7 +60,7 @@ Do this when the leader adds a drop to the Loot panel.
 
 If you don't answer, you count as Want. You can't roll until the leader has marked your attendance.
 
-## Run an op as a leader
+## {orange}Run an op as a leader{/orange}
 
 Do this when you're leading the mission.
 
@@ -72,14 +72,14 @@ Do this when you're leading the mission.
 6. In Settle, mark anyone still unmarked. An unmarked person gets no share.
 7. Click **Close the record**. Open payments can still be settled after closing.
 
-## Tips
+## {orange}Tips{/orange}
 
 - Mark people as they arrive. Late and Left early stamp the time only while the mission is live.
 - If someone signed up but didn't come, mark them Absent rather than removing them.
 - Log money under the person who is actually holding it, so the payment list tells them who to pay.
 - After the op, anyone on it can click **Write debrief** to start an after-action report in Org Intel.
 
-## Related guides
+## {orange}Related guides{/orange}
 
 - [[guide:event-planner]]: planned ops start from an event with its signups
 - [[guide:org-intel]]: debriefs and the attendance leaderboard come from closed ops
