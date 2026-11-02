@@ -19800,7 +19800,9 @@ def intel_entries(section: str = "library", kind: str = "", activity: str = "",
     revision first), `drafts` (the caller's own unpublished entries)."""
     restricted_ok = intel_cleared(user)
     kinds = [k for k in kind.split(",") if k] or None
-    kw = dict(activity=activity or None, system=system or None, tag=tag or None,
+    # activity / system: one value or several, comma-separated (match ANY).
+    kw = dict(activity=_intel_multi(activity, PLAYSTYLE_TAGS) or None,
+              system=_intel_multi(system, INTEL_SYSTEMS) or None, tag=tag or None,
               restricted_ok=restricted_ok)
     extra: dict = {}
     if section == "library":

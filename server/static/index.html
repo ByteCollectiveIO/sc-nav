@@ -682,6 +682,17 @@
   .ix-chip:hover { color: var(--text); }
   .ix-chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
   .ix-chip .ix-ico { width: 13px; height: 13px; }
+  /* Kind filter chips (Feed, Library, Dossiers): one hue per kind from the theme
+     tokens. Idle = colored icon + tinted edge; on = the hue, filled. "All" stays accent. */
+  .ix-chip[data-k="report"] { --kc: var(--warn); } .ix-chip[data-k="procedure"] { --kc: var(--accent); }
+  .ix-chip[data-k="tactic"] { --kc: var(--node); } .ix-chip[data-k="dossier"], .ix-chip[data-k="place"] { --kc: var(--good); }
+  .ix-chip[data-k="rfi"] { --kc: var(--mate); } .ix-chip[data-k="debrief"] { --kc: var(--harvest); }
+  .ix-chip[data-k="org"] { --kc: var(--barter); }
+  .ix-filters .ix-chip[data-k]:not([data-k=""]) { border-color: color-mix(in srgb, var(--kc) 45%, var(--border)); }
+  .ix-filters .ix-chip[data-k]:not([data-k=""]) .ix-ico { color: var(--kc); }
+  .ix-filters .ix-chip[data-k]:not([data-k=""]):hover { border-color: var(--kc); }
+  .ix-filters .ix-chip[data-k]:not([data-k=""])[aria-pressed="true"] { border-color: var(--kc); color: var(--kc);
+    background: color-mix(in srgb, var(--kc) 14%, transparent); }
   .ix-filters .sp { flex: 1; }
   .ix-filters select.ti { padding: 4px 8px; font-size: 12px; }
   .ix-status { font-size: 12px; color: var(--dim); padding: 18px 8px; }
@@ -836,6 +847,10 @@
     background-image: linear-gradient(45deg, transparent 50%, var(--dim) 50%), linear-gradient(135deg, var(--dim) 50%, transparent 50%);
     background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%; background-size: 5px 5px; background-repeat: no-repeat; }
   .ix-multi-btn[aria-expanded="true"] { border-color: var(--accent); }
+  /* in a filter bar: sized like the bar's selects, opening leftward from the right edge */
+  .ix-multi-f { width: auto; }
+  .ix-multi-f .ix-multi-btn { width: auto; min-width: 128px; max-width: 220px; min-height: 0; padding: 4px 26px 4px 8px; font-size: 12px; }
+  .ix-multi-f .ix-multi-pop { left: auto; right: 0; min-width: 200px; }
   .ix-multi-pop { position: absolute; z-index: 7; top: 100%; left: 0; min-width: 100%; width: max-content; max-width: min(320px, 90vw);
     box-sizing: border-box; margin-top: 4px; padding: 8px; background: var(--panel); border: 1px solid var(--accent); border-radius: 6px;
     box-shadow: 0 8px 22px rgba(0,0,0,.45); display: grid; gap: 1px; max-height: 340px; overflow-y: auto; letter-spacing: 0; }
@@ -4533,6 +4548,8 @@
   .ix-pin-more > summary:hover { color: var(--accent); }
   .ix-pin-add { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
   .ix-pin-add .ti { flex: 1 1 180px; min-width: 0; }
+  .ix-pin-add .ix-pin-tagf { flex: 1 1 180px; min-width: 0; display: block; }
+  .ix-pin-add .ix-pin-tagf .ti { width: 100%; box-sizing: border-box; }
   /* Guide */
   .ix-gd-cta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 16px 0 0; padding-top: 12px; border-top: 1px solid var(--border-soft); }
   .ix-gd-cta a { color: var(--accent); font-weight: 600; text-decoration: none; }
@@ -4546,7 +4563,9 @@
     .ix-f-toggle { display: inline-flex; margin: 10px 0 0; }
     .ix-f-toggle[aria-expanded="true"] .ix-caret { transform: rotate(180deg); }
     #ix-f-feed:not(.open) { display: none; }
-    #ix-f-feed select.ti { flex: 1 1 140px; }
+    #ix-f-feed select.ti, #ix-f-feed .ix-multi-f { flex: 1 1 140px; }
+    #ix-f-feed .ix-multi-f .ix-multi-btn { width: 100%; max-width: none; }
+    #ix-f-feed .ix-multi-f .ix-multi-pop { left: 0; right: auto; }
     /* the kind buttons wrap instead of clipping QUESTION */
     #ix-ed-kind { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
     #ix-ed-kind button { border-right: 1px solid var(--border); border-top: 1px solid var(--border); padding-left: 4px; padding-right: 4px; }
@@ -29051,7 +29070,7 @@ let intelPlaystyles = null;      // /api/playstyles, fetched once
 let intelImageHosts = [];        // IMAGE_PREVIEW_HOSTS (from /api/intel/entries)
 let intelImagePreviews = true;   // the org's in-app image preview setting (off = readers see links)
 let intelEd = null;              // the open editor's state (null = none open)
-let intelLibFilter = { kind: "", activity: "" };
+let intelLibFilter = { kind: "", activities: [] };
 
 // What the server says this member may do (/api/me intel_access). Labels only:
 // every route re-checks.
@@ -29166,7 +29185,7 @@ function renderIntelKnow(section) {
 // Reverse-chronological: reports, plus procedures and tactics on first publish
 // and major revision. Expired reports drop off unless asked for. "New since
 // you looked" is a server-side mark per member (set once per visit).
-let intelFeedFilter = { kind: "", system: "", activity: "", expired: false, watching: false };
+let intelFeedFilter = { kind: "", systems: [], activities: [], expired: false, watching: false };
 let intelFeedSeen;   // undefined = not loaded this visit; null = never looked
 // Discussion count on a row: answers on an RFI, comments on everything else.
 function intelTalkChip(c) {
@@ -29237,7 +29256,8 @@ function intelPinsPanel(pins, reload) {
         `<small>${g.n} entr${g.n === 1 ? "y" : "ies"}${g.note ? ` · ${esc(g.note)}` : ""}</small>` +
         (g.entries.length ? `<span class="ix-pin-sub">${g.entries.map(s => `<a href="${intelHref(s)}">${esc(s.title || "Untitled")}</a>`).join("")}</span>` : "") +
         `</span>${x("tag", g.tag, "#" + g.tag)}</li>`).join("") + `</ul>` : "") +
-    (admin ? `<details class="ix-pin-more"${ents.length || tags.length ? "" : " open"}><summary>Pin a tag for everyone</summary><form class="ix-pin-add" id="ix-pin-add"><input class="ti" id="ix-pin-tag" maxlength="40" autocomplete="off" placeholder="Pin a tag, e.g. new-members" aria-label="Pin a tag for everyone">` +
+    (admin ? `<details class="ix-pin-more"${ents.length || tags.length ? "" : " open"}><summary>Pin a tag for everyone</summary><form class="ix-pin-add" id="ix-pin-add"><span class="ix-tagf ix-pin-tagf"><input class="ti" id="ix-pin-tag" maxlength="40" autocomplete="off" spellcheck="false" placeholder="Pin a tag, e.g. new-members" aria-label="Pin a tag for everyone">` +
+      `<ul class="ix-tag-sug" id="ix-pin-sug" hidden></ul></span>` +
       `<input class="ti" id="ix-pin-note" maxlength="140" autocomplete="off" placeholder="Note (optional)" aria-label="Note for the pinned tag">` +
       `<button type="submit" class="ix-btn">${intelIco("pin-top")}Pin tag</button></form></details>` : "");
   const put = async (body, msg) => {
@@ -29253,6 +29273,12 @@ function intelPinsPanel(pins, reload) {
     const [kind, ...rest] = b.dataset.unpin.split(":");
     put({ target_kind: kind, target_id: rest.join(":"), on: false }, "Unpinned.");
   });
+  // Suggest tags already in use, so a pin lands on the tag entries actually carry.
+  if ($("ix-pin-tag")) {
+    const sug = intelTagSuggest($("ix-pin-tag"), $("ix-pin-sug"), { allowNew: false, hasMsg: "is already pinned",
+      exclude: () => tags.map(g => g.tag), onPick: (t) => { $("ix-pin-tag").value = t; $("ix-pin-note").focus(); } });
+    $("ix-pin-tag").addEventListener("input", sug.refresh);
+  }
   if ($("ix-pin-add")) $("ix-pin-add").onsubmit = (ev) => {
     ev.preventDefault();
     const tag = $("ix-pin-tag").value.trim().replace(/^#/, "");
@@ -29265,9 +29291,7 @@ async function intelFeed(box) {
   const f = intelFeedFilter;
   const chip = (k, label, ico) => `<button type="button" class="ix-chip" data-k="${k}" aria-pressed="${f.kind === k}">` +
     `${ico ? intelIco(ico) : ""}${label}</button>`;
-  const opt = (list, cur, none) => `<option value="">${none}</option>` +
-    list.map(x => `<option value="${esc(x)}"${x === cur ? " selected" : ""}>${esc(x)}</option>`).join("");
-  const nf = [f.kind, f.system, f.activity, f.expired, f.watching, f.tag].filter(Boolean).length;
+  const nf = [f.kind, f.systems.length, f.activities.length, f.expired, f.watching, f.tag].filter(Boolean).length;
   box.innerHTML = `<div class="panel ix-pins" id="ix-pins" hidden></div><div class="ix-grid" id="ix-feed-grid"><div class="panel"><div class="ix-panel-h"><h2>FEED</h2>` +
     `<span class="muted">Reports, questions and debriefs, plus procedures, tactics and dossiers when they're published or revised</span></div>` +
     // Phone: the filters fold behind one button that counts what's set.
@@ -29279,8 +29303,7 @@ async function intelFeed(box) {
     `<span id="ix-f-watch-slot"></span>` +
     (f.tag ? `<button type="button" class="ix-chip" id="ix-f-tag" aria-pressed="true" title="Stop filtering by this tag">#${esc(f.tag)} <span aria-hidden="true">✕</span><span class="sr-only">, clear</span></button>` : "") +
     `<span class="sp"></span>` +
-    `<select class="ti" id="ix-f-sys" aria-label="System">${opt(INTEL_SYSTEM_OPTS, f.system, "Every system")}</select>` +
-    `<select class="ti" id="ix-f-act" aria-label="Activity">${opt(tags, f.activity, "Every activity")}</select>` +
+    intelMultiFilterHtml("ix-f-sys", "Systems") + intelMultiFilterHtml("ix-f-act", "Activities") +
     `<label class="ix-chip ix-check"><input type="checkbox" id="ix-f-exp"${f.expired ? " checked" : ""}> Show expired</label></div>` +
     `<div class="ix-list" id="ix-feed">${intelStatus("Loading…")}</div></div>` +
     `<aside class="ix-rail" id="ix-feed-rail" hidden></aside></div>`;
@@ -29290,13 +29313,15 @@ async function intelFeed(box) {
     intelFeedFiltersOpen = !intelFeedFiltersOpen;
     $("ix-f-toggle").setAttribute("aria-expanded", intelFeedFiltersOpen); $("ix-f-feed").classList.toggle("open", intelFeedFiltersOpen);
   };
-  $("ix-f-sys").onchange = (ev) => { f.system = ev.target.value; intelFeed(box); };
-  $("ix-f-act").onchange = (ev) => { f.activity = ev.target.value; intelFeed(box); };
+  intelMultiPick("ix-f-sys", INTEL_SYSTEM_OPTS, f.systems, "Every system", "Show entries for any of these. Entries for any system always show.",
+    { onClose: (v) => { if (v.join() !== f.systems.join()) { f.systems = v; intelFeed(box); } } });
+  intelMultiPick("ix-f-act", tags, f.activities, "Every activity", "Show entries for any of these.",
+    { onClose: (v) => { if (v.join() !== f.activities.join()) { f.activities = v; intelFeed(box); } } });
   $("ix-f-exp").onchange = (ev) => { f.expired = ev.target.checked; intelFeed(box); };
   const q = new URLSearchParams({ section: "feed" });
   if (f.kind) q.set("kind", f.kind);
-  if (f.system) q.set("system", f.system);
-  if (f.activity) q.set("activity", f.activity);
+  if (f.systems.length) q.set("system", f.systems.join(","));
+  if (f.activities.length) q.set("activity", f.activities.join(","));
   if (f.expired) q.set("expired", "1");
   if (f.watching) q.set("watching", "1");
   if (f.tag) q.set("tag", f.tag);
@@ -29329,7 +29354,7 @@ async function intelFeed(box) {
         (b.length ? `<div class="ix-group-h"><span>NO CHANGES</span><span>${b.length}</span></div>` + b.map(e => intelFeedRow(e, null, false)).join("") : "");
       intelResolveRefs(el, null);
     } else if (!d.entries.length) {
-      el.innerHTML = f.kind || f.system || f.activity || f.tag ? intelStatus(f.expired ? "Nothing matches that filter."
+      el.innerHTML = f.kind || f.systems.length || f.activities.length || f.tag ? intelStatus(f.expired ? "Nothing matches that filter."
         : "Nothing matches that filter. Expired reports are hidden; tick Show expired to include them.")
         : `<div class="intel-know-empty" style="padding:14px 8px"><p class="lead">Nothing in the feed yet.</p>` +
           `<p class="muted">Reports land here the moment they're published: a gate camp, a hostile org's new trick, ` +
@@ -29405,16 +29430,15 @@ async function intelLibrary(box) {
     `<a class="ix-btn ix-export" href="/api/intel/export" download title="Every published entry you can open, as Markdown with its images">${intelIco("collection")}Export .zip</a></div>` +
     `<div class="ix-filters" role="group" aria-label="Filter the library">` +
     chip("", "All") + chip("procedure", "Procedures", "procedure") + chip("tactic", "Tactics", "tactic") +
-    `<span class="sp"></span><select class="ti" id="ix-act" aria-label="Activity">` +
-    `<option value="">Every activity</option>` +
-    tags.map(t => `<option value="${esc(t)}"${f.activity === t ? " selected" : ""}>${esc(t)}</option>`).join("") +
-    `</select></div><div class="ix-list" id="ix-lib">${intelStatus("Loading…")}</div></div>`;
+    `<span class="sp"></span>${intelMultiFilterHtml("ix-act", "Activities")}` +
+    `</div><div class="ix-list" id="ix-lib">${intelStatus("Loading…")}</div></div>`;
   box.querySelectorAll(".ix-chip").forEach(b => b.onclick = () => { f.kind = b.dataset.k; intelLibrary(box); });
-  $("ix-act").onchange = (ev) => { f.activity = ev.target.value; intelLibrary(box); };
+  intelMultiPick("ix-act", tags, f.activities, "Every activity", "Show procedures and tactics for any of these.",
+    { onClose: (v) => { if (v.join() !== f.activities.join()) { f.activities = v; intelLibrary(box); } } });
   intelCollectionsPanel();
   const q = new URLSearchParams({ section: "library" });
   if (f.kind) q.set("kind", f.kind);
-  if (f.activity) q.set("activity", f.activity);
+  if (f.activities.length) q.set("activity", f.activities.join(","));
   try {
     const [lib, drafts] = await Promise.all([intelApi(`/api/intel/entries?${q}`),
       intelApi("/api/intel/entries?section=drafts").catch(() => ({ entries: [] }))]);
@@ -29428,7 +29452,7 @@ async function intelLibrary(box) {
         `<div class="ix-list">${drafts.entries.map(e => intelRow(e)).join("")}</div>`;
     }
     if (!lib.entries.length) {
-      el.innerHTML = f.kind || f.activity ? intelStatus("Nothing matches that filter.")
+      el.innerHTML = f.kind || f.activities.length ? intelStatus("Nothing matches that filter.")
         : `<div class="intel-know-empty" style="padding:14px 8px"><p class="lead">No procedures or tactics yet.</p>` +
           `<p class="muted">The org's how-tos: escort formations, mining checklists, the way your crews actually fly. ` +
           `Each one shows which patch it was written for.</p>` +
@@ -29442,7 +29466,7 @@ async function intelLibrary(box) {
     // An entry that spans activities is shelved under each of them.
     for (const e of lib.entries) {
       for (const g of (e.activities || []).length ? e.activities : ["General"]) {
-        if (f.activity && g !== f.activity) continue;
+        if (f.activities.length && !f.activities.includes(g)) continue;
         if (!groups.has(g)) groups.set(g, []);
         groups.get(g).push(e);
       }
@@ -31999,7 +32023,12 @@ const intelMultiHtml = (id, label, name) => `<div class="ix-lbl ix-multi"><span 
   `<button type="button" class="ti ix-multi-btn" id="${id}" aria-haspopup="true" aria-expanded="false" aria-controls="${id}-pop" ` +
   `aria-labelledby="${id}-l ${id}"></button>` +
   `<div class="ix-multi-pop" id="${id}-pop" role="group" aria-label="${name}" hidden></div></div>`;
-function intelMultiPick(id, options, initial, none, hint) {
+// A filter-bar variant: no visible label (the button says "Every system" or
+// what's picked), and the list re-queries when the checklist closes.
+const intelMultiFilterHtml = (id, name) => `<div class="ix-multi ix-multi-f">` +
+  `<button type="button" class="ti ix-multi-btn" id="${id}" aria-haspopup="true" aria-expanded="false" aria-controls="${id}-pop" ` +
+  `aria-label="${name}"></button><div class="ix-multi-pop" id="${id}-pop" role="group" aria-label="${name}" hidden></div></div>`;
+function intelMultiPick(id, options, initial, none, hint, hooks = {}) {
   const btn = $(id), pop = $(`${id}-pop`);
   let sel = new Set(initial.filter(x => options.includes(x)));
   const get = () => options.filter(x => sel.has(x));
@@ -32007,75 +32036,72 @@ function intelMultiPick(id, options, initial, none, hint) {
   pop.innerHTML = `<small class="muted">${esc(hint)}</small>` + options.map((x, i) =>
     `<label class="ix-multi-opt"><input type="checkbox" value="${esc(x)}" data-i="${i}"${sel.has(x) ? " checked" : ""}> ${esc(x)}</label>`).join("") +
     `<div class="row"><button type="button" data-clear>Clear</button><button type="button" class="ix-primary" data-done>Done</button></div>`;
-  const open = (on) => { pop.hidden = !on; btn.setAttribute("aria-expanded", on);
-    if (on) (pop.querySelector("input:checked") || pop.querySelector("input")).focus(); };
+  const changed = () => (hooks.onChange || intelEdChanged)(get());
+  // `later`: closed by a click elsewhere. Apply after that click has landed,
+  // or a re-render on close would swallow it (e.g. a kind chip).
+  const open = (on, later) => {
+    const was = !pop.hidden;
+    pop.hidden = !on; btn.setAttribute("aria-expanded", on);
+    if (on) { (pop.querySelector("input:checked") || pop.querySelector("input")).focus(); return; }
+    if (!was || !hooks.onClose) return;
+    if (!later) { hooks.onClose(get()); return; }
+    let done = false;
+    const fire = () => { if (!done) { done = true; hooks.onClose(get()); } };
+    document.addEventListener("click", () => setTimeout(fire, 0), { once: true });
+    setTimeout(fire, 600);
+  };
   btn.onclick = () => open(pop.hidden);
   pop.addEventListener("change", (ev) => {
     const x = options[+ev.target.dataset.i]; if (x === undefined) return;
-    ev.target.checked ? sel.add(x) : sel.delete(x); label(); intelEdChanged();
+    ev.target.checked ? sel.add(x) : sel.delete(x); label(); changed();
   });
-  pop.querySelector("[data-clear]").onclick = () => { sel.clear(); pop.querySelectorAll("input").forEach(c => { c.checked = false; }); label(); intelEdChanged(); };
+  pop.querySelector("[data-clear]").onclick = () => { sel.clear(); pop.querySelectorAll("input").forEach(c => { c.checked = false; }); label(); changed(); };
   pop.querySelector("[data-done]").onclick = () => { open(false); btn.focus(); };
   pop.addEventListener("keydown", (ev) => { if (ev.key === "Escape") { ev.stopPropagation(); open(false); btn.focus(); } });
   // Click or tab away closes it (the editor is rebuilt per entry, so the
   // document listener is dropped once its button is gone).
   const outside = (ev) => { if (!btn.isConnected) { document.removeEventListener("pointerdown", outside); return; }
-    if (!pop.hidden && !pop.contains(ev.target) && ev.target !== btn) open(false); };
+    if (!pop.hidden && !pop.contains(ev.target) && ev.target !== btn) open(false, true); };
   document.addEventListener("pointerdown", outside);
-  pop.addEventListener("focusout", (ev) => { if (!pop.hidden && ev.relatedTarget && !pop.contains(ev.relatedTarget) && ev.relatedTarget !== btn) open(false); });
+  pop.addEventListener("focusout", (ev) => { if (!pop.hidden && ev.relatedTarget && !pop.contains(ev.relatedTarget) && ev.relatedTarget !== btn) open(false, true); });
   label();
   return { get, set: (arr) => { sel = new Set(arr.filter(x => options.includes(x)));
     pop.querySelectorAll("input").forEach(c => { c.checked = sel.has(options[+c.dataset.i]); }); label(); } };
 }
-// The editor's tag field: one tag at a time, suggestions from tags already in
-// use (so #escort doesn't become #escorts, #escorting and #escort-duty).
-// Normalised exactly like app._intel_tags so a chip is what gets saved.
 const INTEL_MAX_TAGS = 10;
 const intelTagNorm = (t) => String(t).trim().replace(/^#+/, "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32);
-function intelTagEditor(initial) {
-  const input = $("ix-ed-tags"), list = $("ix-tag-sug"), chips = $("ix-tag-chips");
-  let tags = [], opts = [], act = -1, timer = null, seq = 0;
+// Tag suggestions under a text input: tags already in use (most-used first,
+// prefix matches before substring), plus "Create #x" when `allowNew`.
+// Shared by the editor's tag field and the admin's Pin a tag box.
+// `exclude()` lists tags to leave out; `onPick(tag)` gets the chosen one.
+function intelTagSuggest(input, list, { exclude = () => [], onPick, allowNew = true, hasMsg = "is already on this entry" }) {
+  let opts = [], act = -1, timer = null, seq = 0;
   const cache = new Map();
   input.setAttribute("role", "combobox"); input.setAttribute("aria-autocomplete", "list");
   input.setAttribute("aria-controls", list.id); input.setAttribute("aria-expanded", "false");
   list.setAttribute("role", "listbox"); list.setAttribute("aria-label", "Tag suggestions");
   const close = () => { list.hidden = true; input.setAttribute("aria-expanded", "false"); input.removeAttribute("aria-activedescendant"); act = -1; };
-  const paint = () => {
-    chips.innerHTML = tags.map((t, i) => `<span class="ix-tag free ${intelTagCls(t)} ix-tagchip">#${esc(t)}` +
-      `<button type="button" data-rm="${i}" aria-label="Remove tag ${esc(t)}" title="Remove">×</button></span>`).join("");
-    chips.querySelectorAll("[data-rm]").forEach(b => b.onclick = (ev) => { ev.stopPropagation(); remove(+b.dataset.rm); input.focus(); });
-    const full = tags.length >= INTEL_MAX_TAGS;
-    input.disabled = full; input.placeholder = full ? `${INTEL_MAX_TAGS} tags is the limit` : tags.length ? "Add another" : "Add a tag";
-    $("ix-tag-n").textContent = tags.length >= INTEL_MAX_TAGS - 3 ? `${tags.length} of ${INTEL_MAX_TAGS}` : "";
+  const move = (i) => {
+    act = i;
+    list.querySelectorAll("[role=option]").forEach((li, j) => li.setAttribute("aria-selected", j === i));
+    const li = $(`${list.id}-o${i}`);
+    if (li) { input.setAttribute("aria-activedescendant", li.id); li.scrollIntoView({ block: "nearest" }); }
+    else input.removeAttribute("aria-activedescendant");
   };
-  const add = (raw) => {
-    const t = intelTagNorm(raw);
-    input.value = "";
-    if (!t || tags.includes(t) || tags.length >= INTEL_MAX_TAGS) { close(); return false; }
-    tags.push(t); paint(); intelEdChanged(); suggest(); return true;
-  };
-  const remove = (i) => { tags.splice(i, 1); paint(); intelEdChanged(); };
-  const pick = (i) => { const o = opts[i]; if (o) add(o.tag); };
   const show = (q, rows) => {
-    const typed = intelTagNorm(q);
-    opts = rows.filter(r => !tags.includes(r.tag)).slice(0, 8);
-    if (typed && !opts.some(o => o.tag === typed) && !tags.includes(typed)) opts.push({ tag: typed, isNew: true });
-    if (!opts.length) { if (!typed) { close(); return; }
-      list.innerHTML = `<li class="none" role="presentation">#${esc(typed)} is already on this entry.</li>`; }
-    else list.innerHTML = opts.map((o, i) => `<li role="option" id="ix-tag-o${i}" data-i="${i}" aria-selected="false"${o.isNew ? ` class="new"` : ""}>` +
+    const typed = intelTagNorm(q), ex = exclude();
+    opts = rows.filter(r => !ex.includes(r.tag)).slice(0, 8);
+    if (allowNew && typed && !opts.some(o => o.tag === typed) && !ex.includes(typed)) opts.push({ tag: typed, isNew: true });
+    if (!opts.length) {
+      if (!typed || !ex.includes(typed)) { close(); return; }
+      list.innerHTML = `<li class="none" role="presentation">#${esc(typed)} ${esc(hasMsg)}.</li>`;
+    } else list.innerHTML = opts.map((o, i) => `<li role="option" id="${list.id}-o${i}" data-i="${i}" aria-selected="false"${o.isNew ? ` class="new"` : ""}>` +
       (o.isNew ? `<span>Create <b>#${esc(o.tag)}</b></span><small>new tag</small>`
         : `<span class="ix-tag free ${intelTagCls(o.tag)}">#${esc(o.tag)}</span><small>${o.count} ${o.count === 1 ? "entry" : "entries"}</small>`) + `</li>`).join("");
     list.hidden = false; input.setAttribute("aria-expanded", "true");
     move(opts.length ? 0 : -1);
   };
-  const move = (i) => {
-    act = i;
-    list.querySelectorAll("[role=option]").forEach((li, j) => li.setAttribute("aria-selected", j === i));
-    const li = $(`ix-tag-o${i}`);
-    if (li) { input.setAttribute("aria-activedescendant", li.id); li.scrollIntoView({ block: "nearest" }); }
-    else input.removeAttribute("aria-activedescendant");
-  };
-  const suggest = () => {
+  const refresh = () => {
     clearTimeout(timer);
     if (document.activeElement !== input || input.disabled) return;
     const q = intelTagNorm(input.value), mine = ++seq;
@@ -32087,27 +32113,56 @@ function intelTagEditor(initial) {
       if (mine === seq && document.activeElement === input) show(input.value, rows);
     }, q ? 150 : 0);
   };
+  const pick = (i) => { const o = opts[i]; if (o) { close(); onPick(o.tag); } };
+  input.addEventListener("focus", refresh);
+  input.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== input) close(); }, 120));
+  // Registered first: a key it handles is defaultPrevented for the caller's own keydown.
+  input.addEventListener("keydown", (ev) => {
+    const open = !list.hidden && opts.length;
+    if (ev.key === "ArrowDown" && open) { ev.preventDefault(); move((act + 1) % opts.length); }
+    else if (ev.key === "ArrowUp" && open) { ev.preventDefault(); move((act - 1 + opts.length) % opts.length); }
+    else if ((ev.key === "Enter" || (ev.key === "Tab" && input.value.trim())) && open && act >= 0) { ev.preventDefault(); pick(act); }
+    else if (ev.key === "Escape" && !list.hidden) { ev.preventDefault(); ev.stopPropagation(); close(); }
+  });
+  list.addEventListener("mousedown", (ev) => ev.preventDefault());   // keep focus in the input
+  list.addEventListener("click", (ev) => { const li = ev.target.closest("[data-i]"); if (li) pick(+li.dataset.i); });
+  return { refresh, close };
+}
+// The editor's tag field: one tag at a time, suggestions from tags already in
+// use (so #escort doesn't become #escorts, #escorting and #escort-duty).
+// Normalised exactly like app._intel_tags so a chip is what gets saved.
+function intelTagEditor(initial) {
+  const input = $("ix-ed-tags"), list = $("ix-tag-sug"), chips = $("ix-tag-chips");
+  let tags = [];
+  const sug = intelTagSuggest(input, list, { exclude: () => tags, onPick: (t) => add(t) });
+  const paint = () => {
+    chips.innerHTML = tags.map((t, i) => `<span class="ix-tag free ${intelTagCls(t)} ix-tagchip">#${esc(t)}` +
+      `<button type="button" data-rm="${i}" aria-label="Remove tag ${esc(t)}" title="Remove">×</button></span>`).join("");
+    chips.querySelectorAll("[data-rm]").forEach(b => b.onclick = (ev) => { ev.stopPropagation(); remove(+b.dataset.rm); input.focus(); });
+    const full = tags.length >= INTEL_MAX_TAGS;
+    input.disabled = full; input.placeholder = full ? `${INTEL_MAX_TAGS} tags is the limit` : tags.length ? "Add another" : "Add a tag";
+    $("ix-tag-n").textContent = tags.length >= INTEL_MAX_TAGS - 3 ? `${tags.length} of ${INTEL_MAX_TAGS}` : "";
+  };
+  const add = (raw) => {
+    const t = intelTagNorm(raw);
+    input.value = "";
+    if (!t || tags.includes(t) || tags.length >= INTEL_MAX_TAGS) { sug.close(); return false; }
+    tags.push(t); paint(); intelEdChanged(); sug.refresh(); return true;
+  };
+  const remove = (i) => { tags.splice(i, 1); paint(); intelEdChanged(); };
   input.addEventListener("input", () => {
     // Commas still work (and a pasted "a, b, c" adds all three).
     if (/,/.test(input.value)) {
       const parts = input.value.split(","), rest = parts.pop();
       parts.forEach(add); input.value = rest.trimStart();
     }
-    suggest();
+    sug.refresh();
   });
-  input.addEventListener("focus", suggest);
-  input.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== input) close(); }, 120));
   input.addEventListener("keydown", (ev) => {
-    const open = !list.hidden && opts.length;
-    if (ev.key === "ArrowDown" && open) { ev.preventDefault(); move((act + 1) % opts.length); }
-    else if (ev.key === "ArrowUp" && open) { ev.preventDefault(); move((act - 1 + opts.length) % opts.length); }
-    else if (ev.key === "Enter") { ev.preventDefault(); if (open && act >= 0) pick(act); else if (input.value.trim()) add(input.value); }
-    else if (ev.key === "Tab" && input.value.trim() && open && act >= 0) { ev.preventDefault(); pick(act); }
-    else if (ev.key === "Escape" && !list.hidden) { ev.stopPropagation(); close(); }
-    else if (ev.key === "Backspace" && !input.value && tags.length) { remove(tags.length - 1); suggest(); }
+    if (ev.defaultPrevented) return;              // the suggestion list took it
+    if (ev.key === "Enter") { ev.preventDefault(); if (input.value.trim()) add(input.value); }
+    else if (ev.key === "Backspace" && !input.value && tags.length) { remove(tags.length - 1); sug.refresh(); }
   });
-  list.addEventListener("mousedown", (ev) => ev.preventDefault());   // keep focus in the input
-  list.addEventListener("click", (ev) => { const li = ev.target.closest("[data-i]"); if (li) pick(+li.dataset.i); });
   $("ix-tagbox").addEventListener("click", (ev) => { if (ev.target === ev.currentTarget || ev.target === chips) input.focus(); });
   const set = (arr) => { tags = []; for (const t of arr) { const n = intelTagNorm(t); if (n && !tags.includes(n) && tags.length < INTEL_MAX_TAGS) tags.push(n); } paint(); };
   set(initial);
