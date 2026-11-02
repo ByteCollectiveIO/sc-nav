@@ -620,7 +620,7 @@
   .ix-row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
   .ix-kind { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim);
     display: flex; gap: 6px; align-items: flex-start; padding-top: 2px; }
-  .ix-kind .ix-ico { width: 14px; height: 14px; color: var(--text); margin-top: -1px; }
+  .ix-kind .ix-ico { width: 14px; height: 14px; color: var(--kc, var(--text)); margin-top: -1px; }
   .ix-t { font-size: 14px; color: var(--text); line-height: 1.35; transition: color .12s; }
   .ix-verb { color: var(--dim); font-size: 12px; }
   .ix-teaser { font-size: 12px; color: var(--dim); margin-top: 3px; line-height: 1.45; overflow: hidden;
@@ -640,9 +640,9 @@
      category tokens so both themes keep contrast. Never --bad: red is Restricted. */
   .ix-tag.free { color: var(--tc, var(--dim)); border-color: color-mix(in srgb, var(--tc, var(--dim)) 50%, transparent);
     background: color-mix(in srgb, var(--tc, var(--dim)) 10%, transparent); }
-  .ix-tag.tc0 { --tc: var(--accent); } .ix-tag.tc1 { --tc: var(--good); } .ix-tag.tc2 { --tc: var(--warn); }
-  .ix-tag.tc3 { --tc: var(--node); } .ix-tag.tc4 { --tc: var(--mate); } .ix-tag.tc5 { --tc: var(--harvest); }
-  .ix-tag.tc6 { --tc: var(--barter); } .ix-tag.tc7 { --tc: var(--craft); }
+  :is(.ix-tag, .ix-pin-tag).tc0 { --tc: var(--accent); } :is(.ix-tag, .ix-pin-tag).tc1 { --tc: var(--good); } :is(.ix-tag, .ix-pin-tag).tc2 { --tc: var(--warn); }
+  :is(.ix-tag, .ix-pin-tag).tc3 { --tc: var(--node); } :is(.ix-tag, .ix-pin-tag).tc4 { --tc: var(--mate); } :is(.ix-tag, .ix-pin-tag).tc5 { --tc: var(--harvest); }
+  :is(.ix-tag, .ix-pin-tag).tc6 { --tc: var(--barter); } :is(.ix-tag, .ix-pin-tag).tc7 { --tc: var(--craft); }
   /* Text color in entries ({red}…{/red}, intel_md.COLORS): theme tokens, never a free color. */
   .intel-c-red { color: var(--bad); } .intel-c-orange { color: var(--warn); } .intel-c-yellow { color: var(--sel); }
   .intel-c-green { color: var(--good); } .intel-c-blue { color: var(--accent); } .intel-c-purple { color: var(--node); }
@@ -682,12 +682,17 @@
   .ix-chip:hover { color: var(--text); }
   .ix-chip[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
   .ix-chip .ix-ico { width: 13px; height: 13px; }
-  /* Kind filter chips (Feed, Library, Dossiers): one hue per kind from the theme
-     tokens. Idle = colored icon + tinted edge; on = the hue, filled. "All" stays accent. */
-  .ix-chip[data-k="report"] { --kc: var(--warn); } .ix-chip[data-k="procedure"] { --kc: var(--accent); }
-  .ix-chip[data-k="tactic"] { --kc: var(--node); } .ix-chip[data-k="dossier"], .ix-chip[data-k="place"] { --kc: var(--good); }
-  .ix-chip[data-k="rfi"] { --kc: var(--mate); } .ix-chip[data-k="debrief"] { --kc: var(--harvest); }
-  .ix-chip[data-k="org"] { --kc: var(--barter); }
+  /* One hue per kind from the theme tokens, shared by the kind filter chips
+     (Feed, Library, Dossiers), every row's kind label and an entry's kind line,
+     so a Report's icon is the same orange everywhere. Chips: idle = colored icon
+     + tinted edge, on = filled. "All" stays accent. */
+  :is(.ix-chip, .ix-kind, .ix-kindline, .ix-pin-it)[data-k="report"] { --kc: var(--warn); }
+  :is(.ix-chip, .ix-kind, .ix-kindline, .ix-pin-it)[data-k="procedure"] { --kc: var(--accent); }
+  :is(.ix-chip, .ix-kind, .ix-kindline, .ix-pin-it)[data-k="tactic"] { --kc: var(--node); }
+  :is(.ix-chip, .ix-kind, .ix-kindline, .ix-pin-it):is([data-k="dossier"], [data-k="place"]) { --kc: var(--good); }
+  :is(.ix-chip, .ix-kind, .ix-kindline, .ix-pin-it)[data-k="rfi"] { --kc: var(--mate); }
+  :is(.ix-chip, .ix-kind, .ix-kindline, .ix-pin-it)[data-k="debrief"] { --kc: var(--harvest); }
+  :is(.ix-chip, .ix-kind, .ix-kindline, .ix-pin-it)[data-k="org"] { --kc: var(--barter); }
   .ix-filters .ix-chip[data-k]:not([data-k=""]) { border-color: color-mix(in srgb, var(--kc) 45%, var(--border)); }
   .ix-filters .ix-chip[data-k]:not([data-k=""]) .ix-ico { color: var(--kc); }
   .ix-filters .ix-chip[data-k]:not([data-k=""]):hover { border-color: var(--kc); }
@@ -706,7 +711,7 @@
   .ix-head { padding: 18px 22px 16px; border-bottom: 1px solid var(--border); }
   .ix-kindline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px;
     letter-spacing: .1em; color: var(--dim); text-transform: uppercase; }
-  .ix-kindline .ix-ico { color: var(--text); }
+  .ix-kindline > .ix-ico { color: var(--kc, var(--text)); }
   .ix-title { font-size: 24px; line-height: 1.25; font-weight: 600; margin: 10px 0 8px; text-wrap: balance;
     max-width: 40ch; color: var(--text); letter-spacing: 0; }
   .ix-lead { font-size: 14px; color: var(--dim); margin: 0 0 12px; max-width: 72ch; line-height: 1.55; }
@@ -4534,15 +4539,22 @@
   .panel.ix-pins { border-color: var(--accent); }
   .ix-pins .ix-panel-h h2 { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); }
   .ix-pin-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
-  .ix-pin-it { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 10px 10px 10px 12px;
-    border: 1px solid var(--border-soft); border-radius: 6px; background: var(--panel2); font-size: 13px; }
-  .ix-pin-it > .ix-ico { margin-top: 2px; color: var(--dim); }
-  .ix-pin-it a { color: var(--text); text-decoration: none; font-weight: 600; }
-  .ix-pin-it a:hover { color: var(--accent); }
-  .ix-pin-it small { display: block; color: var(--dim); font-size: 12px; margin-top: 2px; line-height: 1.4; }
-  .ix-pin-sub { display: grid; gap: 3px; margin-top: 6px; }
-  .ix-pin-sub a { font-weight: 400; font-size: 12px; color: var(--accent); }
-  .ix-pin-sub a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  /* One card per pin: the whole card is the link (entry → the article, tag → filter this tab); ✕ unpins (admins). */
+  .ix-pin-it { --pc: var(--kc, var(--dim)); position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start;
+    border: 1px solid var(--border-soft); border-left: 3px solid var(--pc); border-radius: 6px; background: var(--panel2); font-size: 13px; }
+  .ix-pin-it.ix-pin-tag { --pc: var(--tc, var(--accent)); }
+  .ix-pin-a { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 2px 8px; padding: 10px 6px 10px 10px; color: var(--text); text-decoration: none; min-width: 0; }
+  .ix-pin-a > .ix-ico { grid-row: span 3; margin-top: 2px; color: var(--pc); }
+  .ix-pin-t { font-weight: 600; overflow-wrap: anywhere; }
+  .ix-pin-tag .ix-pin-t { color: var(--pc); }
+  .ix-pin-s { color: var(--dim); font-size: 12px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .ix-pin-n { color: var(--dim); font-size: 12px; margin-top: 2px; }
+  .ix-pin-a:hover .ix-pin-t, .ix-pin-a:focus-visible .ix-pin-t { text-decoration: underline; text-underline-offset: 3px; }
+  .ix-pin-a:hover .ix-pin-n { color: var(--pc); }
+  .ix-pin-it[aria-current="true"] { background: color-mix(in srgb, var(--pc) 10%, var(--panel2)); }
+  .ix-pin-it > .op-x { margin: 6px 6px 0 0; }
+  .ix-lib-tagnote { margin: 4px 2px 10px; font-size: 12px; }
+  .ix-lib-tagnote a { color: var(--accent); text-underline-offset: 3px; }
   .ix-pin-more { margin-top: 10px; }
   .ix-pin-more > summary { cursor: pointer; font-size: 12px; color: var(--dim); width: max-content; padding: 4px 0; }
   .ix-pin-more > summary:hover { color: var(--accent); }
@@ -29070,7 +29082,7 @@ let intelPlaystyles = null;      // /api/playstyles, fetched once
 let intelImageHosts = [];        // IMAGE_PREVIEW_HOSTS (from /api/intel/entries)
 let intelImagePreviews = true;   // the org's in-app image preview setting (off = readers see links)
 let intelEd = null;              // the open editor's state (null = none open)
-let intelLibFilter = { kind: "", activities: [] };
+let intelLibFilter = { kind: "", activities: [], tag: "" };
 
 // What the server says this member may do (/api/me intel_access). Labels only:
 // every route re-checks.
@@ -29150,7 +29162,7 @@ function intelRow(e, opts = {}) {
   const when = e.status === "draft" ? e.updated_at : e.status === "in_review" ? e.submitted_at
     : (e.revised_at || e.published_at);
   return `<a class="ix-row" href="${href}">` +
-    `<span class="ix-kind">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind] || e.kind)}</span>` +
+    `<span class="ix-kind" data-k="${esc(e.kind)}">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind] || e.kind)}</span>` +
     `<span class="ix-body"><span class="ix-t">${esc(e.title || "Untitled")}</span>${verb}${teaser}` +
     (meta ? `<span class="ix-meta">${meta}</span>` : "") + `</span>` +
     `<span class="ix-when">${esc(intelWhen(when))}</span></a>`;
@@ -29221,7 +29233,7 @@ function intelFeedRow(e, seen, updated) {
     intelTalkChip(c);
   const time = at ? new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "";
   return `<a class="ix-row ix-feed-row${unread ? " unread" : ""}${r && r.expired ? " expired" : ""}" href="${intelHref(e)}">` +
-    `<span class="ix-kind"><span class="ix-dot" aria-hidden="true"></span>${intelIco(e.kind)}${esc(INTEL_KIND[e.kind] || e.kind)}</span>` +
+    `<span class="ix-kind" data-k="${esc(e.kind)}"><span class="ix-dot" aria-hidden="true"></span>${intelIco(e.kind)}${esc(INTEL_KIND[e.kind] || e.kind)}</span>` +
     `<span class="ix-body">${unread ? `<span class="sr-only">${updated ? "Updated" : "New"}. </span>` : ""}<span class="ix-t">${esc(e.title || "Untitled")}</span>` +
     (revised ? `<span class="ix-verb"> · revised, rev ${e.rev}</span>` : "") +
     (e.summary ? `<div class="ix-teaser">${esc(e.summary)}</div>` : "") +
@@ -29245,17 +29257,22 @@ function intelPinsPanel(pins, reload) {
   const admin = currentMe && currentMe.is_admin;
   const ents = (pins && pins.entries) || [], tags = (pins && pins.tags) || [];
   if (!ents.length && !tags.length && !admin) { el.hidden = true; return; }
+  // A pinned tag filters the tab you're on: the Library to its procedures and tactics, anywhere else the Feed.
+  const tagSec = intelCurSec === "library" ? "library" : "feed";
+  const curTag = (tagSec === "library" ? intelLibFilter : intelFeedFilter).tag;
   const x = (kind, id, label) => admin ? `<button type="button" class="op-x" data-unpin="${kind}:${esc(String(id))}" aria-label="Unpin ${esc(label)}" title="Unpin for everyone">✕</button>` : "";
   el.hidden = false;
   el.innerHTML = `<div class="ix-panel-h"><h2>${intelIco("pin-top", "ix-ico sm")}PINNED</h2>` +
     `<span class="muted">${ents.length || tags.length ? "Your org wants you to read these" : "Nothing pinned. Pin an entry from its More menu, or a tag here."}</span></div>` +
     (ents.length || tags.length ? `<ul class="ix-pin-list">` +
-      ents.map(e => `<li class="ix-pin-it">${intelIco(e.kind)}<span><a href="${intelHref(e)}">${esc(e.title || "Untitled")}</a>` +
-        `<small>${esc((INTEL_KIND[e.kind] || e.kind).toLowerCase())}${e.pin_note ? ` · ${esc(e.pin_note)}` : ""}</small></span>${x("entry", e.id, e.title)}</li>`).join("") +
-      tags.map(g => `<li class="ix-pin-it ix-pin-tag">${intelIco("ref")}<span><a href="#/intel/feed" data-pin-tag="${esc(g.tag)}" title="Everything tagged #${esc(g.tag)}, in the Feed">#${esc(g.tag)}</a>` +
-        `<small>${g.n} entr${g.n === 1 ? "y" : "ies"}${g.note ? ` · ${esc(g.note)}` : ""}</small>` +
-        (g.entries.length ? `<span class="ix-pin-sub">${g.entries.map(s => `<a href="${intelHref(s)}">${esc(s.title || "Untitled")}</a>`).join("")}</span>` : "") +
-        `</span>${x("tag", g.tag, "#" + g.tag)}</li>`).join("") + `</ul>` : "") +
+      ents.map(e => `<li class="ix-pin-it" data-k="${esc(e.kind)}"><a class="ix-pin-a" href="${intelHref(e)}">${intelIco(e.kind)}` +
+        `<span class="ix-pin-t">${esc(e.title || "Untitled")}</span>` +
+        `<span class="ix-pin-s">${esc(e.pin_note || e.summary || INTEL_KIND[e.kind] || e.kind)}</span></a>${x("entry", e.id, e.title)}</li>`).join("") +
+      tags.map(g => `<li class="ix-pin-it ix-pin-tag ${intelTagCls(g.tag)}"${curTag === g.tag ? ' aria-current="true"' : ""}>` +
+        `<a class="ix-pin-a" href="#/intel/${tagSec}" data-pin-tag="${esc(g.tag)}" title="${curTag === g.tag ? "Showing" : "Show"} everything tagged #${esc(g.tag)}${tagSec === "library" ? " in the Library" : " in the Feed"}">${intelIco("ref")}` +
+        `<span class="ix-pin-t">#${esc(g.tag)}</span>` +
+        `<span class="ix-pin-s">${esc(g.note || `Everything tagged #${g.tag}`)}</span>` +
+        `<span class="ix-pin-n">${g.n} entr${g.n === 1 ? "y" : "ies"} →</span></a>${x("tag", g.tag, "#" + g.tag)}</li>`).join("") + `</ul>` : "") +
     (admin ? `<details class="ix-pin-more"${ents.length || tags.length ? "" : " open"}><summary>Pin a tag for everyone</summary><form class="ix-pin-add" id="ix-pin-add"><span class="ix-tagf ix-pin-tagf"><input class="ti" id="ix-pin-tag" maxlength="40" autocomplete="off" spellcheck="false" placeholder="Pin a tag, e.g. new-members" aria-label="Pin a tag for everyone">` +
       `<ul class="ix-tag-sug" id="ix-pin-sug" hidden></ul></span>` +
       `<input class="ti" id="ix-pin-note" maxlength="140" autocomplete="off" placeholder="Note (optional)" aria-label="Note for the pinned tag">` +
@@ -29264,10 +29281,11 @@ function intelPinsPanel(pins, reload) {
     try { await intelApi("/api/intel/pins", { method: "PUT", body }); intelToast(msg); reload(); }
     catch (err) { intelToast(`<span class="warn">${esc(err.message)}</span>`, 6000); }
   };
-  // A pinned tag opens the Feed filtered to it.
   el.querySelectorAll("[data-pin-tag]").forEach(a => a.onclick = (ev) => {
-    intelFeedFilter.tag = a.dataset.pinTag;
-    if (intelCurSec === "feed") { ev.preventDefault(); intelFeed($("intel-know")); window.scrollTo(0, 0); }
+    const t = a.dataset.pinTag;
+    if (tagSec === "library") { ev.preventDefault(); intelLibFilter.tag = intelLibFilter.tag === t ? "" : t; intelLibrary($("intel-know")); return; }
+    if (intelCurSec === "feed") { ev.preventDefault(); intelFeedFilter.tag = intelFeedFilter.tag === t ? "" : t; intelFeed($("intel-know")); return; }
+    intelFeedFilter.tag = t;
   });
   el.querySelectorAll("[data-unpin]").forEach(b => b.onclick = () => {
     const [kind, ...rest] = b.dataset.unpin.split(":");
@@ -29430,15 +29448,18 @@ async function intelLibrary(box) {
     `<a class="ix-btn ix-export" href="/api/intel/export" download title="Every published entry you can open, as Markdown with its images">${intelIco("collection")}Export .zip</a></div>` +
     `<div class="ix-filters" role="group" aria-label="Filter the library">` +
     chip("", "All") + chip("procedure", "Procedures", "procedure") + chip("tactic", "Tactics", "tactic") +
+    (f.tag ? `<button type="button" class="ix-chip" id="ix-l-tag" aria-pressed="true" title="Stop filtering by this tag">#${esc(f.tag)} <span aria-hidden="true">✕</span><span class="sr-only">, clear</span></button>` : "") +
     `<span class="sp"></span>${intelMultiFilterHtml("ix-act", "Activities")}` +
     `</div><div class="ix-list" id="ix-lib">${intelStatus("Loading…")}</div></div>`;
-  box.querySelectorAll(".ix-chip").forEach(b => b.onclick = () => { f.kind = b.dataset.k; intelLibrary(box); });
+  box.querySelectorAll(".ix-chip[data-k]").forEach(b => b.onclick = () => { f.kind = b.dataset.k; intelLibrary(box); });
+  if ($("ix-l-tag")) $("ix-l-tag").onclick = () => { f.tag = ""; intelLibrary(box); };
   intelMultiPick("ix-act", tags, f.activities, "Every activity", "Show procedures and tactics for any of these.",
     { onClose: (v) => { if (v.join() !== f.activities.join()) { f.activities = v; intelLibrary(box); } } });
   intelCollectionsPanel();
   const q = new URLSearchParams({ section: "library" });
   if (f.kind) q.set("kind", f.kind);
   if (f.activities.length) q.set("activity", f.activities.join(","));
+  if (f.tag) q.set("tag", f.tag);
   try {
     const [lib, drafts] = await Promise.all([intelApi(`/api/intel/entries?${q}`),
       intelApi("/api/intel/entries?section=drafts").catch(() => ({ entries: [] }))]);
@@ -29451,8 +29472,12 @@ async function intelLibrary(box) {
       dEl.innerHTML = `<div class="ix-panel-h"><h2>YOUR DRAFTS</h2><span class="muted">Only you can see these</span></div>` +
         `<div class="ix-list">${drafts.entries.map(e => intelRow(e)).join("")}</div>`;
     }
+    // The Library holds procedures and tactics only; a tag can also be on reports, questions and the rest.
+    const tagNote = f.tag ? `<p class="muted ix-lib-tagnote">Showing procedures and tactics tagged #${esc(f.tag)}. ` +
+      `<a href="#/intel/feed" id="ix-l-tag-feed">Everything tagged #${esc(f.tag)} is in the Feed →</a></p>` : "";
+    el.onclick = (ev) => { if (ev.target.closest("#ix-l-tag-feed")) intelFeedFilter.tag = f.tag; };
     if (!lib.entries.length) {
-      el.innerHTML = f.kind || f.activities.length ? intelStatus("Nothing matches that filter.")
+      el.innerHTML = f.kind || f.activities.length || f.tag ? intelStatus("Nothing matches that filter.") + tagNote
         : `<div class="intel-know-empty" style="padding:14px 8px"><p class="lead">No procedures or tactics yet.</p>` +
           `<p class="muted">The org's how-tos: escort formations, mining checklists, the way your crews actually fly. ` +
           `Each one shows which patch it was written for.</p>` +
@@ -29472,7 +29497,7 @@ async function intelLibrary(box) {
       }
     }
     const order = [...groups.keys()].sort((a, b) => (a === "General") - (b === "General") || a.localeCompare(b));
-    el.innerHTML = order.map(g => `<div class="ix-group-h"><span>${esc(g)}</span><span>${groups.get(g).length}</span></div>` +
+    el.innerHTML = tagNote + order.map(g => `<div class="ix-group-h"><span>${esc(g)}</span><span>${groups.get(g).length}</span></div>` +
       groups.get(g).slice().sort((a, b) => b.doctrine - a.doctrine).map(e => intelRow(e)).join("")).join("");
   } catch (err) { const el = $("ix-lib"); if (el) el.innerHTML = intelStatus(err.message, true); }
 }
@@ -29718,7 +29743,7 @@ async function intelCollectionView(box) {
       e.kind !== "report" && e.kind !== "rfi" ? intelPatchChip(e.patch) : "",
       e.watch_updated ? `<span class="ix-upd-mark">${intelIco("watch", "ix-ico sm")}Updated</span>` : ""].filter(Boolean).join("");
     return `<a class="ix-row${e.read ? " read" : ""}" href="${intelHref(e)}">` +
-      `<span class="ix-kind">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind] || e.kind)}</span>` +
+      `<span class="ix-kind" data-k="${esc(e.kind)}">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind] || e.kind)}</span>` +
       `<span class="ix-body"><span class="ix-t">${esc(e.title)}</span>` +
       (e.summary ? `<div class="ix-teaser">${esc(e.summary)}</div>` : "") + (meta ? `<span class="ix-meta">${meta}</span>` : "") + `</span>` +
       `<span class="ix-read-st${e.read ? " ok" : ""}">${e.read ? "Read" : ""}</span></a>`;
@@ -29834,7 +29859,7 @@ function intelDossierRow(e) {
     intelAxisChips(e.systems),
     `<span>rev ${e.rev}</span>`, intelPatchChip(e.patch)].filter(Boolean).join("");
   return `<a class="ix-row" href="${intelHref(e)}">` +
-    `<span class="ix-kind">${intelIco(isOrg ? "dossier" : (d.subject_ref || "").startsWith("zone:") ? "zone" : "pin")}${isOrg ? "Org" : "Place"}</span>` +
+    `<span class="ix-kind" data-k="${isOrg ? "org" : "place"}">${intelIco(isOrg ? "dossier" : (d.subject_ref || "").startsWith("zone:") ? "zone" : "pin")}${isOrg ? "Org" : "Place"}</span>` +
     `<span class="ix-body"><span class="ix-t">${esc(e.title || "Untitled")}</span>` +
     (e.summary ? `<div class="ix-teaser">${esc(e.summary)}</div>` : "") +
     `<span class="ix-meta">${meta}</span></span>` +
@@ -30015,7 +30040,7 @@ function intelDossierView(box, e) {
   box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/dossiers">Dossiers</a><span>/</span>` +
     `<span>${isOrg ? "Orgs" : "Places"}</span></nav>` +
     `<div class="ix-grid"><div style="display:grid;gap:14px;min-width:0"><article class="panel ix-article"><div class="ix-head">` +
-    `<div class="ix-kindline">${intelIco("dossier")}Dossier · ${kindWord}${intelMarkTags(e)}${isOrg ? intelStanceChip(d.stance) : ""}` +
+    `<div class="ix-kindline" data-k="${isOrg ? "org" : "place"}">${intelIco("dossier")}Dossier · ${kindWord}${intelMarkTags(e)}${isOrg ? intelStanceChip(d.stance) : ""}` +
     (intelAxisChips(e.systems)) + `</div>` +
     `<h1 class="ix-title">${esc(e.title)}</h1>` + (sub ? `<p class="ix-dx-sub">${sub}</p>` : "") +
     (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") + `${actions}</div>${intelReadBar(e)}${live}` +
@@ -30444,7 +30469,7 @@ function intelRfiRow(e) {
     r.location ? `<span class="ix-loc">${intelIco((r.location_ref || "").startsWith("zone:") ? "zone" : "pin")}${esc(r.location)}</span>` : "",
     intelAxisChips(e.systems),
     `<span>asked by <b>${esc(e.author_name || "?")}</b></span>`].filter(Boolean).join("");
-  return `<a class="ix-row" href="${intelHref(e)}"><span class="ix-kind">${intelIco("rfi")}${c.answer ? `${c.answer} answer${c.answer === 1 ? "" : "s"}` : "No answers"}</span>` +
+  return `<a class="ix-row" href="${intelHref(e)}"><span class="ix-kind" data-k="rfi">${intelIco("rfi")}${c.answer ? `${c.answer} answer${c.answer === 1 ? "" : "s"}` : "No answers"}</span>` +
     `<span class="ix-body"><span class="ix-t">${esc(e.title)}</span>` + (e.summary ? `<div class="ix-teaser">${esc(e.summary)}</div>` : "") +
     `<span class="ix-meta">${meta}</span></span><span class="ix-when">${esc(intelWhen(e.published_at))}</span></a>`;
 }
@@ -30490,7 +30515,7 @@ async function intelRfiView(box, e) {
     `<small>${esc((INTEL_KIND[b.kind] || b.kind).toLowerCase())}</small></span></li>`).join("")}</ul></div>` : "";
   box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb"><a href="#/intel/rfi">Questions</a><span>/</span><span>${answered ? "Answered" : "Open"}</span></nav>` +
     `<div class="ix-grid"><article class="panel ix-article"><div class="ix-head">` +
-    `<div class="ix-kindline">${intelIco("rfi")}Question${intelMarkTags(e)}` +
+    `<div class="ix-kindline" data-k="rfi">${intelIco("rfi")}Question${intelMarkTags(e)}` +
     (answered ? `<span class="ix-tag ok">${intelIco("check", "ix-ico sm")}Answered</span>` : `<span class="ix-tag draft">Open</span>`) +
     (intelAxisChips(e.systems)) + `</div>` +
     `<h1 class="ix-title wide">${esc(e.title)}</h1>` + (e.summary ? `<p class="ix-lead">${esc(e.summary)}</p>` : "") +
@@ -30857,7 +30882,7 @@ async function intelEntryView(box) {
     `${st.corroborate || st.dispute ? ` ${st.corroborate || 0} corroborated, ${st.dispute || 0} disputed.` : ""}</div></div>` : "";
   box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb">${crumb}</nav>` +
     `<div class="ix-grid"><article class="panel ix-article">${banner}<div class="ix-head">` +
-    `<div class="ix-kindline">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind])}` +
+    `<div class="ix-kindline" data-k="${esc(e.kind)}">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind])}` +
     (intelAxisChips(e.systems)) + intelMarkTags(e) +
     (isReport ? intelGradeChip(r.grade) + (r.expired ? `<span class="ix-tag">Expired</span>` : "") : "") + `</div>` +
     `<h1 class="ix-title">${esc(e.title)}</h1>` +
@@ -31010,7 +31035,7 @@ async function intelReviewQueue(box) {
     el.innerHTML = d.items.length ? d.items.map(i => {
       const what = i.review_type === "new" ? "New" : "Revision";
       return `<a class="ix-row" href="${intelHref(i)}/review">` +
-        `<span class="ix-kind">${intelIco(i.kind)}${esc(INTEL_KIND[i.kind] || i.kind)}</span>` +
+        `<span class="ix-kind" data-k="${esc(i.kind)}">${intelIco(i.kind)}${esc(INTEL_KIND[i.kind] || i.kind)}</span>` +
         `<span class="ix-body"><span class="ix-t">${esc(i.title)}</span>` +
         `<span class="ix-verb"> · ${what.toLowerCase()} from ${esc(i.submitted_by || "?")}</span>` +
         (i.note ? `<div class="ix-teaser">“${esc(i.note)}”</div>` : "") +
@@ -31093,7 +31118,7 @@ async function intelReviewView(box) {
   box.innerHTML = `<nav class="ix-crumb" aria-label="Breadcrumb">${back}<span>/</span>` +
     `<a href="${intelHref(e)}">${esc(e.title)}</a><span>/</span><span>${isNew ? "New entry" : "Revision"}</span></nav>` +
     `<div class="ix-grid"><div class="panel ix-article"><div class="ix-head">` +
-    `<div class="ix-kindline">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind])}${intelMarkTags(e)}</div>` +
+    `<div class="ix-kindline" data-k="${esc(e.kind)}">${intelIco(e.kind)}${esc(INTEL_KIND[e.kind])}${intelMarkTags(e)}</div>` +
     `<h1 class="ix-title">${esc(isNew ? r.title : r.title.to)}</h1>` +
     ((isNew ? r.summary : r.summary.to) ? `<p class="ix-lead">${esc(isNew ? r.summary : r.summary.to)}</p>` : "") +
     `<div class="ix-by"><span>${isNew ? "Submitted" : "Revision"} by <b>${esc(r.submitted_by || "?")}</b> · ${esc(intelWhen(r.submitted_at))}</span>` +
