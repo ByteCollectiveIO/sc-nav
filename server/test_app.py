@@ -128,7 +128,7 @@ class CspNonceTests(unittest.TestCase):
         # nonce (guards a future dev adding an un-nonced inline script that the
         # CSP would then block, and index.html growing a second <script> that
         # the shell split in _shell_parts doesn't know about).
-        scripts = re.findall(r"<script\b[^>]*>", r.text)
+        scripts = re.findall(r"<script\b[^>]*>", r.text, re.IGNORECASE)
         self.assertEqual(len(scripts), 1, f"expected one <script>, got {scripts}")
         m = _NONCE_IN_SCRIPT.search(r.text)
         self.assertIsNotNone(m, "shell <script> is missing its nonce or asset src")

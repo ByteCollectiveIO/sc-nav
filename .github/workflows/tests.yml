@@ -6,6 +6,10 @@ on:
   push:
   pull_request:
 
+# Read-only token: the suite only checks out and runs tests.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
