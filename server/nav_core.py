@@ -9865,7 +9865,10 @@ def surface_zones_state(nav: NavData, system: str, zones: list[dict]) -> list[di
 # across ONE per-system pool (a "$$$" means "best in this belt"), exactly the
 # #32 resource_value_tiers mechanics. Derived on read; nothing stored.
 
-_ORE_SUFFIX_RE = re.compile(r"\s*\((?:Raw|Ore)\)$", re.IGNORECASE)
+# No leading \s*: every caller .strip()s the result, and a `\s*` prefix made
+# .sub() quadratic on long runs of interior spaces (CodeQL py/polynomial-redos;
+# ore names reach this from member input).
+_ORE_SUFFIX_RE = re.compile(r"\((?:Raw|Ore)\)$", re.IGNORECASE)
 
 
 def _ore_price_index(prices: dict) -> tuple[dict, float | None]:
@@ -10709,7 +10712,9 @@ def belt_zone_health(fit: dict, members: list[dict],
 # toward the org's current patch. The current patch is STICKY beyond it (see
 # `current_patch`), so a quiet week never un-knows it.
 PATCH_WINDOW_S = 72 * 3600
-_PATCH_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
+# Bounded + anchored on a non-digit so .search() stays linear on a long digit
+# run (CodeQL py/polynomial-redos; the build string comes from the watcher).
+_PATCH_RE = re.compile(r"(?<!\d)(\d{1,9})\.(\d{1,9})(?:\.(\d{1,9}))?")
 
 
 def patch_of(build) -> str | None:

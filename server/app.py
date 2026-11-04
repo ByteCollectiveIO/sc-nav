@@ -16892,10 +16892,14 @@ async def delete_org_logo(admin: dict = Depends(require_admin)):
 def _check_app_image_key(key: str) -> str:
     """Reject anything outside the closed card list. This is the guard that keeps
     a path parameter from reaching the filesystem — every write below composes a
-    filename from `key`, so it must be one of ours before it gets there."""
-    if key not in APP_IMAGE_KEYS:
-        raise HTTPException(status_code=404, detail="unknown app card")
-    return key
+    filename from `key`, so it must be one of ours before it gets there.
+    Callers must use the RETURNED value: it is the constant from APP_IMAGE_KEYS,
+    not the request string, so no request bytes ever reach a path (CodeQL
+    py/path-injection)."""
+    for known in APP_IMAGE_KEYS:
+        if known == key:
+            return known
+    raise HTTPException(status_code=404, detail="unknown app card")
 
 
 @app.get("/api/app-image/{key}")
@@ -16903,7 +16907,7 @@ async def get_app_image(key: str, user: dict = Depends(require_session)):
     """Serve one app card's custom artwork. Member-only (unlike the org logo):
     the app chooser is behind the sign-in gate, so this never needs to render
     pre-auth and stays off the anonymous surface."""
-    _check_app_image_key(key)
+    key = _check_app_image_key(key)
     entry = _app_image_entry(key)
     if entry:
         path = BRANDING_DIR / f"app_{key}.{entry[0]}"
@@ -16920,7 +16924,7 @@ async def upload_app_image(key: str, file: UploadFile = File(...),
     """Replace one app card's artwork (admin). Same validation as the org logo —
     declared type must be PNG/JPG/WebP, bytes must actually match it, 2 MB cap —
     and the same /data volume, so it survives an image rebuild."""
-    _check_app_image_key(key)
+    key = _check_app_image_key(key)
     ext = _LOGO_TYPES.get((file.content_type or "").lower())
     if not ext:
         raise HTTPException(status_code=400, detail="image must be a PNG, JPG, or WebP")
@@ -16945,7 +16949,7 @@ async def upload_app_image(key: str, file: UploadFile = File(...),
 async def delete_app_image(key: str, admin: dict = Depends(require_admin)):
     """Drop one card's custom artwork (admin) — the card reverts to the built-in
     art, which is never removable."""
-    _check_app_image_key(key)
+    key = _check_app_image_key(key)
     for old in BRANDING_DIR.glob(f"app_{key}.*"):
         old.unlink(missing_ok=True)
     db.set_setting(f"app_image_{key}", "")
