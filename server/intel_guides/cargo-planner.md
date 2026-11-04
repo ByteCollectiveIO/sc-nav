@@ -20,7 +20,7 @@ activity: hauling
 
 Fill in the form from the top. **SHIP** is your ship and its usable SCU (standard cargo units, the game's cargo measure). **START FROM** is where you begin. **PACKAGES** holds one row per contract line: commodity, SCU, from and to. **Pirate danger** decides how the plan treats warnings on the Danger Board.
 
-Two ideas matter most. Every package is picked up before it is dropped off, and your hold never goes over its usable SCU. And the app never completes a stop for you: you move the cargo in game, then tick each package off.
+The planner keeps to two rules: every package is picked up before it is dropped off, and your hold never goes over its usable SCU. The app never completes a stop for you. You move the cargo in game, then tick each package off.
 
 Run mode uses the watcher, a small program on your gaming PC that reads your position when you type `/showlocation` in chat. You can plan without it.
 

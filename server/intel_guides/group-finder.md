@@ -12,7 +12,7 @@ tags: app-guide, tutorial, group-finder
 | **{blue}Who{/blue}** | Any member who wants company for a run, or has a run and needs people. |
 | **{blue}What{/blue}** | A short-lived board of "need players" and "want to join" posts, next to a live Who's Online list. |
 | **{blue}Where{/blue}** | The Rally the Org group on the launcher, at `#/lfg`. Who's Online is at `#/online`. |
-| **{blue}When{/blue}** | When you want to group up now, not hours or days from now. |
+| **{blue}When{/blue}** | When you want to group up right now. |
 | **{blue}Why{/blue}** | A Discord message scrolls away fast. Here you can see who is free and what they want to do. |
 
 ## {orange}The basics{/orange}
