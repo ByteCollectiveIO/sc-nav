@@ -25,7 +25,7 @@ Resource Manager has three tabs.
 
 Quality is the game's 0 to 1000 grade on a lot. Ten SCU (standard cargo units) of Q800 Iron and ten of Q300 at the same station are two rows. Leave quality blank if you don't know it. Q0 means station-bought, not a low grade.
 
-A contribution to a goal is a pledge, not a transfer. The stock stays with you, and you can withdraw it later.
+Contributing to a goal records a pledge. The stock stays with you, and you can withdraw it later.
 
 ## {orange}Log what you hold{/orange}
 

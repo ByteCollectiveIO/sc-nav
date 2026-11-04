@@ -17,7 +17,7 @@ tags: app-guide, tutorial, marketplace
 
 ## {orange}The basics{/orange}
 
-Everything is priced in aUEC, the in-game currency. Never real money.
+Everything is priced in aUEC, the in-game currency, never in real money.
 
 The board has tabs for each listing type: **All**, **Sales**, **Auctions**, **Barter**, **Requests** (craft commissions) and **Buying** (buy orders). **My activity** shows the listings you've bid, offered or quoted on, plus deals waiting on your confirm. **My listings** shows your own posts. A search box, sort menu and filters sit above the list.
 
