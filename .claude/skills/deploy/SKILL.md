@@ -41,12 +41,21 @@ See "Two channels" at the bottom for why prod tracks `stable` and not `main`.
      either can sweep in unrelated staged files (`.env`, local skill/tooling edits)
      that shouldn't be in the release.
 
-2. **Test gate.** Run both, matching CI exactly so a red build can't open a PR:
+2. **Test gate.** Run all three suites CI runs (`.github/workflows/tests.yml`),
+   from the repo root, so a red build can't open a PR:
    ```
-   cd server && .venv/bin/python test_nav_core.py
-   cd server && .venv/bin/python test_app.py
+   (cd server && .venv/bin/python test_nav_core.py)
+   (cd watcher && ../server/.venv/bin/python test_parse.py)
+   (cd server && SC_NAV_OFFLINE=1 .venv/bin/python test_app.py)
    ```
-   If either is not green, stop and report the failure.
+   If any is not green, stop and report the failure.
+   - `SC_NAV_OFFLINE=1` is required: without it `import app` fetches the live UEX
+     feeds and can hang the gate on a slow UEX. Offline, the loaders read the
+     local `poi/` caches instead.
+   - CI also seeds `poi/` from `server/testdata/uex/*.json` first. **Don't copy
+     those here**: they'd overwrite this checkout's full live caches with the
+     trimmed fixtures. If the app suite fails here but CI passes (or the reverse),
+     the cache contents are the first suspect.
 
 3. **Compute the version.** Read `__version__` from `server/version.py`. Apply the
    bump (or use the explicit version). Reject a version that isn't strictly greater
@@ -56,9 +65,10 @@ See "Two channels" at the bottom for why prod tracks `stable` and not `main`.
 
 5. **Bump.** Edit `server/version.py` so `__version__` is the new version.
 
-6. **Commit.** `git add server/version.py`, then:
+6. **Commit.** `git add server/version.py`, then commit that path ONLY (the
+   guardrail above: a bare `git commit -m` would sweep in anything else staged):
    ```
-   git commit -m "Release v<X.Y.Z>
+   git commit server/version.py -m "Release v<X.Y.Z>
 
    <one-line summary of what's in this release, from the log since the last tag>
 
