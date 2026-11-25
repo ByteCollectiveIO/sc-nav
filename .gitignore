@@ -71,6 +71,12 @@ server/static/.impeccable/
 # and the CI workflows stay tracked — these ignore only the vendored/generated
 # siblings.)
 .claude/skills/impeccable/
+# Skills installed by the `skills` CLI: the real files land in .agents/, each
+# .claude/skills/<name> is a SYMLINK into it (no trailing slash: a dir pattern
+# never matches a symlink), and skills-lock.json is its install manifest.
+.agents/
+.claude/skills/web-design-guidelines
+skills-lock.json
 .github/skills/
 .github/hooks/
 .impeccable/
