@@ -70,12 +70,14 @@ server/static/.impeccable/
 # snapshots, and the uexcorp scrape output dir. (The hand-written `deploy` skill
 # and the CI workflows stay tracked — these ignore only the vendored/generated
 # siblings.)
-.claude/skills/impeccable/
-# Skills installed by the `skills` CLI: the real files land in .agents/, each
-# .claude/skills/<name> is a SYMLINK into it (no trailing slash: a dir pattern
-# never matches a symlink), and skills-lock.json is its install manifest.
+.claude/skills/*
+!.claude/skills/deploy/
+# ^ every .claude/skills/ entry is vendored except the hand-written `deploy`
+# skill; a new hand-written skill needs its own `!` line. `*` (no trailing slash)
+# also matches the `skills` CLI's installs, which are SYMLINKS into .agents/ —
+# a dir pattern like `name/` never matches a symlink.
+# The `skills` CLI's real install store and its install manifest:
 .agents/
-.claude/skills/web-design-guidelines
 skills-lock.json
 .github/skills/
 .github/hooks/
