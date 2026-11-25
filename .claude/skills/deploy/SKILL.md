@@ -33,29 +33,51 @@ See "Two channels" at the bottom for why prod tracks `stable` and not `main`.
    - `git fetch origin main`, then confirm local `main` is up to date with
      `origin/main` (`git rev-parse main` == `git rev-parse origin/main`). If
      behind, pull first; if diverged, stop and ask.
-   - `git status --short`. If there are uncommitted changes, show them and ask the
-     user whether they belong in this release. Only commit what they confirm, with
-     a clear `Area: summary` message. **Stage explicit paths and commit an explicit
-     path list** (`git add <path>…` then `git commit <path>… -m …`). Never
-     `git add -A` / `git add .`, and never a bare `git commit -m` after staging —
-     either can sweep in unrelated staged files (`.env`, local skill/tooling edits)
-     that shouldn't be in the release.
+   - `git status --short`. If there are uncommitted changes, **stop and show
+     them. Never commit them here**: a commit on local `main` never reaches
+     `origin/main` (the release PR is squash-merged), so local `main` diverges and
+     the NEXT `/deploy` aborts at the check above. It would also ship code that
+     never had its own PR or CI run. A release ships exactly what is already on
+     `origin/main`. Ask the user to either land the changes through a normal PR
+     first and re-run `/deploy`, or stash them and carry on:
+     `git stash push -u -m "deploy: stashed before release"`. **Remember that you
+     stashed** — step 9 restores it.
+     Untracked files that `.gitignore` already hides never show here.
 
 2. **Test gate.** Run all three suites CI runs (`.github/workflows/tests.yml`),
-   from the repo root, so a red build can't open a PR:
+   the way CI runs them, from the repo root, so a red build can't open a PR:
    ```
-   (cd server && .venv/bin/python test_nav_core.py)
-   (cd watcher && ../server/.venv/bin/python test_parse.py)
-   (cd server && SC_NAV_OFFLINE=1 .venv/bin/python test_app.py)
+   (cd server && python3.12 test_nav_core.py)
+   (cd watcher && python3.12 test_parse.py)
+   ```
+   Then the app suite. **Run this whole block as ONE Bash call**: it's one
+   subshell, because the temp-dir variable doesn't survive between calls, and
+   the `trap` removes the dir on every exit, red or green:
+   ```
+   (
+     set -e
+     GATE=$(mktemp -d)
+     trap 'rm -rf "$GATE"' EXIT
+     git archive HEAD poi | tar -x -C "$GATE"
+     cp server/testdata/uex/*.json "$GATE/poi/"
+     cd server
+     SC_NAV_OFFLINE=1 SC_NAV_DATA="$GATE/poi" .venv/bin/python test_app.py
+   )
    ```
    If any is not green, stop and report the failure.
+   - **Plain `python3.12`, not the server venv, for the first two.** CI runs them
+     under bare 3.12 before it installs any dependency, which is what proves
+     they're stdlib-only (the watcher runs on members' own PCs). The venv has
+     fastapi etc., so it would hide a stray third-party import. If `python3.12`
+     isn't installed, use `python3`, say which version ran, and flag that a
+     version-specific difference from CI is possible.
+   - **The app suite runs on a throwaway copy of `poi/`, exactly as CI sees it**:
+     the committed files at `HEAD` (`git archive`) plus CI's trimmed UEX fixtures.
+     `SC_NAV_DATA` points the app at it, so the live gitignored caches in this
+     checkout's `poi/` are neither read nor overwritten, a fresh clone with no
+     caches passes too, and anything the suite writes lands in the temp dir.
    - `SC_NAV_OFFLINE=1` is required: without it `import app` fetches the live UEX
-     feeds and can hang the gate on a slow UEX. Offline, the loaders read the
-     local `poi/` caches instead.
-   - CI also seeds `poi/` from `server/testdata/uex/*.json` first. **Don't copy
-     those here**: they'd overwrite this checkout's full live caches with the
-     trimmed fixtures. If the app suite fails here but CI passes (or the reverse),
-     the cache contents are the first suspect.
+     feeds and can hang the gate on a slow UEX.
 
 3. **Compute the version.** Read `__version__` from `server/version.py`. Apply the
    bump (or use the explicit version). Reject a version that isn't strictly greater
@@ -86,7 +108,11 @@ See "Two channels" at the bottom for why prod tracks `stable` and not `main`.
      --body "<bulleted highlights since the previous tag>"
    ```
 
-9. **Report back.** Give the PR URL and tell the user explicitly:
+9. **Report back.** If step 1 stashed the user's work, restore it FIRST:
+   `git checkout main && git stash pop`, then tell the user it was stashed and
+   is back (or, if the pop conflicts, that it's still in `git stash list` and
+   why). Never end a run with their work silently in the stash.
+   Then give the PR URL and tell the user explicitly:
    - Wait for the `tests` check to go green on the PR.
    - Merge it themselves (GitHub UI or `gh pr merge`) — this skill will not.
    - On merge, the `tag-release` workflow auto-creates and pushes `v<X.Y.Z>` once
@@ -125,7 +151,8 @@ See "Two channels" at the bottom for why prod tracks `stable` and not `main`.
   Only `tag-release` writes it. If it's ever wrong, that's a conversation with the
   user, not a `git push`.
 - Abort on: not starting from an up-to-date `main`, red tests, a non-increasing
-  version, or a dirty tree the user hasn't accounted for.
+  version, or a dirty tree the user hasn't stashed or landed through its own PR
+  (this skill never commits it on `main`).
 - Stage explicit paths only; commit an explicit path list — never `git add -A` and
   never a bare `git commit -m` that could include unrelated staged changes.
 - Do not touch the server, SSH, docker, or Portainer. Redeploy is fully automatic
