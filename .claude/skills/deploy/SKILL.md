@@ -1,6 +1,6 @@
 ---
 name: deploy
-description: Cut a release for the SC nav project via a gated PR — run tests, bump the SemVer in server/version.py, and open a release PR. Use when the user says "/deploy", "cut a release", "ship it", or "tag a new version". Once the user merges the PR, the `tag-release` GitHub Actions workflow tags it automatically; this skill never merges the PR and never touches the server.
+description: Cut a release for the SC nav project via a gated PR — run tests, bump the SemVer in server/version.py, and open a release PR. Use when the user says "/deploy", "cut a release", or "tag a new version" (NOT "ship it" — that is the separate /ship command, which takes a feature branch to a merged PR, never a release). Once the user merges the PR, the `tag-release` GitHub Actions workflow tags it automatically; this skill never merges the PR and never touches the server.
 ---
 
 # /deploy — cut a release (PR-gated, auto-tagged)
@@ -62,7 +62,7 @@ See "Two channels" at the bottom for why prod tracks `stable` and not `main`.
 
    <one-line summary of what's in this release, from the log since the last tag>
 
-   Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
+   Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
    ```
 
 7. **Push the branch.** `git push -u origin release/v<X.Y.Z>`.
