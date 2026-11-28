@@ -57,6 +57,11 @@ _TXN_SELL = (
 _LOGIN = ("<2026-08-02T17:17:16.461Z> [Notice] <Legacy login response> [CIG-net] "
           "User Login Success - Handle[Bolvangar] - Time[245413276] "
           "[Team_GameServices][Login]\n")
+# Alpha 5.0's replacement for the "Legacy login response" line (PTU build
+# 13284307), same handle substituted in.
+_AUTH_50 = ("<2026-11-27T22:56:16.085Z> [Notice] <CLoginSession> "
+            "[CompleteAuthentication] {success} Fully authenticated : "
+            "handle[Bolvangar] hub[1] in 6.4s [Team_GameServices][Login]\n")
 _CHARACTER = ("<2026-08-02T17:17:13.324Z> [Notice] "
               "<AccountLoginCharacterStatus_Character> Character: createdAt "
               "1784167598470 - updatedAt 1784167599111 - geid 204698941918 - "
@@ -74,6 +79,19 @@ class ParseLoginHandleTests(unittest.TestCase):
 
     def test_character_status_line(self):
         self.assertEqual(parse_login_handle(_CHARACTER), "Bolvangar")
+
+    def test_reads_the_5_0_authentication_line(self):
+        """5.0 no longer writes "Legacy login response"; one captured 5.0 log
+        had this line and no character line at all."""
+        self.assertEqual(parse_login_handle(_AUTH_50), "Bolvangar")
+
+    def test_a_failed_5_0_authentication_is_not_a_login(self):
+        self.assertIsNone(parse_login_handle(
+            _AUTH_50.replace("{success}", "{failure}")))
+        # Other lines carry a bracketed name too; only the anchored one counts.
+        self.assertIsNone(parse_login_handle(
+            "<2026-11-27T22:56:10.389Z> [Notice] <CHubClient> Starting HubAuth "
+            "for name[Someone_Else] : Login (gRPC) complete\n"))
 
     def test_only_the_character_in_play_counts(self):
         """The login message lists every character on the account; only one of
