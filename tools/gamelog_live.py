@@ -20,6 +20,9 @@ While it runs:
     <text> + Enter        new marker labelled <text>, at the moment you hit Enter
     @HH:MM[:SS] <text>    marker at that local time, after the fact
     <N> <text> + Enter    label marker #N (the F9 ones, after the fact); `#N <text>` too
+    /showlocation (game)  recorded by itself: the tool watches the clipboard, so every
+                          result becomes a marker and a line in `session-<utc>-fixes.jsonl`
+                          (UTC time + x/y/z). The game never writes these to Game.log.
     r + Enter             write the report now
     q + Enter / Ctrl+C    write the report and quit
 
@@ -611,6 +614,45 @@ def start_hotkey(name, on_press, out=print, poll_s=0.025):
         "It still reaches the game, so keep it unbound there.")
 
 
+def clipboard_fixes(clip_reader, parse, on_fix, stop, poll_s=0.25):
+    """Call on_fix(coords, raw_text) for every NEW /showlocation result on the
+    clipboard. What was already there at start is ignored. The clipboard
+    sequence number catches a repeat of the same text (two readings at one
+    spot, which is the planet-rotation test)."""
+    last = clip_reader.sequence_number()
+    while not stop.is_set():
+        seq = clip_reader.sequence_number()
+        if seq != last:
+            text = clip_reader.read_text()
+            if text is None:        # clipboard busy: retry on the next poll
+                stop.wait(poll_s)
+                continue
+            last = seq
+            coords = parse(text)
+            if coords:
+                on_fix(coords, text.strip())
+        stop.wait(poll_s)
+
+
+def start_clipboard(on_fix, stop, out=print):
+    """Start the clipboard watch (Windows only); reuses the watcher's reader
+    and /showlocation parser so both tools read the game the same way."""
+    if sys.platform != "win32":
+        out("clipboard: DISABLED (not Windows); paste /showlocation results here instead")
+        return False
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "watcher"))
+    try:
+        from sc_nav_watcher import WindowsClipboard, parse_showlocation
+        reader = WindowsClipboard()
+    except Exception as exc:  # noqa: BLE001 - never take the log tool down
+        out(f"clipboard: DISABLED ({exc}); paste /showlocation results here instead")
+        return False
+    threading.Thread(target=clipboard_fixes, args=(reader, parse_showlocation, on_fix, stop),
+                     daemon=True, name="clipboard").start()
+    out("clipboard: every /showlocation result is recorded as a marker (two beeps)")
+    return True
+
+
 def beep():
     try:
         import winsound
@@ -644,6 +686,8 @@ def main(argv=None):
                     help="extra regex of raw lines to print live (the timeline always prints)")
     ap.add_argument("--from-end", action="store_true",
                     help="skip what's already in the log (default: read the session so far)")
+    ap.add_argument("--clipboard", action=argparse.BooleanOptionalAction, default=True,
+                    help="record every /showlocation result from the clipboard (default on)")
     ap.add_argument("--once", action="store_true",
                     help="process the log as it stands, write the report, exit")
     ap.add_argument("--notes", type=Path,
@@ -694,6 +738,22 @@ def main(argv=None):
 
     if args.hotkey.lower() != "none":
         start_hotkey(args.hotkey, on_hotkey)
+
+    fixes_path = report_path.with_name(report_path.stem + "-fixes.jsonl")
+
+    def on_fix(coords, raw):
+        # Written at once, in full precision: the report scrubs long numbers
+        # and is only rewritten once a minute.
+        t = datetime.now(timezone.utc)
+        with fixes_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"t": t.isoformat(timespec="milliseconds"),
+                                 "unix": round(t.timestamp(), 3), **coords}) + "\n")
+        prof.add_marker(t, "showlocation x:{x:.3f} y:{y:.3f} z:{z:.3f}".format(**coords))
+        beep()
+        beep()
+
+    if args.clipboard and start_clipboard(on_fix, quit_evt):
+        print(f"fixes:  {fixes_path}")
 
     def console():
         for line in sys.stdin:

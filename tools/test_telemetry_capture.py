@@ -174,6 +174,36 @@ class TestRecorder(unittest.TestCase):
         t, n = struct.unpack("<dI", raw[:12])
         self.assertEqual((t, raw[12:12 + n]), (100.0, frame(1000)))
 
+    def test_summary_explains_a_balance_change_and_lists_unseen_fields(self):
+        schema = tc.Schema([tc.decode_file(DESCRIPTOR)])
+        self.assertEqual(schema.leaf_paths(f"{PKG}.Frame"), [
+            "state.locomotion", "state.uec_balance", "state.level", "shields.faces", "tags"])
+        with tempfile.TemporaryDirectory() as d:
+            rec = tc.Recorder(d, schema, f"{PKG}.Frame", say=lambda *_: None)
+            rec.on_frame(100.0, fl(2, fv(4, 1000)) + fl(4, "a") + fl(4, "b"))
+            rec.log_line('<SHUDEvent_OnNotification> Added notification "Contract Accepted: " [7]')
+            rec.events[-1] = (100.1, rec.events[-1][1])
+            rec.log_line("some other line")
+            rec.on_frame(100.3, fl(2, fv(4, 900)))
+            rec.close()
+            summary = Path(d, "summary.md").read_text(encoding="utf-8")
+            log = Path(d, "gamelog.txt").read_text(encoding="utf-8")
+        self.assertIn('-0.2s "Contract Accepted"', summary)
+        self.assertIn("- `shields.faces`", summary)
+        self.assertNotIn("- `state.uec_balance`", summary)
+        self.assertEqual(rec.stats["tags"]["present"], 1)
+        self.assertEqual(log.splitlines()[1], "some other line")
+
+    def test_floats_are_throttled_but_the_settled_value_lands(self):
+        with tempfile.TemporaryDirectory() as d:
+            rec = tc.Recorder(d, say=lambda *_: None)
+            for t, x in ((100.0, 1.0), (100.1, 2.0), (100.2, 3.0), (100.3, 4.0), (101.5, 4.0)):
+                rec.on_frame(t, f32(1, x) + fv(2, int(t * 10)))
+            rec.close()
+            sets = [json.loads(x).get("set") for x in
+                    Path(d, "changes.jsonl").read_text().splitlines()][1:]
+        self.assertEqual([s.get("1") for s in sets], [2.0, None, None, 4.0])
+
     def test_fresh_dir_never_reuses(self):
         with tempfile.TemporaryDirectory() as d:
             a = tc.fresh_dir(d, "replay")

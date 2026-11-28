@@ -232,12 +232,64 @@ the value 37,330 appears nowhere, and the file contains **no credit, balance or
 wallet lines of any kind**. `price[393370]` is exactly `315.20 × 1248`. Capture
 can't help, so hand-measurement is the only route to a fee model — which is
 precisely why A above insists on more readings before anyone fits one. (Same log
-answered the box-size question the opposite way; see §6.2.)
+answered the box-size question the opposite way; see §6.2.) *Superseded
+2026-11-27 for the "only route" part: the game's local telemetry stream carries
+the balance, so the fee can be read exactly — see §6.1.1. The log itself still
+has no fee line.*
 
 **E. The two ends quote different units** (buy per container, sell per SCU) —
 see the `#46 (d)` note in CLAUDE.md. Recorded here because it's the same
 in-game session, and because it's the sort of asymmetry a future reader will
 assume is a typo.
+
+### 6.1.1 Exact fees from the telemetry balance (2026-11-27)
+
+The game client's local telemetry stream (`tools/telemetry_capture.py`, LIVE
+sc-alpha-4.10.0 CL 13220821) carries `actor.state.uec_balance`, which updates
+0.1–1 s after a kiosk request. Balance change minus the request's logged
+`price[]`/`amount[]` is therefore an exact fee reading, no screen-reading
+needed. One session, Waste, one 8 SCU box size throughout:
+
+| Transaction | Where | Logged | Balance change | Beyond logged |
+|---|---|---:|---:|---:|
+| Item kiosk, 1 drink (`SendShopBuyRequest`) | ARC-L1 | 7 | −7 | 0 |
+| Buy 8 SCU (1 × 8), `autoLoading[1]` | ARC-L1 | 1,829 | −2,169 | **−340** |
+| Buy 8 SCU (1 × 8), `autoLoading[0]` | ARC-L1 | 1,829 | −1,829 | 0 |
+| Sell 16 SCU (2 × 8), `autoLoading[1]` | Area 18 TDD | 3,930 | +3,190 | **−740** |
+
+**The method is sound.** The two no-fee rows match the logged price to the
+aUEC, so the −340 and −740 are fees, not rounding or price drift. This also
+confirms the fee is charged on the sell side as well as the buy side, and that
+`autoLoading[0]` really is free.
+
+**The fee does not fit ~30 aUEC/SCU.** All five readings now on record:
+
+| Load | Boxes × size | Fee | Per SCU | Per box | % of logged value |
+|---|---|---:|---:|---:|---:|
+| 8 SCU Waste (buy) | 1 × 8 | 340 | 42.5 | 340 | 18.6% |
+| 16 SCU Waste (sell) | 2 × 8 | 740 | 46.25 | 370 | 18.8% |
+| 112 SCU Argon | 7 × 16 | 3,736 | 33.4 | 534 | 10.6% |
+| 264 SCU Argon | 11 × 24 | 7,830 | 29.7 | 712 | 9.4% |
+| 1,248 SCU Argon | 39 × 32 | 37,330 | 29.9 | 957 | 9.5% |
+
+No single rule covers them: per SCU ranges 29.7–46.25, per box 340–957, and
+share of value 9.4–18.8%. The two new points are also confounded with each
+other (different side, different terminal, different quantity), so they can't
+say whether the 8 → 16 SCU rise in per-SCU cost is real or a place/side effect.
+What they do establish is that small loads cost noticeably more per SCU than
+§6.1 A's figure, which only described 24 and 32 SCU boxes. The "do NOT ship a
+constant" warning in A stands, with more reason.
+
+**Readings that would separate the candidates**, all at one terminal and one
+side, read as the balance change on a real purchase: the same SCU split
+differently (8 SCU as 1 × 8 and as 8 × 1), the same box size at two quantities
+(8 and 32 SCU), and a cheap versus an expensive commodity at the same size.
+
+Two side notes from the same session. A box bought with auto-load while the
+ship was still stored did arrive: the later sell request listed both 8 SCU
+boxes on the cargo grid. And refuelling writes nothing to Game.log; the
+balance moved −1 and −117 around the quantum and hydrogen refuels, attributed
+only by the player's own typed markers.
 
 ### 6.2 The kiosk publishes its container menu (2026-08-09)
 

@@ -23,7 +23,9 @@ Enable the server first (game fully closed):
                       grpc.client.server.port = 2942
                       server.game.telemetry.enabled = 1
 Game.log then says `<GameTelemetry> Local services server is running on
-127.0.0.1:2942`. The stream only produces frames once your character spawns.
+127.0.0.1:2942`. PTU 5.0 builds from CL 13273298 (2026-11-24; still so on
+13284307) read those keys and then log `<GRPC Server> No services configured`:
+the client does not start telemetry at all, and no setting brings it back. The stream only produces frames once your character spawns.
 
 Usage (on the gaming PC):
     python tools/telemetry_capture.py [--game-log PATH] [--exe PATH] [--port N]
@@ -45,13 +47,25 @@ the other captured logs; it holds your aUEC balance and player name, so it is
 never committed):
     frames.bin      every raw frame, timestamped (re-decodable with --replay)
     changes.jsonl   one line per frame that changed something (first = snapshot);
-                    null = field went absent (proto3 omits zero/default values)
-    events.jsonl    markers, aUEC balance changes, connects/errors, and the
-                    Game.log lines worth correlating (kiosk buy/sell, QT, zones)
+                    null = field went absent (proto3 omits zero/default values).
+                    Float fields are written at most once per --float-interval
+                    (default 1 s) so flight doesn't bury everything else
+    events.jsonl    markers, aUEC balance changes, the stream's own one-frame
+                    game events, connects/errors, and the Game.log lines worth
+                    correlating (kiosk buy/sell, HUD notifications, QT)
+    gamelog.txt     every Game.log line written while recording, verbatim
+                    (the game replaces Game.log on its next launch)
     actions.json    ListTriggerableActions result, when the build has it
     schema/         extracted .proto text + raw .pb descriptors
     summary.md      every field path seen (presence, change count, sample),
-                    balance deltas next to the nearest kiosk transaction, markers
+                    schema fields that never showed up, balance deltas next to
+                    the Game.log lines that explain them, game events, markers
+
+First session (LIVE sc-alpha-4.10.0 CL 13220821, 2026-11-27, on foot + seated,
+never flew): 15 frames/s from character spawn; the schema has NO position,
+location, jurisdiction or quantum-travel field at all; `actor.state.uec_balance`
+followed a contract fee 0.23 s after Game.log's "Contract Accepted";
+ListTriggerableActions = UNIMPLEMENTED. Still unrecorded: a kiosk buy/sell.
 
 Run tools/gamelog_live.py alongside it for the full Game.log timeline.
 """
@@ -434,6 +448,22 @@ class Schema:
             self._add_message(full, n)
         for e in m["enums"]:
             self.enums[f"{full}.{e['name']}"] = {v: n for n, v in e["values"]}
+
+    def leaf_paths(self, type_name, prefix="", _seen=()):
+        """Every flattened field path the schema allows under `type_name`, in
+        the form Recorder.stats keys take (`[]` after a repeated message)."""
+        msg = self.messages.get(type_name)
+        if msg is None or type_name in _seen:
+            return [prefix] if prefix else []
+        out = []
+        for _, fd in sorted(msg["fields"].items()):
+            p = f"{prefix}.{fd['name']}" if prefix else fd["name"]
+            if fd["type"] == 11 and fd["type_name"] in self.messages:
+                out += self.leaf_paths(fd["type_name"], p + ("[]" if fd["label"] == 3 else ""),
+                                       _seen + (type_name,))
+            else:
+                out.append(p)
+        return out
 
     def _scalar(self, fd, wt, v):
         t = fd["type"]
@@ -864,13 +894,20 @@ def grpc_status_text(trailers):
 
 _LOG_KEEP_RE = re.compile(
     r"SendCommodityBuyRequest|SendCommoditySellRequest|<GameTelemetry>|"
+    r"SendShopBuyRequest|SendShopSellRequest|ShopFlowResponse|"
     r"Quantum Drive Arrived|Player Selected Quantum Target|Quantum Travel - |"
-    r"Armistice Zone|Jurisdiction|<Join PU>|New Shard Id|"
+    r"Projected Start Location|<SHUDEvent_OnNotification>|<Join PU>|New Shard Id|"
     r"AddingCommodityBox|Fatal|ActorState Dead|Corpse")
+# One line per HUD notification (contract accepted/complete, fines, zones...);
+# the queue dumps and UpdateNotificationItem lines that repeat it are not kept.
+_NOTIFY_RE = re.compile(r'<SHUDEvent_OnNotification> Added notification "([^"]*)')
 _TELEMETRY_PORT_RE = re.compile(r"Local services server is running on ([\d.]+):(\d+)")
+# The game read the settings but started its local server with nothing on it:
+# PTU 5.0 builds from CL 13273298 (2026-11-24) do this whatever is configured.
+_NO_SERVICES = "<GRPC Server> No services configured"
 _BRANCH_RE = re.compile(r"Branch:\s+([\w.-]+)")
 _CL_RE = re.compile(r"Changelist:\s+(\d+)")
-_TXN_RE = re.compile(r"SendCommodity(Buy|Sell)Request")
+_TXN_RE = re.compile(r"Send(?:Commodity|Shop)(Buy|Sell)Request")  # cargo + item kiosks
 
 
 def fresh_dir(parent, prefix):
@@ -885,7 +922,11 @@ def fresh_dir(parent, prefix):
 
 
 def default_game_log():
-    return next((p for p in _LOG_CANDIDATES if os.path.isfile(p)), None)
+    """The most recently written Game.log among the channels: with LIVE and PTU
+    both installed, that is the one being played (LIVE-first would tail a stale
+    log and read the schema out of the wrong exe)."""
+    found = [p for p in _LOG_CANDIDATES if os.path.isfile(p)]
+    return max(found, key=os.path.getmtime, default=None)
 
 
 def read_log_head(path, max_lines=4000):
@@ -901,6 +942,8 @@ def read_log_head(path, max_lines=4000):
                     info["changelist"] = m.group(1)
                 if m := _TELEMETRY_PORT_RE.search(line):
                     info["telemetry"] = (m.group(1), int(m.group(2)))
+                if _NO_SERVICES in line:
+                    info["no_services"] = True
     except OSError:
         pass
     return info
@@ -941,12 +984,14 @@ _BALANCE_PATHS = re.compile(r"(^|\.)uec_balance$|^6\.2\.4$")
 DEFAULT_ECHO = (r"location|jurisdiction|crime|armistice|quantum|mission|objective|"
                 r"class_name|manufacturer|^vehicle\.state\.name|is_landed|locomotion|"
                 r"seat_name|crew_role|^events|player|zone|mode")
-DEFAULT_QUIET = r"^force_feedback|^7\."
+# 5.0 adds a per-frame counter/clock (header.*) and perf counters (game.debug.*)
+# that change on every frame; the shard fields under game.debug are kept.
+DEFAULT_QUIET = r"^force_feedback|^7\.|heart_rate|^header\.|^game\.debug\.(?!shard)"
 
 
 class Recorder:
     def __init__(self, out_dir, schema=None, out_type=None, echo=DEFAULT_ECHO,
-                 quiet=DEFAULT_QUIET, write_raw=True, say=print):
+                 quiet=DEFAULT_QUIET, write_raw=True, say=print, float_interval=1.0):
         self.dir = Path(out_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.schema, self.out_type, self.say = schema, out_type, say
@@ -962,6 +1007,11 @@ class Recorder:
         self.frames = self.decode_errors = 0
         self.first_t = self.last_t = None
         self.last_echo = {}
+        self.float_interval = float_interval
+        self.float_written, self.float_pending = {}, set()
+        self.game_events = []
+        self.gamelog_fh = None
+        self.closed = False
         self.started = time.time()
 
     def event(self, kind, t=None, **data):
@@ -980,6 +1030,12 @@ class Recorder:
         self.say(f"[{local_hms(t)}] MARK #{len(self.markers)}: {text}")
 
     def log_line(self, line):
+        with self.lock:
+            if self.closed:
+                return
+            if self.gamelog_fh is None:
+                self.gamelog_fh = open(self.dir / "gamelog.txt", "a", encoding="utf-8")
+            self.gamelog_fh.write(line + "\n")
         if _LOG_KEEP_RE.search(line):
             self.event("gamelog", line=line[:600])
             if _TXN_RE.search(line):
@@ -1016,13 +1072,16 @@ class Recorder:
         changed.update({p: None for p in prev if p not in flat})
         self.prev = flat
 
+        counted = set()
         for p, v in flat.items():
             key = re.sub(r"\[\d+\]", "[]", p)
             s = self.stats.get(key)
             if s is None:
                 s = self.stats[key] = {"first": t, "present": 0, "changes": 0,
                                        "values": set(), "last": v}
-            s["present"] += 1
+            if key not in counted:  # a repeated field counts once per frame
+                counted.add(key)
+                s["present"] += 1
             s["last"] = v
             if len(s["values"]) < 12:
                 s["values"].add(json.dumps(v, ensure_ascii=False)[:80])
@@ -1036,11 +1095,35 @@ class Recorder:
             self.changes.write(json.dumps({"t": utc_iso(t), "snapshot": decoded},
                                           ensure_ascii=False) + "\n")
         else:
-            shown = {p: v for p, v in changed.items()
-                     if not (self.quiet and self.quiet.search(p))}
+            shown = {}
+            for p, v in changed.items():
+                if self.quiet and self.quiet.search(p):
+                    continue
+                if isinstance(v, float) and self.float_interval > 0:
+                    self.float_pending.add(p)
+                else:
+                    shown[p] = v
+                    self.float_pending.discard(p)
+            # A throttled float is written once its interval is up, so the
+            # value it settles on always lands even if it then stops changing.
+            for p in sorted(self.float_pending):
+                if t - self.float_written.get(p, 0) >= self.float_interval:
+                    self.float_written[p] = t
+                    self.float_pending.discard(p)
+                    shown[p] = flat.get(p)
             if shown:
                 self.changes.write(json.dumps({"t": utc_iso(t), "set": shown},
                                               ensure_ascii=False) + "\n")
+
+        # GameEvents live for ONE frame; two alike in a row would not even show
+        # as a change, so each is logged where it occurs.
+        evs = decoded.get("events") if isinstance(decoded, dict) else None
+        evs = evs.get("events") if isinstance(evs, dict) else None
+        for ev in evs if isinstance(evs, list) else []:
+            name = ev.get("type", ev) if isinstance(ev, dict) else ev
+            self.game_events.append((t, name))
+            self.event("game_event", t, type=name)
+            self.say(f"[{local_hms(t)}] game event {name}")
 
         for p, v in changed.items():
             if _BALANCE_PATHS.search(p):
@@ -1054,20 +1137,23 @@ class Recorder:
                     self.event("balance", t, path=p, new=v, initial=True)
                     self.say(f"[{local_hms(t)}] aUEC balance {v:,}")
             elif (not snapshot and self.echo and self.echo.search(p)
-                  and not isinstance(v, float) and t - self.last_echo.get(p, 0) > 5):
+                  and not p.startswith("events.") and not isinstance(v, float) and t - self.last_echo.get(p, 0) > 5):
                 self.last_echo[p] = t
                 self.say(f"[{local_hms(t)}] {p} = {json.dumps(v)[:120]}")
 
     def flush(self):
-        for fh in (self.raw, self.changes, self.events_fh):
-            if fh:
-                fh.flush()
+        with self.lock:
+            for fh in (self.raw, self.changes, self.events_fh, self.gamelog_fh):
+                if fh:
+                    fh.flush()
 
     def close(self, info=None):
         self.flush()
-        for fh in (self.raw, self.changes, self.events_fh):
-            if fh:
-                fh.close()
+        with self.lock:
+            self.closed = True
+            for fh in (self.raw, self.changes, self.events_fh, self.gamelog_fh):
+                if fh:
+                    fh.close()
         (self.dir / "summary.md").write_text(self.summary(info or {}), encoding="utf-8")
 
     def summary(self, info):
@@ -1094,7 +1180,10 @@ class Recorder:
         else:
             txns = [(t, r["line"]) for t, r in self.events
                     if r["kind"] == "gamelog" and _TXN_RE.search(r["line"])]
-            w.append("| time | old | new | delta | nearest kiosk request (±30 s) |")
+            notes = [(t, m.group(1).strip(" :")) for t, r in self.events
+                     if r["kind"] == "gamelog" and (m := _NOTIFY_RE.search(r["line"]))]
+            w.append("| time | old | new | delta | Game.log: kiosk request (±30 s), "
+                     "HUD notifications (±5 s) |")
             w.append("|---|---:|---:|---:|---|")
             for t, old, new in self.balances:
                 near = min(txns, key=lambda x: abs(x[0] - t), default=None)
@@ -1104,7 +1193,22 @@ class Recorder:
                     side = _TXN_RE.search(near[1]).group(1).lower()
                     note = (f"{side} {near[0] - t:+.1f}s"
                             + (f", logged {m.group(0)}" if m else ""))
+                    if a := re.search(r"autoLoading\[(\d)\]", near[1]):
+                        note += f", auto-load {'ON' if a.group(1) == '1' else 'OFF'}"
+                    if m:
+                        # What the balance moved by beyond the logged price:
+                        # the auto-load fee, when there is one.
+                        logged = float(m.group(1))
+                        extra = (new - old) - (logged if side == "sell" else -logged)
+                        note += f", beyond logged price: {extra:+,.0f}"
+                heard = [f'{nt - t:+.1f}s "{text}"' for nt, text in notes if abs(nt - t) <= 5]
+                note = "; ".join(filter(None, [note] + heard[:4])).replace("|", "\\|")
                 w.append(f"| {local_hms(t)} | {old:,} | {new:,} | {new - old:+,} | {note} |")
+            w.append("")
+
+        if self.game_events:
+            w.append("## Game events (stream)\n")
+            w.extend(f"- {local_hms(t)} {name}" for t, name in self.game_events)
             w.append("")
 
         w.append("## Field paths seen\n")
@@ -1123,7 +1227,17 @@ class Recorder:
                      f"| {s['changes']} | {vals} |")
         w.append("")
 
-        others = [r for _, r in self.events if r["kind"] not in ("gamelog", "marker", "balance")]
+        if self.schema and self.out_type:
+            never = [p for p in self.schema.leaf_paths(self.out_type) if p not in self.stats]
+            if never:
+                w.append("## Schema fields never seen\n")
+                w.append("In the schema but never sent with a non-zero value (proto3 omits "
+                         "zeros, so: unimplemented, or you never did the thing).\n")
+                w.extend(f"- `{p}`" for p in never)
+                w.append("")
+
+        others = [r for _, r in self.events
+                  if r["kind"] not in ("gamelog", "marker", "balance", "game_event")]
         if others:
             w.append("## Connection log\n")
             for r in others:
@@ -1222,6 +1336,10 @@ def enable_hints(game_log, say):
             text = cfg.read_text(encoding="utf-8", errors="replace").lower()
             has = "server.game.telemetry.enabled" in text
             say(f"   {cfg}: telemetry key {'present' if has else 'NOT present'}")
+    if game_log and read_log_head(game_log).get("no_services"):
+        say("  Game.log says '<GRPC Server> No services configured': this game build read the")
+        say("  settings and still did not start telemetry. Nothing to fix on this PC (seen on")
+        say("  5.0 PTU from CL 13273298). Markers and gamelog.txt are still being recorded.")
     say("  (Frames only start once your character has spawned. Retrying every 3 s.)")
 
 
@@ -1268,7 +1386,8 @@ def run_capture(args):
     out = fresh_dir(args.out, "session")
     schema, schema_desc = load_schema(args, game_log, out / "schema", say)
     path, out_type = stream_method(schema)
-    rec = Recorder(out, schema, out_type, echo=args.echo, quiet=args.quiet, say=say)
+    rec = Recorder(out, schema, out_type, echo=args.echo, quiet=args.quiet, say=say,
+                   float_interval=args.float_interval)
     info = {"branch": head.get("branch"), "changelist": head.get("changelist"),
             "exe": resolve_exe(args, game_log), "game_log": game_log, "schema": schema_desc,
             "endpoint": f"{host}:{port}{path}"}
@@ -1366,7 +1485,7 @@ def run_replay(args):
     _, out_type = stream_method(schema)
     out = fresh_dir(src, "replay")
     rec = Recorder(out, schema, out_type, echo=None, quiet=args.quiet, write_raw=False,
-                   say=lambda *_: None)
+                   say=lambda *_: None, float_interval=args.float_interval)
     data = (src / "frames.bin").read_bytes()
     i = 0
     while i + 12 <= len(data):
@@ -1400,7 +1519,7 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default=DEFAULT_HOST)
     ap.add_argument("--port", type=int, help=f"default: from Game.log, else {DEFAULT_PORT}")
-    ap.add_argument("--game-log", help="default: first of LIVE/PTU/EPTU under Program Files")
+    ap.add_argument("--game-log", help="default: the most recently written of LIVE/PTU/EPTU under Program Files")
     ap.add_argument("--exe", help="StarCitizen.exe for the schema (default: <channel>/Bin64/)")
     ap.add_argument("--schema-dir", help="use .pb descriptors saved by an earlier run instead")
     ap.add_argument("--out", default=str(DEFAULT_OUT))
@@ -1410,6 +1529,8 @@ def main(argv=None):
                     help="regex of field paths to print when they change ('' = none)")
     ap.add_argument("--quiet", default=DEFAULT_QUIET,
                     help="regex of field paths left out of changes.jsonl (still in frames.bin)")
+    ap.add_argument("--float-interval", type=float, default=1.0,
+                    help="min seconds between changes.jsonl writes of one float field (0 = all)")
     ap.add_argument("--schema-only", action="store_true", help="extract the schema and exit")
     ap.add_argument("--replay", metavar="SESSION_DIR", help="re-decode a session's frames.bin")
     args = ap.parse_args(argv)

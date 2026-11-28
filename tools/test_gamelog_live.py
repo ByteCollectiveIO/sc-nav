@@ -200,6 +200,44 @@ class ConsoleTest(unittest.TestCase):
             self.assertFalse(gl.log_finished(Path(d) / "missing.log"))
 
 
+class ClipboardTest(unittest.TestCase):
+    def test_new_fixes_only_and_repeats_count(self):
+        import threading
+
+        class Fake:
+            """Sequence/text pairs handed out one poll at a time."""
+            def __init__(self, steps, stop):
+                self.steps, self.i, self.stop = steps, 0, stop
+
+            def sequence_number(self):
+                if self.first:              # the tool's "what was there at start"
+                    self.first = False
+                    return self.steps[0][0]
+                if self.i >= len(self.steps):
+                    self.stop.set()
+                    return self.steps[-1][0]
+                return self.steps[self.i][0]
+
+            def read_text(self):
+                text = self.steps[self.i][1]
+                self.i += 1
+                return text
+
+        stop = threading.Event()
+        fix = "Coordinates: x:1.5 y:-2 z:3"
+        # seq 7 was there at start (ignored); 8 = chat text; 9 and 10 = the same fix twice
+        steps = [(7, "old x:9 y:9 z:9"), (8, "hello"), (9, fix), (10, fix)]
+        fake = Fake(steps, stop)
+        fake.i, fake.first = 1, True
+        got = []
+
+        def parse(text):
+            return {"x": 1.5, "y": -2.0, "z": 3.0} if text == fix else None
+
+        gl.clipboard_fixes(fake, parse, lambda c, raw: got.append((c["x"], raw)), stop, poll_s=0)
+        self.assertEqual(got, [(1.5, fix), (1.5, fix)])
+
+
 class EdgeTest(unittest.TestCase):
     def test_one_press_per_down_stroke(self):
         e = gl.EdgeDetector()
