@@ -8876,6 +8876,75 @@ class WikiFrameAlignmentTests(unittest.TestCase):
         self.assertLess(math.dist(mnk["global_m"], fix), 100e3)
 
 
+class Nyx1MeasuredRecordTests(unittest.TestCase):
+    """Nyx I is the first Genesis planet (Alpha 5.0). The upstream starmap
+    record was a placeholder (300 km body, no rotation, 51,000 km off), so the
+    committed record is OUR measurement: /showlocation fixes taken in 5.0 PTU
+    build 13284307 on 2026-11-28 UTC. These are those readings; a container
+    re-sync that brings the placeholder back fails here.
+
+    Not covered: the rotation PHASE. RotationAdjustmentX is our own zero (the
+    game's surface frame is unknown), so body-local coordinates are
+    self-consistent but will not match datamined planet-local ones."""
+
+    # (unix time, x, y, z): one player standing still on the surface.
+    STATIONARY = [
+        (1795830794.889, 6469208710.856346, -3795416748.927982, -18673.737969),
+        (1795831084.861, 6469412298.875607, -3795422628.924774, -18673.737969),
+        (1795831380.895, 6469617007.741691, -3795385938.832348, -18673.737969),
+        (1795831737.043, 6469846438.421578, -3795287094.010782, -18673.737969),
+        (1795832041.076, 6470017860.609659, -3795159713.508232, -18673.738681),
+    ]
+    # Other surface spots (on foot or landed), incl. one from an earlier session.
+    SURFACE = [
+        (6468525529.140924, -3794198701.784891, 535942.686817),
+        (6468349333.838957, -3794568824.278853, 41119.358195),
+        (6470196418.376353, -3793910350.473234, 3192.565222),
+        (6468339737.042166, -3794398970.470498, -18678.769640),
+    ]
+    # Flown to by hand, so each is within a kilometre or so of its marker.
+    OM = {
+        "OM-1": (6469339454.634105, -3794425107.989141, 1435461.26318),
+        "OM-2": (6469338885.093396, -3794426078.34357, -1435575.709036),
+        "OM-3": (6468419965.409999, -3795527891.987016, -4.530455),
+        "OM-4": (6470111475.516999, -3793214981.206448, -446.325246),
+        "OM-5": (6468275526.20744, -3793461271.516226, -258.808792),
+        "OM-6": (6470358296.998767, -3795437264.506822, -968.089662),
+    }
+
+    def setUp(self):
+        self.c = NAV.containers[("Nyx", "Nyx1")]
+
+    def test_every_reading_resolves_to_the_planet(self):
+        fixes = [f[1:] for f in self.STATIONARY] + self.SURFACE + list(self.OM.values())
+        for pos in fixes:
+            got = nav_core.detect_container(NAV, pos)
+            self.assertIsNotNone(got, pos)
+            self.assertEqual(got.name, "Nyx1", pos)
+
+    def test_surface_readings_sit_on_the_body_radius(self):
+        for pos in [f[1:] for f in self.STATIONARY] + self.SURFACE:
+            r_km = math.dist(pos, self.c.pos) / 1000.0
+            # terrain: measured spots run 1,000.0 to 1,001.0 km
+            self.assertAlmostEqual(r_km, self.c.body_radius / 1000.0, delta=1.5, msg=pos)
+
+    def test_orbital_markers_sit_on_the_om_radius(self):
+        for name, pos in self.OM.items():
+            r_km = math.dist(pos, self.c.pos) / 1000.0
+            self.assertAlmostEqual(r_km, self.c.om_radius / 1000.0, delta=1.5, msg=name)
+
+    def test_a_player_standing_still_stays_put_in_the_rotating_frame(self):
+        # 21 minutes = 50 degrees of rotation = 850 km of travel in the system
+        # frame. The surface moves 0.70 km/s and a reading's clock is good to
+        # ~0.3 s, so 0.5 km is the honest tolerance; a wrong period fails by far
+        # more (2.47 h instead of 2.48 h drifts 3.5 km over this span).
+        local = [nav_core.global_to_local_km(self.c, f[1:], f[0]) for f in self.STATIONARY]
+        for got in local[1:]:
+            self.assertLess(math.dist(got, local[0]), 0.5, got)
+        span_km = math.dist(self.STATIONARY[0][1:], self.STATIONARY[-1][1:]) / 1000.0
+        self.assertGreater(span_km, 800)       # the readings really did move
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=1)
 
