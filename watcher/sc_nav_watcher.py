@@ -228,17 +228,25 @@ def default_game_log():
 #     - Time[245413276] [Team_GameServices][Login]
 #   <AccountLoginCharacterStatus_Character> Character: createdAt ... - geid
 #     204698941918 - accountId 385725 - name Bolvangar - state STATE_CURRENT
+# Alpha 5.0 (PTU build 13284307, 2026-11-27) dropped the first line and logs
+# this at the same point instead:
+#   <CLoginSession> [CompleteAuthentication] {success} Fully authenticated :
+#     handle[Bolvangar] hub[1] in 6.4s [Team_GameServices][Login]
+# The character line is still written, but one of seven captured 5.0 logs had
+# the new line without it, and that session would have reported no handle.
 # This is the authoritative spelling; a hand-typed --handle is not. Members
 # typo'd their own casing into it ("bolvangar" for "Bolvangar") and the server
 # used to read that as a second player, splitting their capture history.
 #
-# Anchored on those two markers ON PURPOSE. `nickname="..."` carries the same
+# Anchored on those markers ON PURPOSE. `nickname="..."` carries the same
 # value on nearby lines but is NOT specific to the local player — the log also
 # says things like `Logged a start of a status effect! nickname: Pomme03`, so
 # matching it loosely would report a passing stranger as this member's identity.
 # The character line is pinned to STATE_CURRENT for the same reason: the login
 # message lists every character on the account, and only one of them is in play.
 _HANDLE_LOGIN_RE = re.compile(r"<Legacy login response>.*?\bHandle\[([^\]]+)\]")
+_HANDLE_AUTH_RE = re.compile(
+    r"<CLoginSession>\s*\[CompleteAuthentication\]\s*\{success\}.*?\bhandle\[([^\]]+)\]")
 _HANDLE_CHAR_RE = re.compile(
     r"<AccountLoginCharacterStatus_Character>.*?"
     r"-\s+name\s+(\S+)\s+-\s+state\s+STATE_CURRENT")
@@ -250,7 +258,8 @@ _HANDLE_OK_RE = re.compile(r"^[\w-]{1,64}$", re.ASCII)
 
 def parse_login_handle(line):
     """The signed-in account handle from a Game.log login line, or None."""
-    match = _HANDLE_LOGIN_RE.search(line) or _HANDLE_CHAR_RE.search(line)
+    match = (_HANDLE_LOGIN_RE.search(line) or _HANDLE_AUTH_RE.search(line)
+             or _HANDLE_CHAR_RE.search(line))
     if match is None:
         return None
     handle = match.group(1).strip()
